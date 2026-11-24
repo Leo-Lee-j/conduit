@@ -1,6 +1,14 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Snapshot of a history file's metadata, used to skip unchanged files during startup import.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryFileStamp {
+    pub len: u64,
+    pub modified: Option<u128>,
+    pub created: Option<u128>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum Provider {
     Claude,

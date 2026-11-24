@@ -383,7 +383,7 @@ impl GitDiffDialog {
         let mut details = h_flex()
             .w_full()
             .min_w_0()
-            .gap(px(8.))
+            .gap(px(6.))
             .items_center()
             .child(
                 div()
@@ -432,15 +432,15 @@ impl GitDiffDialog {
         v_flex()
             .w_full()
             .flex_shrink_0()
-            .gap(px(4.))
-            .px(px(16.))
-            .pt(px(14.))
-            .pb(px(10.))
+            .gap(px(3.))
+            .px(px(12.))
+            .pt(px(8.))
+            .pb(px(6.))
             .child(
                 h_flex()
                     .w_full()
                     .min_w_0()
-                    .gap(px(10.))
+                    .gap(px(6.))
                     .items_center()
                     .child(
                         Icon::new(FullIconName::FileDiff)
@@ -451,7 +451,7 @@ impl GitDiffDialog {
                         v_flex()
                             .flex_1()
                             .min_w_0()
-                            .gap(px(5.))
+                            .gap(px(3.))
                             .child(details)
                             .child(
                                 h_flex()

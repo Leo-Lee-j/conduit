@@ -2234,6 +2234,7 @@ mod tests {
         let result = scan::Scanner::open(
             Some(&dir),
             vec![dir.join("nope")],
+            Vec::new(),
             &dir.join("index.sqlite3"),
             None,
             &cancel,

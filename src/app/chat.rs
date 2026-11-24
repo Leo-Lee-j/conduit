@@ -20,6 +20,7 @@ fn reveal_message_action(button: Button, group: SharedString) -> Button {
         .focus_visible(|style| style.opacity(1.))
 }
 
+mod edit_group;
 #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
 pub(in crate::app) mod profiling;
 mod reference;
@@ -1116,6 +1117,7 @@ impl ConduitApp {
                     .rounded(px(6.))
                     .bg(rgb(palette().surface))
                     .px_3()
+                    .pt_3()
                     .pb_3()
                     .text_color(rgb(palette().muted))
                     .child(
@@ -1396,6 +1398,8 @@ impl ConduitApp {
         }
         let session_id = session.id;
         let provider = session.provider;
+        let edit_group = group.filter(|group| group.edits && group.count > 1);
+        let group = group.filter(|group| !group.edits);
         let tool_group = group.map(|group| (group.start, group.end));
         let tool_group_expanded = group.is_some_and(|group| group.expanded);
         if let Some((start, end)) = tool_group
@@ -1835,6 +1839,18 @@ impl ConduitApp {
                     };
                 }
                 activity_container(content.into_any_element(), tool_group, session_id, index)
+            }
+            ItemKind::Tool if edit_group.is_some() => {
+                let group = edit_group.unwrap();
+                edit_group::card(
+                    session_id,
+                    group,
+                    &session.messages[group.start..group.end],
+                    &self.expanded_tools,
+                    &typography,
+                    (&mut self.tool_diffs, &mut self.tool_analysis),
+                    cx,
+                )
             }
             ItemKind::Tool => {
                 let detail_key = (session_id, item.key.clone());

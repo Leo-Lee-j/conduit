@@ -11,12 +11,15 @@ pub(in crate::app) struct Group {
     pub running: bool,
     pub replied: bool,
     pub expanded: bool,
+    /// Edit runs stay in one display row even while their diff is expanded.
+    pub edits: bool,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 struct Shape {
     empty: bool,
     activity: bool,
+    edit: bool,
     running: bool,
     failed: bool,
     user: bool,
@@ -117,6 +120,11 @@ impl Rows {
                         && item.key.starts_with("session-notice:codex:mcp:"))
                     || recovered_error,
                 activity: is_groupable_activity(item),
+                edit: item.kind == ItemKind::Tool
+                    && is_tool_edit(item)
+                    && item.approval.as_ref().is_none_or(|approval| {
+                        approval.status == crate::message_status::ApprovalStatus::Allowed
+                    }),
                 running: tool_running(item),
                 failed: matches!(item.kind, ItemKind::Tool | ItemKind::Reasoning)
                     && tool_failed(item),
@@ -166,6 +174,33 @@ impl Rows {
             let shape = self.entries[index].shape;
             if shape.empty {
                 index += 1;
+                continue;
+            }
+            if shape.edit {
+                let start = index;
+                let mut group = Group {
+                    start,
+                    edits: true,
+                    ..Default::default()
+                };
+                while index < self.entries.len() {
+                    let shape = self.entries[index].shape;
+                    if !shape.edit && !shape.empty {
+                        break;
+                    }
+                    if shape.edit {
+                        group.count += 1;
+                        group.failures += usize::from(shape.failed);
+                        group.running |= shape.running;
+                        group.end = index + 1;
+                    }
+                    index += 1;
+                }
+                self.rows.push(Row {
+                    message: start,
+                    key: session.messages[start].key.clone(),
+                    group: Some(group),
+                });
                 continue;
             }
             if !shape.activity {
@@ -326,6 +361,112 @@ impl ConduitApp {
 mod tests {
     #[cfg(feature = "ui-tests")]
     use super::ChatItem;
+
+    fn edit(index: usize, title: &str) -> super::ChatItem {
+        serde_json::from_value(serde_json::json!({
+            "key": format!("edit-{index}"), "kind": "Tool", "text": title,
+            "input": serde_json::json!({
+                "file_path": format!("src/file-{}.rs", index % 2),
+                "old_string": format!("before-{index}"), "new_string": format!("after-{index}")
+            }).to_string(), "status": "completed"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn consecutive_edits_share_one_row_across_streaming_and_history_reload() {
+        let mut session = crate::app::tests::session();
+        session.messages = (0..16).map(|index| edit(index, "Edit")).collect();
+        session.messages.insert(
+            3,
+            serde_json::from_value(serde_json::json!({
+                "key": "placeholder", "kind": "Assistant", "text": ""
+            }))
+            .unwrap(),
+        );
+        let mut rows = super::Rows::default();
+        rows.refresh(Some(&session), &Default::default());
+        assert_eq!(rows.rows.len(), 1);
+        let group = rows.group(16).unwrap();
+        assert!(group.edits);
+        assert_eq!((group.start, group.end, group.count), (0, 17, 16));
+        assert_eq!(rows.row(16), Some(0));
+
+        let classifications = rows.classifications;
+        let revision = rows.revision.get();
+        rows.refresh(Some(&session), &Default::default());
+        assert_eq!(rows.classifications, classifications);
+        assert_eq!(rows.revision.get(), revision);
+
+        let mut next = edit(16, "Write");
+        next.status = "running".into();
+        session.messages.push(next);
+        rows.refresh(Some(&session), &Default::default());
+        assert_eq!(rows.rows.len(), 1);
+        assert_eq!(rows.group(17).unwrap().count, 17);
+        assert!(rows.group(0).unwrap().running);
+        session.messages[17].status = "completed".into();
+        rows.refresh(Some(&session), &Default::default());
+        assert!(!rows.group(0).unwrap().running);
+
+        let saved = serde_json::to_string(&session).unwrap();
+        session = serde_json::from_str(&saved).unwrap();
+        rows.refresh(Some(&session), &Default::default());
+        assert_eq!(rows.rows.len(), 1);
+        assert_eq!(rows.group(17).unwrap().count, 17);
+        assert_eq!(session.messages.len(), 18);
+    }
+
+    #[test]
+    fn edit_runs_stop_at_visible_messages_other_tools_and_approval_requests() {
+        use crate::message_status::ApprovalStatus;
+        let mut session = crate::app::tests::session();
+        for (kind, text) in [
+            ("Assistant", "Review this"),
+            ("Reasoning", "Check this"),
+            ("User", "Next turn"),
+            ("Tool", "Read"),
+        ] {
+            session.messages = vec![
+                edit(0, "Edit"),
+                edit(1, "Write"),
+                serde_json::from_value(serde_json::json!({
+                    "key": "boundary", "kind": kind, "text": text
+                }))
+                .unwrap(),
+                edit(2, "Edit"),
+                edit(3, "MultiEdit"),
+            ];
+            let mut rows = super::Rows::default();
+            rows.refresh(Some(&session), &Default::default());
+            assert_eq!(rows.rows.len(), 3, "{kind}");
+            assert_eq!(rows.group(0).unwrap().end, 2);
+            assert_eq!(rows.group(4).unwrap().start, 3);
+        }
+        session.messages = vec![edit(0, "Edit"), edit(1, "Write"), edit(2, "Edit")];
+        session.messages[1].approval = Some(
+            serde_json::from_value(serde_json::json!({
+                "request": "edit-1", "status": ""
+            }))
+            .unwrap(),
+        );
+        for status in [
+            ApprovalStatus::Waiting,
+            ApprovalStatus::Denied,
+            ApprovalStatus::Interrupted,
+        ] {
+            session.messages[1].approval.as_mut().unwrap().status = status;
+            let mut rows = super::Rows::default();
+            rows.refresh(Some(&session), &Default::default());
+            assert_eq!(rows.rows.len(), 3);
+            assert!(rows.group(1).is_none());
+        }
+        session.messages[1].approval.as_mut().unwrap().status = ApprovalStatus::Allowed;
+        let mut rows = super::Rows::default();
+        rows.refresh(Some(&session), &Default::default());
+        assert_eq!(rows.rows.len(), 1);
+        assert_eq!(rows.group(0).unwrap().count, 3);
+    }
 
     #[test]
     fn recovered_error_cards_disappear_when_the_same_turn_resumes() {

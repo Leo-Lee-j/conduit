@@ -813,6 +813,7 @@ impl ConduitApp {
         {
             self.selected_workspace = Some(selected - 1);
         }
+        self.store.history_file_stamps.remove(&removed.path);
         self.persist_and_cleanup_attachments();
         self.sync_git_workspace(cx);
         cx.notify();
@@ -1255,6 +1256,17 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Parallel to `paths`: files each workspace already imported, so unchanged ones are skipped.
+        let scan_stamps: Vec<_> = paths
+            .iter()
+            .map(|path| {
+                self.store
+                    .history_file_stamps
+                    .get(path)
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .collect();
         cx.spawn_in(window, async move |this, cx| {
             let started = std::time::Instant::now();
             let init_started = std::time::Instant::now();
@@ -1262,7 +1274,9 @@ impl ConduitApp {
             let ticket = cancel.clone();
             let mut scanner = cx
                 .background_executor()
-                .spawn(async move { crate::history::Scanner::new(scan_paths, &ticket) })
+                .spawn(async move {
+                    crate::history::Scanner::new(scan_paths, scan_stamps, &ticket)
+                })
                 .await;
             let init_time = init_started.elapsed();
             let mut scan_time = std::time::Duration::ZERO;
@@ -1283,6 +1297,13 @@ impl ConduitApp {
             let mut codex_verified_bytes = 0u64;
             let mut emitted_sessions = 0usize;
             let mut warning_count = 0usize;
+            let mut skipped = 0usize;
+            // Parallel to `paths`: stamps of files read this run. They are written back
+            // only for workspaces whose every batch merged without losing a record.
+            let mut file_stamps: Vec<
+                std::collections::HashMap<PathBuf, crate::domain::HistoryFileStamp>,
+            > = vec![Default::default(); paths.len()];
+            let mut unsettled = vec![false; paths.len()];
             let mut finished = false;
             loop {
                 let ticket = cancel.clone();
@@ -1311,6 +1332,7 @@ impl ConduitApp {
                 claude_verified_bytes = claude_verified_bytes.saturating_add(batch.claude_verified_bytes);
                 codex_verified_bytes = codex_verified_bytes.saturating_add(batch.codex_verified_bytes);
                 emitted_sessions += batch.sessions.iter().map(Vec::len).sum::<usize>();
+                skipped = batch.skipped;
                 let done = batch.done;
                 let Ok(workspaces) = this.update(cx, |this, _| {
                     paths
@@ -1351,12 +1373,16 @@ impl ConduitApp {
                     break;
                 };
                 let incoming = batch.sessions;
+                for (stamps, read) in file_stamps.iter_mut().zip(batch.file_stamps) {
+                    stamps.extend(read);
+                }
                 let ticket = cancel.clone();
                 let prepare_started = std::time::Instant::now();
-                let (prepared, warnings) = cx
+                let (prepared, warnings, failed) = cx
                     .background_executor()
                     .spawn(async move {
                         let mut prepared = Vec::new();
+                        let mut failed = Vec::new();
                         let mut warnings = batch.warnings;
                         let directory = crate::transcript::directory(&Store::path());
                         for (workspace, incoming) in workspaces.into_iter().zip(incoming) {
@@ -1366,13 +1392,18 @@ impl ConduitApp {
                             let (records, errors) =
                                 crate::history::prepare_imported(&workspace, incoming, &directory);
                             prepared.push(records);
+                            failed.push(!errors.is_empty());
                             warnings.extend(errors);
                         }
-                        (prepared, warnings)
+                        (prepared, warnings, failed)
                     })
                     .await;
                 prepare_time += prepare_started.elapsed();
                 warning_count += warnings.len();
+                // A workspace whose records failed to prepare must re-read those files next run.
+                for (unsettled, failed) in unsettled.iter_mut().zip(failed) {
+                    *unsettled |= failed;
+                }
                 let merge_started = std::time::Instant::now();
                 let updated = this.update_in(cx, |this, window, cx| {
                     if cancel.load(std::sync::atomic::Ordering::Acquire) {
@@ -1388,17 +1419,21 @@ impl ConduitApp {
                             cx,
                         );
                     }
-                    for (path, sessions) in paths.iter().zip(prepared) {
+                    for ((path, sessions), unsettled) in
+                        paths.iter().zip(prepared).zip(unsettled.iter_mut())
+                    {
                         if !this
                             .session_control
                             .scan_cancels
                             .get(path)
                             .is_some_and(|ticket| std::sync::Arc::ptr_eq(ticket, &cancel))
                         {
+                            // A newer scan owns this workspace; it records its own stamps.
+                            *unsettled = true;
                             continue;
                         }
                         if !sessions.is_empty() || done {
-                            this.finish_prepared_history_import(
+                            *unsettled |= this.finish_prepared_history_import(
                                 path,
                                 sessions,
                                 persist && done,
@@ -1415,6 +1450,32 @@ impl ConduitApp {
                             this.session_control
                                 .scan_progress
                                 .insert(path.clone(), (batch.completed, batch.total));
+                        }
+                    }
+                    if done {
+                        for ((path, stamps), unsettled) in paths
+                            .iter()
+                            .zip(std::mem::take(&mut file_stamps))
+                            .zip(&unsettled)
+                        {
+                            if *unsettled
+                                || stamps.is_empty()
+                                || !this
+                                    .store
+                                    .workspaces
+                                    .iter()
+                                    .any(|workspace| &workspace.path == path)
+                            {
+                                continue;
+                            }
+                            // Merge, not replace: files skipped this run keep the stamp
+                            // they were imported at.
+                            this.store
+                                .history_file_stamps
+                                .entry(path.clone())
+                                .or_default()
+                                .extend(stamps);
+                            this.dirty = true;
                         }
                     }
                     if done && persist && this.dirty {
@@ -1443,13 +1504,14 @@ impl ConduitApp {
                 "aborted"
             };
             let summary = format!(
-                "history_import mode={} status={} workspaces={} batches={} files={}/{} cache_hits={} claude_cache_hits={} codex_cache_hits={} bytes_read={} claude_parse_bytes={} codex_parse_bytes={} codex_probe_bytes={} opencode_bytes={} verified_bytes={} claude_verified_bytes={} codex_verified_bytes={} emitted_sessions={} warnings={} init_ms={} scan_ms={} prepare_ms={} merge_ms={} total_ms={}",
+                "history_import mode={} status={} workspaces={} batches={} files={}/{} skipped={} cache_hits={} claude_cache_hits={} codex_cache_hits={} bytes_read={} claude_parse_bytes={} codex_parse_bytes={} codex_probe_bytes={} opencode_bytes={} verified_bytes={} claude_verified_bytes={} codex_verified_bytes={} emitted_sessions={} warnings={} init_ms={} scan_ms={} prepare_ms={} merge_ms={} total_ms={}",
                 if persist { "manual" } else { "startup" },
                 status,
                 paths.len(),
                 batches,
                 completed,
                 total,
+                skipped,
                 cache_hits,
                 claude_cache_hits,
                 codex_cache_hits,
@@ -1505,9 +1567,12 @@ impl ConduitApp {
                 cx,
             );
         }
-        self.finish_prepared_history_import(path, records, persist, complete, window, cx);
+        let _ = self.finish_prepared_history_import(path, records, persist, complete, window, cx);
     }
 
+    /// Returns true when some prepared record was not applied (workspace gone, a run
+    /// or edit raced the scan, or the session was deleted/recreated), so the files
+    /// behind this workspace's import must not be stamped as imported.
     fn finish_prepared_history_import(
         &mut self,
         path: &Path,
@@ -1516,7 +1581,7 @@ impl ConduitApp {
         complete: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         if complete {
             self.history_loading.remove(path);
         }
@@ -1527,7 +1592,7 @@ impl ConduitApp {
             .iter()
             .position(|workspace| workspace.path == path)
         else {
-            return;
+            return true;
         };
         let mut reclassified = Vec::new();
         let mut updates = Vec::new();
@@ -1557,6 +1622,7 @@ impl ConduitApp {
         // A scan can finish after a turn has started. Its older transcript must
         // never replace messages or invalidate the active run's message index.
         let versions = self.session_control.imports.get(path);
+        let considered = updates.len();
         let imported = updates
             .into_iter()
             .filter(|imported| {
@@ -1570,6 +1636,7 @@ impl ConduitApp {
                 })
             })
             .collect::<Vec<_>>();
+        let mut dropped = imported.len() < considered;
         if complete {
             self.session_control.imports.remove(path);
         }
@@ -1595,6 +1662,7 @@ impl ConduitApp {
             {
                 // A deleted/recreated native conversation is a different identity.
                 if record.id != existing.id {
+                    dropped = true;
                     continue;
                 }
                 record.pinned = existing.pinned;
@@ -1603,6 +1671,9 @@ impl ConduitApp {
                 record.id = self.next_id;
                 self.next_id += 1;
                 self.store.workspaces[index].sessions.push(record);
+            } else {
+                // Deleted locally while the scan ran.
+                dropped = true;
             }
         }
         self.store.workspaces[index]
@@ -1642,6 +1713,7 @@ impl ConduitApp {
             self.persist();
         }
         cx.notify();
+        dropped
     }
 
     pub(super) fn new_session(

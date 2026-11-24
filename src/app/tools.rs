@@ -823,14 +823,28 @@ pub(super) fn edit_diff_content(
     if files.is_empty() {
         return tool_content(&tool_id, item, scroll, typography);
     }
+    (
+        edit_files_content(detail_key, files, typography, diffs, cx),
+        copy_text,
+    )
+}
+
+/// Render every recorded edit in order, including repeated paths in an edit run.
+pub(super) fn edit_files_content(
+    detail_key: &(u64, String),
+    files: &[EditFileDiff],
+    typography: &ChatTypography,
+    diffs: &mut DiffCache,
+    cx: &mut Context<ConduitApp>,
+) -> AnyElement {
     let mut patch = String::new();
     let mut headers = HashMap::new();
-    for file in files.iter().take(8) {
+    for file in files {
         patch.push_str(&file.patch);
-        headers.insert(
-            SharedString::from(file.path.clone()),
-            (SharedString::from(file.note.clone()), file.truncated),
-        );
+        let header = headers
+            .entry(SharedString::from(file.path.clone()))
+            .or_insert_with(|| (SharedString::from(file.note.clone()), false));
+        header.1 |= file.truncated;
     }
     let Some(state) = diffs.state(detail_key, &patch, cx) else {
         let fallback = div()
@@ -843,7 +857,7 @@ pub(super) fn edit_diff_content(
             .text_size(px(typography.code_size))
             .child(patch)
             .into_any_element();
-        return (fallback, copy_text);
+        return fallback;
     };
     let rows = patch.lines().count() + files.len();
     let height = edit_diff_height(rows, cx);
@@ -882,7 +896,7 @@ pub(super) fn edit_diff_content(
                 })
                 .into_any_element()
         });
-    let viewport = div()
+    div()
         .w_full()
         .min_w_0()
         .flex_shrink_0()
@@ -897,8 +911,7 @@ pub(super) fn edit_diff_content(
                 .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
                 .child(diff),
         )
-        .into_any_element();
-    (viewport, copy_text)
+        .into_any_element()
 }
 
 fn edit_diff_height(rows: usize, cx: &App) -> f32 {

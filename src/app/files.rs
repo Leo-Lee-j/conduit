@@ -3,6 +3,7 @@ use super::file_preview::FilePreview;
 use super::*;
 use crate::workspace_files::{self, Entry, FileKey, Stamp};
 use conduit::plugins::{builtins, ids::ViewId};
+use gpui_kit::component::{tag::Tag, tooltip::Tooltip};
 use std::ops::Range;
 
 mod observations;
@@ -3198,6 +3199,21 @@ impl ConduitApp {
                 .child(conduit::i18n::text_static("files.diff_tab_closed"))
                 .into_any_element();
         };
+        let workspace_name = self
+            .store
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.path == document.workspace)
+            .map(Workspace::name)
+            .unwrap_or_else(|| {
+                document
+                    .workspace
+                    .file_name()
+                    .unwrap_or(document.workspace.as_os_str())
+                    .to_string_lossy()
+                    .into_owned()
+            });
+        let workspace_path = workspace_files::display_path(&document.workspace);
         v_flex()
             .id("git-diff-document")
             .debug_selector(|| "git-diff-document".into())
@@ -3217,12 +3233,21 @@ impl ConduitApp {
                     .gap_2()
                     .child(
                         div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(ui_text_size(11.))
-                            .child(document.workspace.display().to_string()),
+                            .id("diff-workspace-tag")
+                            .debug_selector(|| "diff-workspace-tag".into())
+                            .tooltip(move |window, cx| {
+                                Tooltip::new(workspace_path.clone()).build(window, cx)
+                            })
+                            .child(
+                                Tag::secondary()
+                                    .small()
+                                    .text_size(ui_text_size(11.))
+                                    .max_w(px(220.))
+                                    .overflow_hidden()
+                                    .child(div().truncate().child(workspace_name)),
+                            ),
                     )
+                    .child(div().flex_1())
                     .child(
                         Button::new("diff-return-chat")
                             .ghost()

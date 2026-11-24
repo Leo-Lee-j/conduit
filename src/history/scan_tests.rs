@@ -36,6 +36,7 @@ impl Fixture {
         Scanner::open(
             Some(&self.root),
             vec![self.workspace.clone()],
+            Vec::new(),
             &self.index,
             Some(&self.opencode_path()),
             &AtomicBool::new(false),
@@ -704,6 +705,7 @@ fn workspace_index_filters_foreign_sessions_but_allows_later_workspace_import() 
     let mut other = Scanner::open(
         Some(&fixture.root),
         vec![fixture.root.join("other")],
+        Vec::new(),
         &fixture.index,
         None,
         &cancel,
@@ -713,6 +715,7 @@ fn workspace_index_filters_foreign_sessions_but_allows_later_workspace_import() 
     let mut other = Scanner::open(
         Some(&fixture.root),
         vec![fixture.root.join("other")],
+        Vec::new(),
         &fixture.index,
         None,
         &cancel,
@@ -967,4 +970,70 @@ fn a_file_changed_between_batches_is_retried_without_publishing_partial_messages
     assert!(result.done);
     assert!(result.warnings.is_empty());
     assert_eq!(result.sessions[0][0].messages[0].text, "new");
+}
+
+#[test]
+fn skips_unchanged_files_on_second_scan() {
+    let _locale = crate::test_support::chinese();
+    let fixture = Fixture::new();
+    let path = fixture.file(Provider::Claude, "conversation");
+    let content = fixture.claude("native-id", "first message");
+    std::fs::write(&path, &content).unwrap();
+
+    let mut first = fixture.scan();
+    assert_eq!(first.sessions[0].len(), 1);
+    assert_eq!(first.skipped, 0);
+    assert!(first.bytes_read > 0);
+    assert!(!first.file_stamps[0].is_empty());
+    let stamp = first.file_stamps[0].get(&path).cloned().unwrap();
+
+    let mut second_scanner = Scanner::open(
+        Some(&fixture.root),
+        vec![fixture.workspace.clone()],
+        vec![first.file_stamps.into_iter().next().unwrap()],
+        &fixture.index,
+        Some(&fixture.opencode_path()),
+        &AtomicBool::new(false),
+    );
+    let cancel = AtomicBool::new(false);
+    let mut second = second_scanner.next(&cancel);
+    while !second.done {
+        let next = second_scanner.next(&cancel);
+        second.merge_read_metrics(&next);
+        second.sessions[0].extend(next.sessions.into_iter().next().unwrap());
+        second.warnings.extend(next.warnings);
+        second.completed = next.completed;
+        second.done = next.done;
+    }
+
+    assert_eq!(second.sessions[0].len(), 0, "skipped file should not emit sessions");
+    assert_eq!(second.skipped, 1);
+    assert_eq!(second.bytes_read, 0);
+    assert_eq!(second.verified_bytes, 0);
+    assert!(second.file_stamps[0].is_empty(), "skipped files don't write new stamps");
+
+    // Change the file: third scan should reparse.
+    std::fs::write(&path, format!("{}{}", content, fixture.claude("native-id", "second message"))).unwrap();
+    let mut third_scanner = Scanner::open(
+        Some(&fixture.root),
+        vec![fixture.workspace.clone()],
+        vec![(path.clone(), stamp).into_iter().collect()],
+        &fixture.index,
+        Some(&fixture.opencode_path()),
+        &AtomicBool::new(false),
+    );
+    let mut third = third_scanner.next(&cancel);
+    while !third.done {
+        let next = third_scanner.next(&cancel);
+        third.merge_read_metrics(&next);
+        third.sessions[0].extend(next.sessions.into_iter().next().unwrap());
+        third.warnings.extend(next.warnings);
+        third.completed = next.completed;
+        third.done = next.done;
+    }
+
+    assert_eq!(third.sessions[0].len(), 1, "changed file should reparse");
+    assert_eq!(third.skipped, 0);
+    assert!(third.bytes_read > 0);
+    assert!(!third.file_stamps[0].is_empty());
 }

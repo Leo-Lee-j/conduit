@@ -551,6 +551,12 @@ pub struct Store {
     pub providers: Vec<crate::providers::ModelProvider>,
     #[serde(default)]
     pub session_defaults: std::collections::HashMap<crate::domain::Provider, SessionDefaults>,
+    /// Maps workspace paths to history file stamps, allowing startup imports to skip unchanged files.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub history_file_stamps: std::collections::HashMap<
+        PathBuf,
+        std::collections::HashMap<PathBuf, crate::domain::HistoryFileStamp>,
+    >,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -722,6 +728,7 @@ impl Store {
                 git: Default::default(),
                 providers: vec![],
                 session_defaults: Default::default(),
+                history_file_stamps: Default::default(),
             });
         }
         let mut state: Self = serde_json::from_slice(&fs::read(path)?).with_context(|| {
@@ -755,6 +762,14 @@ impl Store {
                     crate::workspace_files::display_path(&path).into(),
                     path.clone(),
                 );
+                if workspace.path != path
+                    && let Some(stamps) = state.history_file_stamps.remove(&workspace.path)
+                {
+                    state
+                        .history_file_stamps
+                        .entry(path.clone())
+                        .or_insert(stamps);
+                }
                 workspace.path = path;
             }
             if !paths.insert(workspace.path.clone()) {
@@ -1246,6 +1261,7 @@ mod tests {
             git: Default::default(),
             providers: vec![],
             session_defaults: Default::default(),
+            history_file_stamps: Default::default(),
             workspaces: vec![Workspace {
                 path: directory.clone(),
                 sessions: vec![],
