@@ -11,6 +11,11 @@ mod codex_async_input;
 mod codex_commands;
 mod codex_fork;
 mod codex_items;
+#[cfg(windows)]
+mod codex_windows;
+#[cfg(all(test, windows))]
+#[path = "protocol/codex_windows/integration_tests.rs"]
+mod codex_windows_integration_tests;
 pub(crate) mod file_proposals;
 mod notifications;
 mod opencode;
@@ -670,6 +675,18 @@ impl Protocol {
         );
         if self.provider == Provider::OpenCode {
             self.prepare_opencode()?;
+        }
+        #[cfg(windows)]
+        if self.provider == Provider::Codex
+            && self.permission == PermissionLevel::WorkspaceWrite
+            && !self.text_only
+            && self.tool_policy != ToolPolicy::Automation
+        {
+            codex_windows::prepare(
+                std::path::Path::new(&self.cwd),
+                &self.codex_workspace_writable_roots(),
+                &self.route.env,
+            )?;
         }
         Ok(())
     }

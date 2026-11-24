@@ -64,6 +64,8 @@
 
 Codex 的“工作区内修改”使用 `workspace-write` 文件沙箱并开启联网与实时 Web Search；工作区内受默认保护的本地配置/Git 目录显式加入 writable roots，外部临时目录不另行授权。进程配置、thread/start、thread/resume 和 turn/start 使用一致设置，路由配置不能追加外部可写根。沙箱逃逸、规则审批和扩展权限请求自动拒绝；原生 MCP 确认仍独立处理。
 
+Windows 在 `launch → Protocol::prepare`（保存门之后）对这些本地目录协调旧 Codex 沙箱的写入拒绝 ACL。按实际路由环境解析 `CODEX_HOME`，仅移除其缓存中当前工作区及已授权根的 capability SID 所对应的原生写入拒绝 ACE；其他身份、读取拒绝、链接及外部共享文件不修改。逐个核验文件句柄并自行遍历子目录，避免 Windows 自动传播 ACL 到链接目标；部分失败时合并恢复原有根拒绝规则，保留下一次启动重试的入口。修复完成后只检查根目录，不重复扫描整个 Git 数据库。
+
 其他引擎的应用权限约束只针对 CLI 实际支持并上报的请求；经过批准的 Shell 命令仍可能访问工作区外文件，不能将其原生工具权限描述为文件系统沙箱。工作区模式自动放行已知搜索/网页读取工具；工具身份取自原生字段，不根据展示标题推断。
 
 Codex 普通聊天使用分项 `approvalPolicy.granular`，单独开启 `mcp_elicitations`；只读和完全访问也不能使用会提前拒绝 MCP 确认的 `never`。原生 `mcpServer/elicitation/request` 中带有 `_meta.codex_approval_kind=mcp_tool_call` 的空表单工具审批自动放行；实际需要填写的表单与认证请求不能代填。纯文本辅助任务继续使用 `never` 并拒绝工具审批。
