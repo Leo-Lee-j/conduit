@@ -24,6 +24,25 @@ const TREE_MARK_SIZE: f32 = 16.;
 const TREE_TOGGLE_SIZE: f32 = 24.;
 const TREE_TITLE_LEFT: f32 = TREE_AXIS + TREE_MARK_SIZE / 2. + 8.;
 
+fn workspace_tint(color: Option<u32>, opacity: f32) -> Option<gpui_kit::Rgba> {
+    // Explicit workspace colors take precedence over the theme's project styling.
+    color.map(|color| {
+        let mut tint = gpui_kit::rgba(color);
+        tint.a *= opacity;
+        tint
+    })
+}
+
+fn fading_background(color: gpui_kit::Rgba) -> gpui_kit::Background {
+    let mut transparent = color;
+    transparent.a = 0.;
+    gpui_kit::linear_gradient(
+        90.,
+        gpui_kit::linear_color_stop(color, 0.),
+        gpui_kit::linear_color_stop(transparent, 1.),
+    )
+}
+
 fn tree_guide(id: String, axis: f32, height: f32) -> Div {
     div()
         .debug_selector(move || id.clone())
@@ -33,6 +52,37 @@ fn tree_guide(id: String, axis: f32, height: f32) -> Div {
         .h(px(height))
         .w(px(1.))
         .bg(rgb(palette().border))
+}
+
+fn session_tree_guide(id: String, axis: f32, height: f32) -> Div {
+    let icon_top = (ROW_HEIGHT - TREE_MARK_SIZE) / 2.;
+    let icon_bottom = icon_top + TREE_MARK_SIZE;
+    // Leave the icon slot clear so it can show the row's fading background.
+    div()
+        .debug_selector(move || id.clone())
+        .absolute()
+        .left(px(axis))
+        .top_0()
+        .h(px(height))
+        .w(px(1.))
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .w_full()
+                .h(px(icon_top.min(height)))
+                .bg(rgb(palette().border)),
+        )
+        .when(height > icon_bottom, |guide| {
+            guide.child(
+                div()
+                    .absolute()
+                    .top(px(icon_bottom))
+                    .bottom_0()
+                    .w_full()
+                    .bg(rgb(palette().border)),
+            )
+        })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -618,7 +668,26 @@ impl ConduitApp {
                         let unread = self.session_control.unread_completed.contains(&id);
                         let archived = session.archived;
                         let pinned = session.pinned;
-
+                        let workspace_color = self
+                            .store
+                            .ui
+                            .workspace_colors
+                            .get(&self.store.workspaces[index].path)
+                            .copied();
+                        let active_background = workspace_tint(workspace_color, 0.18)
+                            .unwrap_or_else(|| {
+                                rgb(if palette().restrained_projects {
+                                    palette().highlight_bg
+                                } else {
+                                    palette().surface_hover
+                                })
+                            });
+                        let hover_background = if active {
+                            workspace_tint(workspace_color, 0.24)
+                                .unwrap_or_else(|| rgb(palette().surface_hover))
+                        } else {
+                            rgb(palette().surface_hover)
+                        };
                         h_flex()
                             .id(("session", id))
                             .role(Role::TreeItem)
@@ -643,11 +712,11 @@ impl ConduitApp {
                             } else {
                                 theme::sidebar_session_text_color()
                             }))
-                            .when(active, |row| row.bg(rgb(palette().surface_hover)))
+                            .when(active, |row| row.bg(fading_background(active_background)))
                             .cursor_pointer()
-                            .hover(|style| {
+                            .hover(move |style| {
                                 style
-                                    .bg(rgb(palette().surface_hover))
+                                    .bg(fading_background(hover_background))
                                     .text_color(rgb(palette().text))
                             })
                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -659,7 +728,7 @@ impl ConduitApp {
                                     session_menu(menu, menu_app.clone(), id, menu_app.read(cx))
                                 }
                             })
-                            .child(tree_guide(
+                            .child(session_tree_guide(
                                 format!("session-guide-{id}"),
                                 TREE_AXIS + indent,
                                 if last_child { row.height() / 2. } else { list_height },
@@ -676,8 +745,6 @@ impl ConduitApp {
                                             .size(px(TREE_MARK_SIZE))
                                             .flex_shrink_0()
                                             .rounded_full()
-                                            .bg(rgb(if active { palette().surface_hover } else { palette().sidebar_bg }))
-                                            .group_hover("session-row", |style| style.bg(rgb(palette().surface_hover)))
                                             .child(provider_icon(session.provider).size_full()),
                                     )
                                     .child(
@@ -1290,16 +1357,9 @@ impl ConduitApp {
         let importing = self.history_loading.contains(&workspace.path);
         let workspace_color = self.store.ui.workspace_colors.get(&workspace.path).copied();
         let restrained_projects = palette().restrained_projects;
-        let marker_color = super::theme::project_marker_color(&workspace.path, workspace_color);
         let pinned = self.store.ui.pinned_workspaces.contains(&workspace.path);
         let can_reorder = self.workspace_reorderable(&workspace.path);
-        let workspace_hover_color = workspace_color
-            .filter(|_| !restrained_projects)
-            .map(|color| {
-                let mut tint = gpui_kit::rgba(color);
-                tint.a *= 0.24;
-                tint
-            });
+        let workspace_hover_color = workspace_tint(workspace_color, 0.24);
         let compact_path = workspace.path.clone();
         let drag_path = workspace.path.clone();
         let drop_path = workspace.path.clone();
@@ -1363,28 +1423,11 @@ impl ConduitApp {
             .text_color(rgb(palette().text))
             .cursor_pointer()
             .hover(move |style| match workspace_hover_color {
-                Some(color) => style.bg(color),
-                None => style.bg(rgb(palette().surface_hover)),
+                Some(color) => style.bg(fading_background(color)),
+                None => style.bg(fading_background(rgb(palette().surface_hover))),
             })
-            .when_some(workspace_color.filter(|_| !restrained_projects), |row, color| {
-                let mut tint = gpui_kit::rgba(color);
-                tint.a *= 0.18;
-                row.bg(tint)
-            })
-            .when(restrained_projects && workspace_selected, |row| row.bg(rgb(palette().highlight_bg)))
-            .when_some(marker_color.filter(|_| restrained_projects), |row, color| {
-                row.child(
-                    div()
-                        .debug_selector(move || format!("workspace-color-marker-{index}"))
-                        .absolute()
-                        .left(px(0.))
-                        .top(px(8.))
-                        .w(px(3.))
-                        .h(px(ROW_HEIGHT - 16.))
-                        .rounded(px(2.))
-                        .bg(gpui_kit::rgba(color)),
-                )
-            })
+            .when_some(workspace_tint(workspace_color, 0.18), |row, color| row.bg(fading_background(color)))
+            .when(restrained_projects && workspace_selected && workspace_color.is_none(), |row| row.bg(fading_background(rgb(palette().highlight_bg))))
             .when(can_reorder, |row| {
                 row.on_drag(
                     WorkspaceDrag {

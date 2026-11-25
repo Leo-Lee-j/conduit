@@ -9,3 +9,5 @@ bash.exe.stackdump
 .zvec-grep
 .codegraph
 .tmp*
+__pycache__/
+*.py[cod]

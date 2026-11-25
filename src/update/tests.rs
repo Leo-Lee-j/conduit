@@ -399,6 +399,9 @@ fn prune_cache_keeps_newer_installers_and_the_latest_handoff() {
         ]
     );
     assert_eq!(freed, 5 * 3 + 3 * 2);
-    assert_eq!(prune_cache(&cache.join("missing"), &semver::Version::new(0, 3, 20)), 0);
+    assert_eq!(
+        prune_cache(&cache.join("missing"), &semver::Version::new(0, 3, 20)),
+        0
+    );
     fs::remove_dir_all(&cache).unwrap();
 }

@@ -229,16 +229,18 @@ fn branch_tag_element(name: String, max_width: Pixels, current: bool) -> AnyElem
 }
 
 /// Keep the full accessible action name while rendering branch references as tags.
-fn branch_action_item(label: String, names: Vec<(String, bool)>) -> PopupMenuItem {
+fn branch_action_item(
+    label: String,
+    names: Vec<(String, bool)>,
+    disabled_reason: Option<String>,
+) -> PopupMenuItem {
     use gpui_kit::base::TestSupportExt as _;
+    let disabled = disabled_reason.is_some();
     PopupMenuItem::element(move |_, _| {
-        let mut row = h_flex()
-            .id("git-branch-action-label")
-            .role(Role::MenuItem)
-            .aria_label(label.clone())
-            .test_support()
-            .min_w_0()
-            .gap(px(4.));
+        // Dim the whole label, including tags that set their own foreground/background.
+        let mut content = h_flex().min_w_0().gap(px(4.)).when(disabled, |row| {
+            row.text_color(rgb(palette().text)).opacity(0.45)
+        });
         let mut rest = label.as_str();
         while let Some((offset, name, current)) = names
             .iter()
@@ -249,16 +251,64 @@ fn branch_action_item(label: String, names: Vec<(String, bool)>) -> PopupMenuIte
             .min_by_key(|(offset, _, _)| *offset)
         {
             if offset > 0 {
-                row = row.child(rest[..offset].trim().to_string());
+                content = content.child(rest[..offset].trim().to_string());
             }
-            row = row.child(branch_tag(name.clone(), 170., current));
+            content = content.child(branch_tag(name.clone(), 170., current));
             rest = &rest[offset + name.len() + 2..];
         }
         if !rest.is_empty() {
-            row = row.child(rest.trim().to_string());
+            content = content.child(rest.trim().to_string());
         }
-        row
+        h_flex()
+            .id("git-branch-action-label")
+            .role(Role::MenuItem)
+            .aria_label(
+                disabled_reason
+                    .as_ref()
+                    .map_or_else(|| label.clone(), |reason| format!("{label}: {reason}")),
+            )
+            .test_support()
+            .flex_1()
+            .min_w_0()
+            .gap(px(12.))
+            .justify_between()
+            .child(content)
+            .when_some(disabled_reason.clone(), |row, reason| {
+                row.cursor(CursorStyle::OperationNotAllowed)
+                    .child(
+                        Icon::new(FullIconName::Lock)
+                            .size(px(12.))
+                            .flex_shrink_0()
+                            .text_color(rgb(palette().muted)),
+                    )
+                    .tooltip(move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(reason.clone()).build(window, cx)
+                    })
+            })
     })
+    .disabled(disabled)
+}
+
+fn branch_menu_notice(reason: String) -> PopupMenuItem {
+    PopupMenuItem::element(move |_, _| {
+        v_flex()
+            .max_w(px(320.))
+            .my(px(4.))
+            .p(px(8.))
+            .gap(px(4.))
+            .rounded(px(5.))
+            .bg(rgb(palette().surface_strong))
+            .text_size(ui_text_size(12.))
+            .text_color(rgb(palette().text))
+            .child(
+                h_flex()
+                    .gap(px(6.))
+                    .child(Icon::new(FullIconName::Lock).size(px(13.)))
+                    .child(conduit::i18n::text_static("git_branches.unavailable")),
+            )
+            .child(div().whitespace_normal().child(reason.clone()))
+    })
+    .disabled(true)
 }
 
 pub(super) fn branch_menu(
@@ -280,16 +330,34 @@ pub(super) fn branch_menu(
     else {
         return menu;
     };
-    let blocked = state.branch_operation_blocked(&workspace).is_some();
-    let in_progress = repository.integration.is_some();
+    let write_blocked = state.branch_operation_blocked(&workspace).or_else(|| {
+        repository.integration.is_some().then(|| {
+            conduit::i18n::text_static("git_branches.continue_or_abort_the_git_operation_in")
+        })
+    });
     let current = repository.context.current_ref.as_ref() == Some(&selected.full_ref);
     let occupied_elsewhere = selected
         .occupied
         .as_ref()
         .is_some_and(|path| fs_canonical(path) != fs_canonical(&git::worktree_root(&workspace)));
+    let occupied_reason = selected.occupied.as_ref().map(|path| {
+        conduit::i18n::format(
+            "git_branches.in_use_by_worktree",
+            &[("arg0", path.display().to_string())],
+        )
+    });
+    let occupied_elsewhere_reason = occupied_reason.clone().filter(|_| occupied_elsewhere);
     let local = !selected.remote;
     let can_integrate =
         repository.context.current_ref.is_some() && repository.context.head.is_some() && !current;
+    if let Some(reason) = write_blocked
+        .map(str::to_owned)
+        .or_else(|| occupied_elsewhere_reason.clone())
+    {
+        menu = menu
+            .item(branch_menu_notice(reason))
+            .item(PopupMenuItem::separator());
+    }
     menu = menu
         .min_w(px(260.))
         .max_w(px((f32::from(window.viewport_size().width) - 48.).min(620.)))
@@ -302,76 +370,87 @@ pub(super) fn branch_menu(
         entries.push((
             "Checkout".into(),
             MenuAction::Run(git::BranchAction::Checkout),
-            occupied_elsewhere,
+            occupied_elsewhere_reason.clone(),
         ));
     }
     entries.push((
         format!("New Branch from '{}'", selected.name),
         MenuAction::Form(FormKind::Create),
-        false,
+        None,
     ));
     if can_integrate && !occupied_elsewhere {
         entries.push((
             format!("Checkout and Rebase onto '{}'", repository.current),
             MenuAction::Form(FormKind::Confirm(git::BranchAction::CheckoutRebase)),
-            false,
+            None,
         ));
     }
     if !current && !occupied_elsewhere {
         entries.push((
             "Checkout and Update".into(),
             MenuAction::Run(git::BranchAction::CheckoutUpdate { rebase: false }),
-            false,
+            None,
         ));
     }
     if repository.context.head.is_some() {
         entries.push((
             format!("Compare with '{}'", repository.current),
             MenuAction::Compare(git::ComparisonKind::Branches),
-            current,
+            current.then(|| conduit::i18n::text("git_branches.cannot_compare_current_branch")),
         ));
         entries.push((
             "Show Diff with Working Tree".into(),
             MenuAction::Compare(git::ComparisonKind::WorkingTree),
-            false,
+            None,
         ));
     }
     if can_integrate {
         entries.push((
             format!("Rebase '{}' onto '{}'", repository.current, selected.name),
             MenuAction::Form(FormKind::Confirm(git::BranchAction::Rebase)),
-            false,
+            None,
         ));
         entries.push((
             format!("Merge '{}' into '{}'", selected.name, repository.current),
             MenuAction::Form(FormKind::Confirm(git::BranchAction::Merge)),
-            false,
+            None,
         ));
     }
     entries.push((
         format!("New Worktree from '{}'", selected.name),
         MenuAction::Form(FormKind::Worktree),
-        false,
+        None,
     ));
     if local {
         entries.push((
             "Update".into(),
             MenuAction::Run(git::BranchAction::Update { rebase: false }),
-            selected.upstream.is_none() || occupied_elsewhere,
+            occupied_elsewhere_reason.clone().or_else(|| {
+                selected
+                    .upstream
+                    .is_none()
+                    .then(|| conduit::i18n::text("git.branches.branch_has_no_valid_upstream"))
+            }),
         ));
         entries.push((
             "Push".into(),
             MenuAction::Form(FormKind::Push),
-            repository.remotes.is_empty() && selected.upstream_remote.as_deref() != Some("."),
+            (repository.remotes.is_empty() && selected.upstream_remote.as_deref() != Some("."))
+                .then(|| conduit::i18n::text("git.no_remote_configured_unable_to_push_a")),
         ));
     }
-    for (label, action, disabled) in entries {
+    for (label, action, reason) in entries {
         let form_host = host.clone();
         let view = app.clone();
         let branch = selected.clone();
         let path = workspace.clone();
         let snapshot = repository.clone();
         let read_only = matches!(action, MenuAction::Compare(_));
+        let disabled_reason = if read_only {
+            reason
+        } else {
+            write_blocked.map(str::to_owned).or(reason)
+        };
         menu = menu.item(
             branch_action_item(
                 label,
@@ -379,8 +458,8 @@ pub(super) fn branch_menu(
                     (selected.name.clone(), current),
                     (repository.current.clone(), true),
                 ],
+                disabled_reason,
             )
-            .disabled(disabled || (!read_only && (blocked || in_progress)))
             .on_click(move |_, window, cx| {
                 view.update(cx, |this, cx| {
                     let request = git::BranchRequest {
@@ -485,16 +564,28 @@ pub(super) fn branch_menu(
             }
             menu
         });
-        menu = menu.item(PopupMenuItem::separator()).item(
-            PopupMenuItem::submenu("Tracked Branch", upstream_menu)
-                .disabled(blocked || in_progress || occupied_elsewhere),
-        );
-        for (label, kind, disabled) in [
-            ("Rename", FormKind::Rename, occupied_elsewhere),
+        let upstream_reason = write_blocked
+            .map(str::to_owned)
+            .or_else(|| occupied_elsewhere_reason.clone());
+        menu = menu
+            .item(PopupMenuItem::separator())
+            .item(if upstream_reason.is_some() {
+                branch_action_item("Tracked Branch".into(), vec![], upstream_reason)
+            } else {
+                PopupMenuItem::submenu("Tracked Branch", upstream_menu)
+            });
+        for (label, kind, reason) in [
+            ("Rename", FormKind::Rename, occupied_elsewhere_reason),
             (
                 "Delete",
                 FormKind::Confirm(git::BranchAction::Delete),
-                current || selected.occupied.is_some(),
+                if current {
+                    Some(conduit::i18n::text(
+                        "git.branches.cannot_delete_the_current_branch",
+                    ))
+                } else {
+                    occupied_reason
+                },
             ),
         ] {
             let form_host = host.clone();
@@ -503,57 +594,42 @@ pub(super) fn branch_menu(
             let snapshot = repository.clone();
             let branch = selected.clone();
             menu = menu.item(
-                PopupMenuItem::new(label)
-                    .disabled(blocked || in_progress || disabled)
-                    .on_click(move |_, window, cx| {
-                        view.update(cx, |_, cx| {
-                            let request = git::BranchRequest {
-                                expected: snapshot.context.clone(),
-                                selected: Some(branch.clone()),
-                                action: git::BranchAction::Checkout,
-                            };
-                            if matches!(kind, FormKind::Rename) {
-                                form_host.open_simple_form(
-                                    cx.entity(),
-                                    snapshot.clone(),
-                                    request,
-                                    kind.clone(),
-                                    window,
-                                    cx,
-                                );
-                            } else {
-                                open_form(
-                                    cx.entity(),
-                                    path.clone(),
-                                    snapshot.clone(),
-                                    request,
-                                    kind.clone(),
-                                    window,
-                                    cx,
-                                );
-                            }
-                        });
-                    }),
+                branch_action_item(
+                    label.into(),
+                    vec![],
+                    write_blocked.map(str::to_owned).or(reason),
+                )
+                .on_click(move |_, window, cx| {
+                    view.update(cx, |_, cx| {
+                        let request = git::BranchRequest {
+                            expected: snapshot.context.clone(),
+                            selected: Some(branch.clone()),
+                            action: git::BranchAction::Checkout,
+                        };
+                        if matches!(kind, FormKind::Rename) {
+                            form_host.open_simple_form(
+                                cx.entity(),
+                                snapshot.clone(),
+                                request,
+                                kind.clone(),
+                                window,
+                                cx,
+                            );
+                        } else {
+                            open_form(
+                                cx.entity(),
+                                path.clone(),
+                                snapshot.clone(),
+                                request,
+                                kind.clone(),
+                                window,
+                                cx,
+                            );
+                        }
+                    });
+                }),
             );
         }
-    }
-    if occupied_elsewhere {
-        menu = menu.item(PopupMenuItem::label(conduit::i18n::format(
-            "git_branches.in_use_by_worktree",
-            &[(
-                "arg0",
-                format!("{}", selected.occupied.as_ref().unwrap().display()),
-            )],
-        )));
-    } else if blocked {
-        menu = menu.item(PopupMenuItem::label(conduit::i18n::text_static(
-            "git_branches.a_task_is_running_in_this_repository",
-        )));
-    }
-    if in_progress {
-        menu = menu.item(PopupMenuItem::label(conduit::i18n::text_static(
-            "git_branches.continue_or_abort_the_git_operation_in",
-        )));
     }
     menu
 }

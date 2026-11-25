@@ -83,24 +83,19 @@ impl ConduitApp {
             .iter()
             .find(|(channel, _)| *channel == display_channel);
         let service_unavailable = selected_channel.is_none();
-        let (label, service_description) = if let Some((_, label)) = selected_channel {
-            (
-                label.clone(),
-                conduit::i18n::text("settings.sessions.service_description"),
-            )
-        } else {
+        let label = selected_channel
+            .map(|(_, label)| label.clone())
+            .unwrap_or_else(|| conduit::i18n::text("settings.navigation.service_unavailable"));
+        let service_warning = service_unavailable.then(|| {
             let id = match &selection.channel {
                 ModelChannel::Provider(id) | ModelChannel::Ccs(id) => id.as_str(),
                 ModelChannel::Cli => "",
             };
-            (
-                conduit::i18n::text("settings.navigation.service_unavailable"),
-                conduit::i18n::format(
-                    "settings.sessions.service_unavailable_description",
-                    &[("id", id.into())],
-                ),
+            conduit::i18n::format(
+                "settings.sessions.service_unavailable_description",
+                &[("id", id.into())],
             )
-        };
+        });
         let route_view = view.clone();
         let route = SettingField::render(move |_, _, _| {
             let channels = channels.clone();
@@ -137,6 +132,15 @@ impl ConduitApp {
                     menu
                 })
         });
+        let route = SettingItem::new(
+            conduit::i18n::text_static("settings.sessions.default_service"),
+            route,
+        );
+        let route = if let Some(warning) = service_warning {
+            route.description(settings_description(warning))
+        } else {
+            route
+        };
         let mut models = vec![(
             None,
             conduit::i18n::text_static("settings.defaults.use_service_default_model").to_string(),
@@ -174,6 +178,21 @@ impl ConduitApp {
             selected: selected_model_id.clone(),
             disabled: disabled || service_unavailable,
         });
+        let model = SettingItem::new(
+            conduit::i18n::text_static("settings.sessions.default_model"),
+            model,
+        );
+        let model = if service_unavailable || model_unconfirmed {
+            model.description(settings_description(conduit::i18n::text_static(
+                if service_unavailable {
+                    "settings.sessions.model_needs_service_description"
+                } else {
+                    "settings.sessions.model_pending_confirmation_description"
+                },
+            )))
+        } else {
+            model
+        };
         settings_section(format!(
             "{} · {}",
             conduit::i18n::text_static("settings.defaults.new_session_defaults"),
@@ -187,24 +206,8 @@ impl ConduitApp {
                 }),
             )
             .layout(Axis::Vertical),
-            SettingItem::new(
-                conduit::i18n::text_static("settings.sessions.default_service"),
-                route,
-            )
-            .description(settings_description(service_description)),
-            SettingItem::new(
-                conduit::i18n::text_static("settings.sessions.default_model"),
-                model,
-            )
-            .description(settings_description(conduit::i18n::text_static(
-                if service_unavailable {
-                    "settings.sessions.model_needs_service_description"
-                } else if model_unconfirmed {
-                    "settings.sessions.model_pending_confirmation_description"
-                } else {
-                    "settings.sessions.model_description"
-                },
-            ))),
+            route,
+            model,
         ])
         .footer(|_, _| conduit::i18n::text_static("settings.sessions.defaults_scope"))
     }

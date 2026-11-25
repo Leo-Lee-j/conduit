@@ -626,47 +626,11 @@ impl Render for UsagePanel {
         if let Some(first) = first {
             let ledger = &app.store.usage_ledger;
             let today = Local::now().date_naive();
-            let all_report = Report::build(
-                &ledger.observations,
-                &self.workspace,
-                &month,
-                &app.store.providers,
-                None,
-                None,
-            );
-            let filtered_report =
-                (self.selected_service.is_some() || self.selected_engine.is_some()).then(|| {
-                    Report::build(
-                        &ledger.observations,
-                        &self.workspace,
-                        &month,
-                        &app.store.providers,
-                        self.selected_service.as_deref(),
-                        self.selected_engine,
-                    )
-                });
-            let report = filtered_report.as_ref().unwrap_or(&all_report);
-            let all_insights = Insights::build(
-                ledger,
-                &self.workspace,
-                first,
-                today,
-                None,
-                &all_report,
-                None,
-            );
-            let filtered_insights = filtered_report.as_ref().map(|report| {
-                Insights::build(
-                    ledger,
-                    &self.workspace,
-                    first,
-                    today,
-                    self.selected_service.as_deref(),
-                    report,
-                    self.selected_engine,
-                )
-            });
-            let insights = filtered_insights.as_ref().unwrap_or(&all_insights);
+            let snapshot = self.snapshot(app, &month, first, today);
+            let all_report = &snapshot.all_report;
+            let all_insights = &snapshot.all_insights;
+            let report = snapshot.report();
+            let insights = snapshot.insights();
             content = content
                 .child(self.dashboard_header(workspace, cx))
                 .child(self.dashboard_filters(report, cx));
@@ -688,7 +652,7 @@ impl Render for UsagePanel {
                         .child(self.dashboard_daily(report, insights, ledger.truncated, cx))
                         .child(self.concentration(report, cx)),
                 )
-                .child(self.reminder(&all_report, &all_insights, limit, writable, cx));
+                .child(self.reminder(all_report, all_insights, limit, writable, cx));
             if self.details_open {
                 let change = insights.change().map_or_else(
                     || label("usage.no_comparison").into(),
@@ -712,7 +676,17 @@ impl Render for UsagePanel {
                     .child(self.comparison(insights))
                     .child(self.sessions(report, app));
             }
-            content = content.child(div().pt_2().child(self.dashboard_table(report, app, cx)));
+            let page = table::Page::new(
+                self.page,
+                self.page_size,
+                snapshot.row_count(self.table_tab),
+            );
+            let rows = self.table_rows(&snapshot, app, page.range);
+            content = content.child(
+                div()
+                    .pt_2()
+                    .child(self.dashboard_table(&snapshot, rows, cx)),
+            );
         } else {
             content = content
                 .child(self.dashboard_header(workspace, cx))

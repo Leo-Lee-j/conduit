@@ -3,12 +3,14 @@ use super::*;
 use crate::usage_ledger::{ApiRequestOutcome, Observation, Totals};
 use chrono::Months;
 use gpui_kit::component::progress::Progress;
+mod cache;
 mod dashboard;
 #[cfg(all(test, feature = "ui-tests"))]
 mod dashboard_tests;
 mod insights;
 mod render;
 mod report;
+mod table;
 use report::{Report, service_name};
 
 #[derive(Default)]
@@ -214,12 +216,24 @@ impl ConduitApp {
                             return;
                         }
                         this.selected_service = None;
-                        this.shown = 20;
+                        this.page = 0;
                         this.model_details.clear();
                         cx.notify();
                     },
                 ),
             ];
+            let owner = cx.entity().downgrade();
+            let table = cx.new(|cx| {
+                gpui_kit::component::table::TableState::new(
+                    table::UsageTable::new(owner, host.downgrade()),
+                    window,
+                    cx,
+                )
+                .row_selectable(false)
+                .col_selectable(false)
+                .col_movable(false)
+                .sortable(false)
+            });
             UsagePanel {
                 host: host.downgrade(),
                 workspace: workspace.clone(),
@@ -232,7 +246,10 @@ impl ConduitApp {
                 table_tab: dashboard::TableTab::Records,
                 chart_open: true,
                 concentration_by_service: false,
-                shown: 20,
+                page: 0,
+                page_size: 20,
+                table,
+                cache: cache::Cache::default(),
                 model_details: HashSet::new(),
                 budget_open: false,
                 details_open: false,
@@ -260,7 +277,10 @@ pub(super) struct UsagePanel {
     table_tab: dashboard::TableTab,
     chart_open: bool,
     concentration_by_service: bool,
-    shown: usize,
+    page: usize,
+    page_size: usize,
+    table: Entity<gpui_kit::component::table::TableState<table::UsageTable>>,
+    cache: cache::Cache,
     model_details: HashSet<String>,
     budget_open: bool,
     details_open: bool,
@@ -312,7 +332,7 @@ impl UsagePanel {
             input.set_value(date.format("%Y-%m").to_string(), window, cx)
         });
         self.selected_service = None;
-        self.shown = 20;
+        self.page = 0;
         self.model_details.clear();
         cx.notify();
     }

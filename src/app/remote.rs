@@ -865,10 +865,7 @@ impl ConduitApp {
                             .into_any_element()
                     }
                 }),
-            )
-            .description(settings::settings_description(
-                self.remote_settings_text("scope"),
-            )),
+            ),
         ])
     }
 

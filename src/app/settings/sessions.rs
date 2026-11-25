@@ -83,9 +83,6 @@ impl ConduitApp {
                     conduit::i18n::text_static("settings.sessions.auto_archive_enabled"),
                     enabled,
                 )
-                .description(settings_description(conduit::i18n::text_static(
-                    "settings.sessions.auto_archive_description",
-                )))
                 .disabled(disabled),
                 SettingItem::new(
                     conduit::i18n::text_static("settings.sessions.auto_archive_after"),
@@ -126,9 +123,6 @@ impl ConduitApp {
                 conduit::i18n::text_static("settings.sessions.auto_cleanup_empty_sessions"),
                 cleanup_empty_sessions,
             )
-            .description(settings_description(conduit::i18n::text_static(
-                "settings.sessions.auto_cleanup_empty_sessions_description",
-            )))
             .disabled(disabled),
         ])
         .footer(|_, _| {
@@ -188,9 +182,6 @@ impl ConduitApp {
                 conduit::i18n::text_static("settings.general.default_session_permission"),
                 permission_field,
             )
-            .description(settings_description(conduit::i18n::text_static(
-                "settings.sessions.permission_scope",
-            )))
             .disabled(disabled),
         )
         .footer(|_, _| conduit::i18n::text_static("settings.sessions.permission_risk"))
@@ -219,17 +210,11 @@ impl ConduitApp {
                 conduit::i18n::text_static("settings.general.collapse_reasoning"),
                 collapse_reasoning,
             )
-            .description(settings_description(conduit::i18n::text_static(
-                "settings.general.collapse_reasoning_description",
-            )))
             .disabled(disabled),
             SettingItem::new(
                 conduit::i18n::text_static("settings.general.auto_collapse_question_history"),
                 collapse_questions,
             )
-            .description(settings_description(conduit::i18n::text_static(
-                "settings.general.auto_collapse_question_history_description",
-            )))
             .disabled(disabled),
         ])
         .footer(|_, _| conduit::i18n::text_static("settings.sessions.chat_display_scope"))
@@ -304,14 +289,8 @@ impl ConduitApp {
                 conduit::i18n::text_static("settings.defaults.automatic_naming"),
                 auto_rename,
             )
-            .description(settings_description(conduit::i18n::text_static(
-                "settings.general.manual_ai_renaming_remains_available_when_disabled",
-            )))
             .disabled(disabled),
             SettingItem::new(conduit::i18n::text_static("settings.general.trigger"), mode)
-                .description(settings_description(conduit::i18n::text_static(
-                    "settings.sessions.naming_trigger_scope",
-                )))
                 .disabled(disabled),
         ]
     }
@@ -344,9 +323,6 @@ impl ConduitApp {
                     conduit::i18n::text_static("settings.general.naming_engine"),
                     provider,
                 )
-                .description(settings_description(conduit::i18n::text_static(
-                    "settings.sessions.naming_model_scope",
-                )))
                 .disabled(disabled),
                 SettingItem::new(
                     conduit::i18n::text_static("settings.general.naming_service"),

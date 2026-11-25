@@ -2,33 +2,6 @@
 use super::*;
 use gpui_kit::component::tooltip::Tooltip;
 
-#[cfg(test)]
-mod tests;
-
-/// Bind the preview to the turn that supplied the clicked row, even if another
-/// turn has started since the popover opened. Repeated edits stay chronological.
-fn turn_messages<'a>(session: &'a SessionRecord, turn: Option<&str>) -> &'a [ChatItem] {
-    let start = match turn {
-        Some(key) => {
-            let Some(index) = session
-                .messages
-                .iter()
-                .position(|item| item.kind == ItemKind::User && item.key == key)
-            else {
-                return &[];
-            };
-            index + 1
-        }
-        None => 0,
-    };
-    let messages = &session.messages[start..];
-    let end = messages
-        .iter()
-        .position(|item| item.kind == ItemKind::User)
-        .unwrap_or(messages.len());
-    &messages[..end]
-}
-
 /// Keep the clicked turn's immutable tool versions while the shared worker finishes.
 /// Consume completed analyses in order so cache eviction cannot restart earlier work.
 struct FileEdits {
@@ -39,19 +12,6 @@ struct FileEdits {
 }
 
 impl FileEdits {
-    fn new(session: &SessionRecord, turn: Option<&str>, path: &str) -> Self {
-        Self {
-            path: path.to_owned(),
-            pending: turn_messages(session, turn)
-                .iter()
-                .filter(|item| item.kind == ItemKind::Tool)
-                .cloned()
-                .collect(),
-            edits: Vec::new(),
-            session_change: false,
-        }
-    }
-
     fn advance(&mut self, cache: &mut tool_analysis::Cache, cx: &mut Context<ConduitApp>) {
         while let Some(item) = self.pending.front() {
             let Some(value) = cache.get_background(item, cx) else {
@@ -88,35 +48,6 @@ impl ConduitApp {
             session_change: true,
         };
         open(path, edits, cx.entity(), window, cx);
-    }
-
-    pub(in crate::app) fn open_turn_diff(
-        &mut self,
-        session: u64,
-        turn: Option<&str>,
-        path: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let root = self
-            .session_control
-            .locate(&self.store.workspaces, session)
-            .map(|(workspace, _)| {
-                self.store.workspaces[workspace]
-                    .path
-                    .to_string_lossy()
-                    .into_owned()
-            });
-        let display_path = workspace_relative_path(path, root.as_deref());
-        let Some(session) = self.session(session) else {
-            return;
-        };
-        let mut edits = FileEdits::new(session, turn, path);
-        edits.advance(&mut self.tool_analysis, cx);
-        if edits.pending.is_empty() && edits.edits.is_empty() {
-            return;
-        }
-        open(display_path, edits, cx.entity(), window, cx);
     }
 }
 

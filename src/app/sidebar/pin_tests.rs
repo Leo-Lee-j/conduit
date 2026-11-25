@@ -183,14 +183,14 @@ fn workspace_pins_keep_project_groups_whole_and_obey_search(cx: &mut TestAppCont
             assert!(!app.store.ui.pinned_workspaces.contains(&first));
             app.sidebar.expanded_projects.clear();
             app.refresh_sidebar();
-            assert_eq!(order(app), [ordinary.clone()]);
+            assert_eq!(order(app), std::slice::from_ref(&ordinary));
             assert!(matches!(&app.sidebar.rows[0], cache::Row::Project { .. }));
             app.search_query = "only ordinary".into();
             app.search_ui.result_query = app.search_query.clone();
             app.search_ui.matches = [1].into_iter().collect();
             app.search_ui.result_generation += 1;
             app.refresh_sidebar();
-            assert_eq!(order(app), [ordinary.clone()]);
+            assert_eq!(order(app), std::slice::from_ref(&ordinary));
             assert!(
                 !app.sidebar
                     .rows

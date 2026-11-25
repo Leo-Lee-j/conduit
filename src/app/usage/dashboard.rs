@@ -14,7 +14,7 @@ pub(super) fn chart_color() -> u32 {
     if is_dark_mode() { 0x38b9cf } else { 0x0891b2 }
 }
 
-fn count(value: usize) -> String {
+pub(super) fn count(value: usize) -> String {
     let digits = value.to_string();
     let mut result = String::new();
     for (index, ch) in digits.chars().enumerate() {
@@ -26,7 +26,7 @@ fn count(value: usize) -> String {
     result
 }
 
-fn token_value(value: Option<u64>) -> String {
+pub(super) fn token_value(value: Option<u64>) -> String {
     value.map_or_else(|| "—".into(), format_tokens)
 }
 
@@ -37,37 +37,13 @@ pub(super) fn first_response_value(value: Option<u64>) -> String {
     )
 }
 
-fn status_label(status: Option<ApiRequestOutcome>) -> &'static str {
+pub(super) fn status_label(status: Option<ApiRequestOutcome>) -> &'static str {
     label(match status {
         None => "usage.all_statuses",
         Some(ApiRequestOutcome::Succeeded) => "usage.status_succeeded",
         Some(ApiRequestOutcome::Failed) => "usage.status_failed",
         Some(ApiRequestOutcome::Cancelled) => "usage.status_cancelled",
     })
-}
-
-fn cell(value: impl Into<SharedString>, width: f32) -> Div {
-    div()
-        .w(px(width))
-        .flex_shrink_0()
-        .truncate()
-        .child(value.into())
-}
-
-fn numeric(value: impl Into<SharedString>, width: f32) -> Div {
-    cell(value, width).text_right()
-}
-
-fn table_row() -> Div {
-    h_flex()
-        .w_full()
-        .min_h(px(40.))
-        .items_center()
-        .gap_2()
-        .px_4()
-        .border_b_1()
-        .border_color(rgb(palette().border))
-        .text_size(ui_text_size(12.))
 }
 
 fn badge(value: usize) -> Div {
@@ -266,9 +242,9 @@ impl UsagePanel {
         self.select_service(None, cx);
     }
 
-    fn select_service(&mut self, service: Option<String>, cx: &mut Context<Self>) {
+    pub(super) fn select_service(&mut self, service: Option<String>, cx: &mut Context<Self>) {
         self.selected_service = service;
-        self.shown = 20;
+        self.page = 0;
         self.model_details.clear();
         cx.notify();
     }
@@ -415,11 +391,12 @@ impl UsagePanel {
     }
 
     pub(super) fn dashboard_table(
-        &self,
-        report: &Report,
-        app: &ConduitApp,
-        cx: &Context<Self>,
+        &mut self,
+        snapshot: &cache::Snapshot,
+        rows: Vec<table::Row>,
+        cx: &mut Context<Self>,
     ) -> Div {
+        let report = snapshot.report();
         let mut tabs = h_flex()
             .w_full()
             .flex_wrap()
@@ -473,7 +450,7 @@ impl UsagePanel {
                             )
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.table_tab = tab;
-                                this.shown = 20;
+                                this.page = 0;
                                 cx.notify();
                             })),
                     ),
@@ -502,7 +479,7 @@ impl UsagePanel {
                                 move |_, _, cx| {
                                     let _ = owner.update(cx, |this, cx| {
                                         this.log_status = status;
-                                        this.shown = 20;
+                                        this.page = 0;
                                         cx.notify();
                                     });
                                 },
@@ -512,16 +489,31 @@ impl UsagePanel {
                     }),
             );
         }
-        let (body, total, measured) = match self.table_tab {
-            TableTab::Records => {
-                let (body, total, measured) = self.record_rows(report, app);
-                (body, total, Some(measured))
+        let total = snapshot.row_count(self.table_tab);
+        let measured = (self.table_tab == TableTab::Records).then_some(snapshot.measured);
+        let page = table::Page::new(self.page, self.page_size, total);
+        self.page = page.index;
+        let tab = self.table_tab;
+        let locale = conduit::i18n::locale();
+        self.table.update(cx, |table, cx| {
+            let delegate = table.delegate_mut();
+            let columns_changed = delegate.tab != tab || delegate.locale != locale;
+            let page_changed = columns_changed || delegate.page != page.index;
+            let rows_changed = delegate.rows != rows;
+            if columns_changed || rows_changed || page_changed {
+                delegate.tab = tab;
+                delegate.page = page.index;
+                delegate.locale = locale;
+                delegate.rows = rows;
+                if columns_changed {
+                    table.refresh(cx);
+                }
+                if page_changed || rows_changed {
+                    table.scroll_to_row(0, cx);
+                }
+                cx.notify();
             }
-            TableTab::Providers | TableTab::Models => {
-                let (body, total) = self.group_rows(report, cx);
-                (body, total, None)
-            }
-        };
+        });
         let mut table = v_flex()
             .w_full()
             .min_w_0()
@@ -535,18 +527,39 @@ impl UsagePanel {
                     .id("usage-table-scroll")
                     .debug_selector(|| "usage-table-viewport".into())
                     .w_full()
-                    .overflow_x_scroll()
-                    .child(body),
+                    .h(px(34. + 36. * page.range.len().clamp(2, 10) as f32 + 12.))
+                    .child(
+                        div()
+                            .debug_selector(|| "usage-records-table".into())
+                            .size_full()
+                            .child(
+                                gpui_kit::component::table::DataTable::new(&self.table)
+                                    .with_size(px(36.))
+                                    .header_row_height(px(34.))
+                                    .bordered(false),
+                            ),
+                    ),
             );
-        if total == 0 {
-            table = table.child(
-                v_flex()
-                    .py_6()
-                    .items_center()
-                    .gap_2()
-                    .child(caption(label("usage.no_matching_records")))
-                    .child(caption(label("usage.try_filters"))),
-            );
+        if self.table_tab == TableTab::Models {
+            for index in page.range.clone() {
+                let (model, totals) = &report.models[index];
+                let key = format!("model:{}", model.as_deref().unwrap_or(""));
+                if self.model_details.contains(&key) {
+                    table = table.child(
+                        v_flex()
+                            .id(("usage-model-detail", index))
+                            .debug_selector(move || format!("usage-model-detail-{index}"))
+                            .p_3()
+                            .gap_2()
+                            .child(caption(
+                                model
+                                    .clone()
+                                    .unwrap_or_else(|| label("usage.unknown_model").into()),
+                            ))
+                            .child(composition(totals)),
+                    );
+                }
+            }
         }
         table.child(
             h_flex()
@@ -556,9 +569,13 @@ impl UsagePanel {
                 .px_4()
                 .py_2()
                 .child(caption(message(
-                    "usage.showing_records",
+                    "usage.page_range",
                     &[
-                        ("shown", count(total.min(self.shown))),
+                        (
+                            "start",
+                            count(if total == 0 { 0 } else { page.range.start + 1 }),
+                        ),
+                        ("end", count(page.range.end)),
                         ("total", count(total)),
                     ],
                 )))
@@ -579,312 +596,94 @@ impl UsagePanel {
                     )
                 })
                 .child(div().flex_1())
-                .when(total > self.shown, |footer| {
-                    footer.child(
-                        Button::new("usage-more")
-                            .small()
-                            .ghost()
-                            .label(label("usage.more"))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.shown += 20;
-                                cx.notify();
-                            })),
-                    )
-                }),
-        )
-    }
-
-    pub(super) fn record_rows(&self, report: &Report, app: &ConduitApp) -> (Div, usize, usize) {
-        let rows: Vec<_> = report
-            .records
-            .iter()
-            .map(|index| &app.store.usage_ledger.observations[*index])
-            .filter(|record| {
-                self.log_status
-                    .is_none_or(|status| record.api_request_outcome == Some(status))
-            })
-            .collect();
-        let mut body = v_flex()
-            .debug_selector(|| "usage-records-table".into())
-            .w_full()
-            .min_w(px(940.))
-            .child(
-                table_row()
-                    .min_h(px(34.))
-                    .bg(rgb(palette().surface_strong))
-                    .text_color(rgb(palette().muted))
-                    .child(cell(label("usage.time"), 96.))
-                    .child(cell(label("usage.engine"), 84.))
-                    .child(cell(label("usage.provider"), 110.))
-                    .child(div().flex_1().min_w(px(120.)).child(label("usage.model")))
-                    .child(numeric(label("usage.new_input"), 66.))
-                    .child(numeric(label("usage.output_short"), 60.))
-                    .child(numeric(label("usage.cache_short"), 66.))
-                    .child(
-                        numeric(label("usage.first_response"), 80.)
-                            .id("usage-first-response-header")
-                            .tooltip(|window, cx| {
-                                gpui_kit::component::tooltip::Tooltip::new(label(
-                                    "usage.first_response_note",
-                                ))
-                                .build(window, cx)
-                            }),
-                    )
-                    .child(numeric(label("usage.elapsed"), 60.))
-                    .child(cell(label("usage.status"), 56.))
-                    .child(div().w(px(28.))),
-            );
-        for (index, record) in rows.iter().take(self.shown).enumerate() {
-            let time = chrono::DateTime::from_timestamp(
-                i64::try_from(record.finished_at).unwrap_or(i64::MAX),
-                0,
-            )
-            .map(|date| {
-                date.with_timezone(&Local)
-                    .format("%m-%d %H:%M:%S")
-                    .to_string()
-            })
-            .unwrap_or_else(|| "—".into());
-            let service_key = report::service_key(record.provider, &record.service);
-            let service = report
-                .services
-                .iter()
-                .find(|service| service.key == service_key)
-                .map(service_title)
-                .unwrap_or_else(|| label("usage.unavailable_provider").into());
-            let uncached = record
-                .input
-                .zip(record.cached)
-                .and_then(|(input, cached)| input.checked_sub(cached));
-            let host = self.host.clone();
-            let session_id = record.session;
-            let session = app.session(session_id);
-            let status = record
-                .api_request_outcome
-                .map(|status| status_label(Some(status)))
-                .unwrap_or("—");
-            let color = match record.api_request_outcome {
-                Some(ApiRequestOutcome::Failed) => palette().danger_text,
-                Some(ApiRequestOutcome::Cancelled) => palette().warning_text,
-                _ => palette().muted,
-            };
-            body = body.child(
-                table_row()
-                    .hover(|row| row.bg(rgb(palette().surface_hover)))
-                    .child(cell(time, 96.))
-                    .child(
-                        h_flex()
-                            .w(px(84.))
-                            .flex_shrink_0()
-                            .gap_1()
-                            .items_center()
-                            .child(provider_icon(record.provider))
-                            .child(record.provider.label()),
-                    )
-                    .child(
-                        div()
-                            .id(("usage-record-service", index))
-                            .w(px(110.))
-                            .flex_shrink_0()
-                            .truncate()
-                            .tooltip({
-                                let name = service.clone();
-                                move |window, cx| {
-                                    gpui_kit::component::tooltip::Tooltip::new(name.clone())
-                                        .build(window, cx)
-                                }
-                            })
-                            .child(service),
-                    )
-                    .child(
-                        div()
-                            .id(("usage-record-model", index))
-                            .flex_1()
-                            .min_w(px(120.))
-                            .truncate()
-                            .tooltip({
-                                let name = record
-                                    .model
-                                    .clone()
-                                    .unwrap_or_else(|| label("usage.unknown_model").into());
-                                move |window, cx| {
-                                    gpui_kit::component::tooltip::Tooltip::new(name.clone())
-                                        .build(window, cx)
-                                }
-                            })
-                            .child(record.model.clone().unwrap_or_else(|| "—".into())),
-                    )
-                    .child(numeric(token_value(uncached), 66.))
-                    .child(numeric(token_value(record.output), 60.))
-                    .child(numeric(token_value(record.cached), 66.))
-                    .child(
-                        numeric(first_response_value(record.api_first_response_ms), 80.)
-                            .id(("usage-record-first-response", index))
-                            .debug_selector(move || format!("usage-record-first-response-{index}"))
-                            .when(record.api_first_response_ms.is_none(), |cell| {
-                                cell.text_color(rgb(palette().muted))
-                            })
-                            .tooltip(|window, cx| {
-                                gpui_kit::component::tooltip::Tooltip::new(label(
-                                    "usage.first_response_note",
-                                ))
-                                .build(window, cx)
-                            }),
-                    )
-                    .child(numeric(
-                        format!("{:.1}s", record.elapsed_ms as f64 / 1000.),
-                        60.,
-                    ))
-                    .child(cell(status, 56.).text_color(rgb(color)))
-                    .child(
-                        Button::new(("usage-record-open", index))
-                            .debug_selector(move || format!("usage-record-open-{index}"))
+                .child({
+                    let owner = cx.entity().downgrade();
+                    Button::new("usage-page-size")
+                        .debug_selector(|| "usage-page-size".into())
+                        .small()
+                        .ghost()
+                        .icon(FullIconName::ChevronDown)
+                        .label(message(
+                            "usage.page_size",
+                            &[("count", count(self.page_size))],
+                        ))
+                        .dropdown_menu(move |mut menu, _, _| {
+                            for size in [20, 50, 100] {
+                                let owner = owner.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::new(message(
+                                        "usage.page_size",
+                                        &[("count", count(size))],
+                                    ))
+                                    .on_click(
+                                        move |_, _, cx| {
+                                            let _ = owner.update(cx, |this, cx| {
+                                                this.page_size = size;
+                                                this.page = 0;
+                                                cx.notify();
+                                            });
+                                        },
+                                    ),
+                                );
+                            }
+                            menu
+                        })
+                })
+                .child(caption(message(
+                    "usage.page_number",
+                    &[
+                        ("page", count(page.index + 1)),
+                        ("pages", count(page.count)),
+                    ],
+                )))
+                .children(
+                    [
+                        (
+                            "usage-first-page",
+                            "usage.first_page",
+                            FullIconName::ChevronsLeft,
+                            0,
+                            page.index == 0,
+                        ),
+                        (
+                            "usage-prev-page",
+                            "usage.previous_page",
+                            FullIconName::ChevronLeft,
+                            page.index.saturating_sub(1),
+                            page.index == 0,
+                        ),
+                        (
+                            "usage-next-page",
+                            "usage.next_page",
+                            FullIconName::ChevronRight,
+                            (page.index + 1).min(page.count - 1),
+                            page.index + 1 == page.count,
+                        ),
+                        (
+                            "usage-last-page",
+                            "usage.last_page",
+                            FullIconName::ChevronsRight,
+                            page.count - 1,
+                            page.index + 1 == page.count,
+                        ),
+                    ]
+                    .into_iter()
+                    .map(|(id, title, icon, target, disabled)| {
+                        Button::new(id)
+                            .debug_selector(move || id.into())
                             .small()
                             .compact()
                             .ghost()
-                            .w(px(28.))
-                            .icon(FullIconName::ArrowUpRight)
-                            .accessibility_label(label("usage.open_session"))
-                            .tooltip(label("usage.open_session"))
-                            .disabled(session.is_none_or(|session| session.archived))
-                            .on_click(move |_, window, cx| {
-                                let _ = host.update(cx, |app, cx| {
-                                    app.select_document(
-                                        files::DocumentTab::Chat(session_id),
-                                        window,
-                                        cx,
-                                    )
-                                });
-                            }),
-                    ),
-            );
-        }
-        let measured = rows
-            .iter()
-            .filter(|record| record.api_first_response_ms.is_some())
-            .count();
-        (body, rows.len(), measured)
-    }
-
-    fn group_rows(&self, report: &Report, cx: &Context<Self>) -> (Div, usize) {
-        let providers = self.table_tab == TableTab::Providers;
-        let mut body = v_flex().w_full().min_w(px(720.)).child(
-            table_row()
-                .min_h(px(34.))
-                .bg(rgb(palette().surface_strong))
-                .text_color(rgb(palette().muted))
-                .child(div().flex_1().min_w(px(140.)).child(label(if providers {
-                    "usage.provider"
-                } else {
-                    "usage.model"
-                })))
-                .child(numeric(label("usage.turns_short"), 58.))
-                .child(numeric(label("usage.total_tokens"), 82.))
-                .child(numeric(label("usage.input"), 75.))
-                .child(numeric(label("usage.output_short"), 65.))
-                .child(numeric(label("usage.cache_short"), 75.))
-                .child(numeric(label("usage.usage_share"), 65.))
-                .child(div().w(px(56.))),
-        );
-        let groups: Vec<_> = if providers {
-            report
-                .services
-                .iter()
-                .map(|service| (service.key.clone(), service_title(service), &service.totals))
-                .collect()
-        } else {
-            report
-                .models
-                .iter()
-                .map(|(model, totals)| {
-                    (
-                        format!("model:{}", model.as_deref().unwrap_or("")),
-                        model
-                            .clone()
-                            .unwrap_or_else(|| label("usage.unknown_model").into()),
-                        totals,
-                    )
-                })
-                .collect()
-        };
-        let scope = if providers {
-            report.services.iter().fold(0u64, |sum, service| {
-                sum.saturating_add(service.totals.tokens())
-            })
-        } else {
-            report.filtered.tokens()
-        };
-        for (index, (key, name, totals)) in groups.iter().take(self.shown).enumerate() {
-            let selected = self.selected_service.as_ref() == Some(key);
-            let expanded = self.model_details.contains(key);
-            let key = key.clone();
-            let action = Button::new(("usage-group-action", index))
-                .small()
-                .compact()
-                .ghost()
-                .w(px(56.))
-                .debug_selector(move || format!("usage-provider-{index}"))
-                .label(label(if providers {
-                    if selected {
-                        "usage.clear_filter"
-                    } else {
-                        "usage.filter"
-                    }
-                } else if expanded {
-                    "usage.collapse_short"
-                } else {
-                    "usage.expand_short"
-                }))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if providers {
-                        this.table_tab = TableTab::Models;
-                        this.select_service(if selected { None } else { Some(key.clone()) }, cx);
-                    } else {
-                        if !this.model_details.remove(&key) {
-                            this.model_details.insert(key.clone());
-                        }
-                        cx.notify();
-                    }
-                }));
-            body = body.child(
-                table_row()
-                    .hover(|row| row.bg(rgb(palette().surface_hover)))
-                    .child(
-                        div()
-                            .id(("usage-group-name", index))
-                            .flex_1()
-                            .min_w(px(140.))
-                            .truncate()
-                            .tooltip({
-                                let name = name.clone();
-                                move |window, cx| {
-                                    gpui_kit::component::tooltip::Tooltip::new(name.clone())
-                                        .build(window, cx)
-                                }
-                            })
-                            .child(name.clone()),
-                    )
-                    .child(numeric(count(totals.turns), 58.))
-                    .child(numeric(format_tokens(totals.tokens()), 82.).font_medium())
-                    .child(numeric(
-                        token_value((totals.input_records > 0).then_some(totals.input)),
-                        75.,
-                    ))
-                    .child(numeric(
-                        token_value((totals.output_records > 0).then_some(totals.output)),
-                        65.,
-                    ))
-                    .child(numeric(
-                        token_value((totals.cached_records > 0).then_some(totals.cached)),
-                        75.,
-                    ))
-                    .child(numeric(share(totals.tokens(), scope), 65.))
-                    .child(action),
-            );
-            if expanded && !providers {
-                body = body.child(div().p_3().child(composition(totals)));
-            }
-        }
-        (body, groups.len())
+                            .icon(icon)
+                            .accessibility_label(label(title))
+                            .tooltip(label(title))
+                            .disabled(disabled)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.page = target;
+                                cx.notify();
+                            }))
+                    }),
+                ),
+        )
     }
 }

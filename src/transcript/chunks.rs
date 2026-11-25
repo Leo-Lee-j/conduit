@@ -194,9 +194,9 @@ pub(super) fn prepare(
     let messages = |range: std::ops::Range<usize>| -> Vec<Arc<Message>> {
         range
             .map(|index| {
-                written[index].clone().unwrap_or_else(|| {
-                    Arc::new(parts[index].message(&session.messages[index]))
-                })
+                written[index]
+                    .clone()
+                    .unwrap_or_else(|| Arc::new(parts[index].message(&session.messages[index])))
             })
             .collect()
     };

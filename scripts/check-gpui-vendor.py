@@ -24,6 +24,8 @@ PATCHED = {
     "crates/component/src/theme/mod.rs",
     "crates/component/src/color_picker.rs",
     "crates/component/src/tab/tab.rs",
+    "crates/component/src/highlighter/mod.rs",
+    "crates/component/src/highlighter/syntect_backend.rs",
 }
 
 

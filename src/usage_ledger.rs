@@ -53,6 +53,9 @@ pub struct Ledger {
     pub observations: Vec<Observation>,
     pub budgets: Vec<Budget>,
     pub truncated: bool,
+    /// Changes even when an observation is replaced or the bounded ledger rolls over.
+    #[serde(skip)]
+    revision: u64,
 }
 
 #[derive(Default)]
@@ -121,7 +124,12 @@ pub fn date(timestamp: u64) -> String {
 }
 
 impl Ledger {
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     pub fn record(&mut self, observation: Observation) {
+        self.revision = self.revision.wrapping_add(1);
         if let Some(existing) = self
             .observations
             .iter_mut()
@@ -211,7 +219,9 @@ mod tests {
             api_request_outcome: Some(ApiRequestOutcome::Succeeded),
         };
         ledger.record(record.clone());
+        let first_revision = ledger.revision();
         ledger.record(record.clone());
+        assert_ne!(ledger.revision(), first_revision);
         assert_eq!(ledger.monthly(&workspace, &month).tokens(), 150);
         ledger.save_budget(workspace.clone(), 120);
         assert_eq!(ledger.take_alert(&workspace, &month), Some((150, 120)));
@@ -244,6 +254,21 @@ mod tests {
         );
         assert_eq!(restored.observations[1].api_first_response_ms, None);
         assert_eq!(restored.observations[1].api_request_outcome, None);
+        assert_eq!(
+            restored.revision(),
+            0,
+            "runtime revisions are not persisted"
+        );
+        let before_rollover = ledger.revision();
+        ledger
+            .observations
+            .resize(10_000, restored.observations[0].clone());
+        let mut next = restored.observations[0].clone();
+        next.key = "rollover".into();
+        ledger.record(next);
+        assert_eq!(ledger.observations.len(), 10_000);
+        assert!(ledger.truncated);
+        assert_ne!(ledger.revision(), before_rollover);
     }
 
     #[test]

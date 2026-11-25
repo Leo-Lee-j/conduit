@@ -57,6 +57,9 @@ checkout without changing Cargo's cache or running a preparation script.
   are dimmer. Other variants and tabs without a border color are unchanged.
 - `Cargo.toml`: trims the upstream workspace to these two crates and pins
   references to the remaining Kit crates to the original Git revision.
+- `crates/component/src/highlighter/mod.rs` and
+  `crates/component/src/highlighter/syntect_backend.rs`: expose the shared
+  Syntect syntax set so application highlighting does not retain a second copy.
 
 The body-column API deliberately accepts text refinements only. It does not
 offer per-cell padding, backgrounds, or a general row/column layout callback.
