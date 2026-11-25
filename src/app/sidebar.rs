@@ -1300,6 +1300,7 @@ impl ConduitApp {
         let drag_path = workspace.path.clone();
         let drop_path = workspace.path.clone();
         let hover_path = workspace.path.clone();
+        let unpin_path = workspace.path.clone();
         let drag_name = workspace.name();
         // Attention sets are small; do not scan every session in a virtualized header.
         let activity = self
@@ -1412,9 +1413,28 @@ impl ConduitApp {
             .when(pinned, |row| {
                 row.child(
                     div()
+                        .id(("workspace-pin-slot", index))
                         .debug_selector(move || format!("workspace-pinned-{index}"))
                         .flex_shrink_0()
-                        .child(Icon::new(FullIconName::Pin).size(px(12.)).text_color(rgb(palette().muted))),
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(|_, _, cx| cx.stop_propagation())
+                        .child(
+                            Button::new(("workspace-unpin", index))
+                                .ghost()
+                                .small()
+                                .compact()
+                                .size(px(24.))
+                                .p_0()
+                                .child(Icon::new(FullIconName::Pin).size(px(12.)).text_color(rgb(palette().muted)))
+                                .tooltip(conduit::i18n::text_static("sidebar.unpin_workspace"))
+                                .accessibility_label(conduit::i18n::text_static("sidebar.unpin_workspace"))
+                                .disabled(!can_edit)
+                                .when(can_edit, |button| button.cursor_pointer())
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.set_workspace_pinned(&unpin_path, false, cx);
+                                })),
+                        ),
                 )
             })
             .child(

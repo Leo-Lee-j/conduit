@@ -209,7 +209,19 @@ fn workspace_pins_keep_project_groups_whole_and_obey_search(cx: &mut TestAppCont
             ));
             app.search_query.clear();
             app.sidebar.expanded_projects.insert(key);
+            app.set_workspace_pinned(&first, true, cx);
+            assert_eq!(
+                order(app),
+                [first.clone(), pinned.clone(), ordinary.clone()]
+            );
             app.set_workspace_pinned(&pinned, false, cx);
+            assert_eq!(
+                order(app),
+                [first.clone(), pinned.clone(), ordinary.clone()]
+            );
+            assert!(!app.store.ui.pinned_workspaces.contains(&pinned));
+            assert!(app.store.ui.pinned_workspaces.contains(&first));
+            app.set_workspace_pinned(&first, false, cx);
             assert_eq!(order(app), [ordinary, first, pinned]);
         });
     });
@@ -265,7 +277,7 @@ fn workspace_pin_drag_guards_keep_pin_state_and_remap_navigation(cx: &mut TestAp
 }
 
 #[gpui_kit::test]
-fn workspace_pin_menu_updates_indicator_without_switching_chat(cx: &mut TestAppContext) {
+fn workspace_pin_icon_unpins_without_switching_chat_or_collapsing(cx: &mut TestAppContext) {
     let _locale = crate::test_support::chinese();
     let (app, cx, _) = fixture(cx, "workspace-pin-menu");
     cx.update(|window, cx| {
@@ -279,6 +291,14 @@ fn workspace_pin_menu_updates_indicator_without_switching_chat(cx: &mut TestAppC
     cx.simulate_resize(size(px(1100.), px(800.)));
     draw(cx);
     let manual = cx.update(|_, cx| stored_order(app.read(cx)));
+    let collapsed = cx.update(|_, cx| {
+        let app = app.read(cx);
+        (
+            app.collapsed_workspaces.clone(),
+            app.sidebar.auto_collapsed.clone(),
+            app.expanded_workspaces.clone(),
+        )
+    });
     click(cx, "workspace-menu-trigger-1");
     assert!(cx.debug_bounds("workspace-pin-1").is_some());
     click(cx, "workspace-pin-1");
@@ -290,10 +310,42 @@ fn workspace_pin_menu_updates_indicator_without_switching_chat(cx: &mut TestAppC
         assert_eq!(app.selected_session, Some(1));
         assert_eq!(app.input.read(cx).value(), "menu draft");
     });
+    click(cx, "workspace-pinned-1");
+    assert!(cx.debug_bounds("workspace-pinned-1").is_none());
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        assert_eq!(order(app), manual);
+        assert_eq!(stored_order(app), manual);
+        assert_eq!(app.selected_workspace, Some(0));
+        assert_eq!(app.selected_session, Some(1));
+        assert_eq!(app.input.read(cx).value(), "menu draft");
+        assert_eq!(app.collapsed_workspaces, collapsed.0);
+        assert_eq!(app.sidebar.auto_collapsed, collapsed.1);
+        assert_eq!(app.expanded_workspaces, collapsed.2);
+        assert!(app.store.ui.pinned_workspaces.is_empty());
+    });
+
     click(cx, "workspace-menu-trigger-1");
     click(cx, "workspace-pin-1");
-    assert!(cx.debug_bounds("workspace-pinned-1").is_none());
-    cx.update(|_, cx| assert_eq!(order(app.read(cx)), manual));
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.writable = false;
+            app.sidebar_view.update(cx, |_, cx| cx.notify());
+            cx.notify();
+        });
+    });
+    draw(cx);
+    click(cx, "workspace-pinned-1");
+    assert!(cx.debug_bounds("workspace-pinned-1").is_some());
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        assert!(app.store.ui.pinned_workspaces.contains(&manual[1]));
+        assert_eq!(app.selected_workspace, Some(0));
+        assert_eq!(app.selected_session, Some(1));
+        assert_eq!(app.input.read(cx).value(), "menu draft");
+        assert_eq!(app.collapsed_workspaces, collapsed.0);
+        assert_eq!(app.expanded_workspaces, collapsed.2);
+    });
 }
 
 #[gpui_kit::test]
