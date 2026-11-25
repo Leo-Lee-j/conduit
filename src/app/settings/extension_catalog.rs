@@ -120,8 +120,6 @@ impl ConduitApp {
             true,
             Some(tabs.into_any_element()),
             None,
-            available_width,
-            self.store.ui.ui_font_size,
             view,
         ))
     }

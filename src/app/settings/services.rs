@@ -327,15 +327,7 @@ impl ConduitApp {
                     )
                 },
             );
-        SettingsContent::new(body).with_toolbar(management_toolbar(
-            engine,
-            false,
-            None,
-            None,
-            width,
-            self.store.ui.ui_font_size,
-            view,
-        ))
+        SettingsContent::new(body).with_toolbar(management_toolbar(engine, false, None, None, view))
     }
 
     fn service_default_summary(&self, engine: Provider, view: Entity<Self>) -> AnyElement {

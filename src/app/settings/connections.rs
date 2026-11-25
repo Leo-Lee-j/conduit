@@ -200,8 +200,6 @@ impl ConduitApp {
             false,
             None,
             (services || self.settings_ui.group.is_some()).then(|| actions.into_any_element()),
-            available_width,
-            self.store.ui.ui_font_size,
             view,
         ))
     }

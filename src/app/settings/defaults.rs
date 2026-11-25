@@ -197,7 +197,6 @@ impl ConduitApp {
                     menu
                 })
         });
-        let font_scale = self.store.ui.ui_font_size / DEFAULT_UI_FONT_SIZE;
         settings_section(format!(
             "{} · {}",
             conduit::i18n::text_static("settings.defaults.new_session_defaults"),
@@ -206,16 +205,8 @@ impl ConduitApp {
         .items(vec![
             SettingItem::new(
                 conduit::i18n::text_static("settings.models.service_engine"),
-                SettingField::render(move |_, window, _| {
-                    let available = (f32::from(window.viewport_size().width) - 320.).max(0.);
-                    let columns = if available >= 548. * font_scale {
-                        4
-                    } else if available >= 272. * font_scale {
-                        2
-                    } else {
-                        1
-                    };
-                    super::management::engine_tabs(engine, false, columns, view.clone())
+                SettingField::render(move |_, _, _| {
+                    super::management::engine_tabs(engine, false, view.clone())
                 }),
             )
             .layout(Axis::Vertical),

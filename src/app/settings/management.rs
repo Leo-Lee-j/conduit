@@ -24,16 +24,14 @@ pub(super) fn management_badge(label: impl Into<SharedString>, active: bool) -> 
 pub(super) fn engine_tabs(
     engine: Provider,
     extensions: bool,
-    columns: u16,
     view: Entity<ConduitApp>,
 ) -> AnyElement {
-    let mut tabs = div()
-        .grid()
-        .grid_cols(columns)
+    let mut tabs = h_flex()
         .id("management-engines")
         .debug_selector(|| "management-engines".into())
         .w_full()
-        .max_w(rems(36.))
+        .min_w_0()
+        .flex_wrap()
         .gap_1()
         .p_1()
         .rounded_lg()
@@ -54,8 +52,8 @@ pub(super) fn engine_tabs(
                 .tooltip(candidate.label())
                 .ghost()
                 .selected(selected)
-                .w_full()
-                .min_w_0()
+                .flex_shrink_0()
+                .px_3()
                 .h(px(32.))
                 .rounded_md()
                 .child(
@@ -99,30 +97,17 @@ pub(super) fn engine_tabs(
     tabs.into_any_element()
 }
 
-/// Give engine choices and page actions separate rows so the full set of
-/// labels can wrap without clipping either controls or content.
+/// Engine choices use the full pane width and wrap only when their labels
+/// no longer fit. Page actions stay on a separate row.
 pub(super) fn management_toolbar(
     engine: Provider,
     extensions: bool,
     mode_tabs: Option<AnyElement>,
     actions: Option<AnyElement>,
-    available_width: f32,
-    font_size: f32,
     view: Entity<ConduitApp>,
 ) -> AnyElement {
     let inset = settings_content_inset();
-    // Budget for complete labels, icons, button padding and grid gaps. Change
-    // the column count with the pane width and UI font, never clip a label.
-    let inner_width = (available_width - inset * 2.).max(0.);
-    let scale = font_size / DEFAULT_UI_FONT_SIZE;
-    let columns = if inner_width >= 548. * scale {
-        4
-    } else if inner_width >= 272. * scale {
-        2
-    } else {
-        1
-    };
-    let tabs = engine_tabs(engine, extensions, columns, view);
+    let tabs = engine_tabs(engine, extensions, view);
     h_flex()
         .debug_selector(|| "management-engine-bar".into())
         .w_full()
