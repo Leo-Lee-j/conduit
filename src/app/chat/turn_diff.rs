@@ -35,6 +35,7 @@ struct FileEdits {
     path: String,
     pending: std::collections::VecDeque<ChatItem>,
     edits: Vec<EditFileDiff>,
+    session_change: bool,
 }
 
 impl FileEdits {
@@ -47,6 +48,7 @@ impl FileEdits {
                 .cloned()
                 .collect(),
             edits: Vec::new(),
+            session_change: false,
         }
     }
 
@@ -68,6 +70,26 @@ impl FileEdits {
 }
 
 impl ConduitApp {
+    pub(in crate::app) fn open_recorded_file_diff(
+        &mut self,
+        session: u64,
+        path: String,
+        diff: EditFileDiff,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.session(session).is_none() {
+            return;
+        }
+        let edits = FileEdits {
+            path: diff.path.clone(),
+            pending: Default::default(),
+            edits: vec![diff],
+            session_change: true,
+        };
+        open(path, edits, cx.entity(), window, cx);
+    }
+
     pub(in crate::app) fn open_turn_diff(
         &mut self,
         session: u64,
@@ -131,6 +153,7 @@ fn open(
 
 struct TurnDiffPreview {
     path: String,
+    session_change: bool,
     edits: Vec<EditFileDiff>,
     selected: usize,
     state: Entity<DiffState>,
@@ -147,6 +170,7 @@ impl TurnDiffPreview {
         app: &Entity<ConduitApp>,
         cx: &mut Context<Self>,
     ) -> Self {
+        let session_change = request.session_change;
         // Updating this already-open view cannot reopen a dismissed dialog. Dropping
         // the view also drops its subscription and pending message snapshots.
         let subscription = cx.observe(app, |this, app, cx| {
@@ -187,6 +211,7 @@ impl TurnDiffPreview {
         });
         Self {
             path,
+            session_change,
             edits,
             selected: 0,
             state,
@@ -305,60 +330,62 @@ impl Render for TurnDiffPreview {
                     })),
             );
         }
-        toolbar = toolbar.child(div().flex_1()).child(
-            h_flex()
-                .items_center()
-                .gap_2()
-                .when(self.edits.len() > 1, |row| {
-                    row.child(
-                        Button::new("turn-diff-previous-edit")
-                            .debug_selector(|| "turn-diff-previous-edit".into())
-                            .ghost()
-                            .small()
-                            .compact()
-                            .icon(IconName::ChevronLeft)
-                            .tooltip(conduit::i18n::text_static("chat.turn_diff.previous_edit"))
-                            .accessibility_label(conduit::i18n::text_static(
-                                "chat.turn_diff.previous_edit",
-                            ))
-                            .disabled(self.selected == 0)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.select_edit(this.selected.saturating_sub(1), window, cx);
-                            })),
+        if !self.session_change {
+            toolbar = toolbar.child(div().flex_1()).child(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .when(self.edits.len() > 1, |row| {
+                        row.child(
+                            Button::new("turn-diff-previous-edit")
+                                .debug_selector(|| "turn-diff-previous-edit".into())
+                                .ghost()
+                                .small()
+                                .compact()
+                                .icon(IconName::ChevronLeft)
+                                .tooltip(conduit::i18n::text_static("chat.turn_diff.previous_edit"))
+                                .accessibility_label(conduit::i18n::text_static(
+                                    "chat.turn_diff.previous_edit",
+                                ))
+                                .disabled(self.selected == 0)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.select_edit(this.selected.saturating_sub(1), window, cx);
+                                })),
+                        )
+                    })
+                    .child(
+                        div()
+                            .debug_selector(move || format!("turn-diff-edit-{selected}"))
+                            .text_size(px(11.))
+                            .text_color(rgb(palette().muted))
+                            .child(conduit::i18n::format(
+                                "chat.turn_diff.edit",
+                                &[
+                                    ("arg0", format!("{}", self.selected + 1)),
+                                    ("arg1", format!("{}", self.edits.len())),
+                                ],
+                            )),
                     )
-                })
-                .child(
-                    div()
-                        .debug_selector(move || format!("turn-diff-edit-{selected}"))
-                        .text_size(px(11.))
-                        .text_color(rgb(palette().muted))
-                        .child(conduit::i18n::format(
-                            "chat.turn_diff.edit",
-                            &[
-                                ("arg0", format!("{}", self.selected + 1)),
-                                ("arg1", format!("{}", self.edits.len())),
-                            ],
-                        )),
-                )
-                .when(self.edits.len() > 1, |row| {
-                    row.child(
-                        Button::new("turn-diff-next-edit")
-                            .debug_selector(|| "turn-diff-next-edit".into())
-                            .ghost()
-                            .small()
-                            .compact()
-                            .icon(IconName::ChevronRight)
-                            .tooltip(conduit::i18n::text_static("chat.turn_diff.next_edit"))
-                            .accessibility_label(conduit::i18n::text_static(
-                                "chat.turn_diff.next_edit",
-                            ))
-                            .disabled(self.selected + 1 == self.edits.len())
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.select_edit(this.selected + 1, window, cx);
-                            })),
-                    )
-                }),
-        );
+                    .when(self.edits.len() > 1, |row| {
+                        row.child(
+                            Button::new("turn-diff-next-edit")
+                                .debug_selector(|| "turn-diff-next-edit".into())
+                                .ghost()
+                                .small()
+                                .compact()
+                                .icon(IconName::ChevronRight)
+                                .tooltip(conduit::i18n::text_static("chat.turn_diff.next_edit"))
+                                .accessibility_label(conduit::i18n::text_static(
+                                    "chat.turn_diff.next_edit",
+                                ))
+                                .disabled(self.selected + 1 == self.edits.len())
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.select_edit(this.selected + 1, window, cx);
+                                })),
+                        )
+                    }),
+            );
+        }
         let content = if self.parse_failed {
             div()
                 .id("turn-diff-raw")
@@ -417,39 +444,25 @@ impl Render for TurnDiffPreview {
                     .items_center()
                     .gap_3()
                     .px_4()
-                    .py_3()
+                    .py_2()
                     .child(
                         Icon::new(FullIconName::FileDiff)
                             .small()
                             .text_color(rgb(palette().muted)),
                     )
                     .child(
-                        v_flex()
+                        div()
+                            .id("turn-diff-path")
                             .flex_1()
                             .min_w_0()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .id("turn-diff-path")
-                                    .tooltip({
-                                        let path = self.path.clone();
-                                        move |window, cx| {
-                                            Tooltip::new(path.clone()).build(window, cx)
-                                        }
-                                    })
-                                    .truncate()
-                                    .text_size(px(13.))
-                                    .font_semibold()
-                                    .child(self.path.clone()),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .text_color(rgb(palette().faint))
-                                    .child(conduit::i18n::text_static(
-                                        "chat.turn_diff.file_changes_in_this_turn",
-                                    )),
-                            ),
+                            .tooltip({
+                                let path = self.path.clone();
+                                move |window, cx| Tooltip::new(path.clone()).build(window, cx)
+                            })
+                            .truncate()
+                            .text_size(px(13.))
+                            .font_semibold()
+                            .child(self.path.clone()),
                     )
                     .child(
                         Button::new("turn-diff-close")

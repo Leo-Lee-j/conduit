@@ -13,6 +13,7 @@ pub(in crate::app) struct SettingsUi {
     /// A dialog may outlive the navigation control that owned its return focus.
     pub restore_navigation_focus: std::cell::Cell<bool>,
     pub search: Entity<InputState>,
+    pub auto_collapse_inactive_days: Entity<InputState>,
     pub naming_expanded: bool,
     pub git_expanded: bool,
     pub prompt_expanded: bool,

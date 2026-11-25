@@ -668,6 +668,20 @@ impl ConduitApp {
             InputState::new(window, cx)
                 .placeholder(conduit::i18n::text_static("localization.search_settings"))
         });
+        let auto_collapse_inactive_days = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(store.ui.auto_collapse_inactive_days.max(1).to_string())
+                .pattern(regex::Regex::new(r"^[0-9]*$").unwrap())
+                .min(1.)
+                .max(u32::MAX as f64)
+        });
+        let auto_collapse_days_subscription = cx.subscribe_in(
+            &auto_collapse_inactive_days,
+            window,
+            |app, input, event: &InputEvent, window, cx| {
+                app.on_auto_collapse_days_change(input, event, window, cx);
+            },
+        );
         let model_search = cx.new(|cx| {
             InputState::new(window, cx).placeholder(conduit::i18n::text_static(
                 "localization.search_model_names_ids_or_notes",
@@ -808,6 +822,7 @@ impl ConduitApp {
                 layout_compact: Default::default(),
                 restore_navigation_focus: Default::default(),
                 search: settings_search,
+                auto_collapse_inactive_days,
                 naming_expanded: false,
                 git_expanded: false,
                 prompt_expanded: false,
@@ -882,6 +897,7 @@ impl ConduitApp {
             workspace_color_target: None,
             _subscriptions: vec![
                 settings_search_subscription,
+                auto_collapse_days_subscription,
                 skill_search_subscription,
                 model_search_subscription,
                 mcp_search_subscription,
@@ -952,6 +968,7 @@ impl ConduitApp {
         app.sync_plugin_context();
         app.restore_update_drafts(window, cx);
         app.show_installed_changelog(window, cx);
+        app.prune_update_cache(cx);
         if start_in_git {
             app.show_git_navigation(cx);
         }

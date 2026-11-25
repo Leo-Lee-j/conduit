@@ -155,7 +155,7 @@ pub(crate) fn collect_unreferenced(directory: &Path) {
 struct Receipt {
     reference: Reference,
     messages: Vec<Weak<ChatItemData>>,
-    parts: Vec<Arc<chunks::Message>>,
+    parts: Vec<Arc<chunks::Part>>,
     pages: Vec<String>,
 }
 impl Receipt {
@@ -224,7 +224,7 @@ impl Transcript {
         &self,
         reference: Reference,
         messages: &[ChatItem],
-        parts: Vec<Arc<chunks::Message>>,
+        parts: Vec<Arc<chunks::Part>>,
         pages: Vec<String>,
     ) {
         *self.receipt.lock().unwrap_or_else(|e| e.into_inner()) = Some(Receipt {

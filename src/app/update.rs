@@ -149,6 +149,22 @@ impl ConduitApp {
         }
     }
 
+    /// Called once at startup, before any check or download starts.
+    pub(super) fn prune_update_cache(&self, cx: &mut Context<Self>) {
+        if !self.writable {
+            return;
+        }
+        let cache = Store::path().with_file_name("updates");
+        let current = semver::Version::parse(env!("CARGO_PKG_VERSION")).ok();
+        cx.background_executor()
+            .spawn(async move {
+                if let Some(current) = current {
+                    service::prune_cache(&cache, &current);
+                }
+            })
+            .detach();
+    }
+
     fn update_idle(&self) -> bool {
         !self.terminals.active()
             && self.session_control.runs.is_empty()

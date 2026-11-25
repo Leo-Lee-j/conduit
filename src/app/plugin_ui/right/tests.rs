@@ -475,7 +475,9 @@ fn tool_state_isolated_across_sessions_workspaces_and_stale_clicks(cx: &mut Test
             let version = app.plugins.snapshot.version();
             let source = app.store.workspaces[0].path.clone();
             let target = app.store.workspaces[1].path.clone();
+            app.store.ui.auto_sort_workspaces = false;
             app.reorder_workspace(&source, &target, cx);
+            assert_eq!(app.store.workspaces[0].path, target);
             app.sync_plugin_context();
             assert_eq!(app.plugins.right_key(), Some(&key));
             assert_eq!(app.plugins.snapshot.version(), version);

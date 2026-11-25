@@ -474,7 +474,7 @@ mod tests {
                 let (stats, _) = app.tool_analysis.turn(1, &items, cx);
                 assert_eq!(stats.added, 640_000);
                 assert_eq!(stats.files.len(), 1);
-                assert!(app.turn_stats_tags(1, cx).is_some());
+                assert!(app.turn_stats_tags(1, cx).is_none());
 
                 // Finishing the turn replaces message identities. Keep the old
                 // counts visible while these final versions are being parsed.
@@ -494,7 +494,7 @@ mod tests {
                     .collect();
                 let (stats, _) = app.tool_analysis.turn(1, &items, cx);
                 assert_eq!(stats.added, 640_000);
-                assert!(app.turn_stats_tags(1, cx).is_some());
+                assert!(app.turn_stats_tags(1, cx).is_none());
                 cx.notify();
             })
         });
@@ -503,12 +503,20 @@ mod tests {
             app.update(cx, |app, cx| {
                 assert_eq!(app.tool_analysis.turn.stats.added, 640_000);
                 assert_eq!(app.tool_analysis.turn.stats.files.len(), 1);
-                assert!(app.turn_stats_tags(1, cx).is_some());
+                assert!(app.turn_stats_tags(1, cx).is_none());
                 // A new turn or another session must not inherit the old totals.
                 let (stats, _) = app.tool_analysis.turn(1, &[], cx);
                 assert!(stats.files.is_empty());
                 let (stats, _) = app.tool_analysis.turn(2, &[], cx);
                 assert!(stats.files.is_empty());
+                app.session_control.plans.insert(
+                    1,
+                    vec![crate::app::PlanStep {
+                        text: "Review changes".into(),
+                        status: crate::app::PlanStatus::Pending,
+                    }],
+                );
+                assert!(app.turn_stats_tags(1, cx).is_some());
             })
         });
     }

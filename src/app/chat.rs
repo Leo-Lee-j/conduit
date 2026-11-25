@@ -1,7 +1,7 @@
 //! Transcript rows, message actions, and turn statistics.
 
 use super::*;
-use std::{borrow::Cow, rc::Rc};
+use std::borrow::Cow;
 
 pub(super) fn activates_link(event: &ClickEvent) -> bool {
     match event {
@@ -350,7 +350,7 @@ impl ConduitApp {
         .detach();
     }
 
-    /// Live engine activity above the composer. Turn steps and file churn live
+    /// Live engine activity above the composer. Turn steps live
     /// in [`Self::turn_stats_tags`], pinned to the composer's top-right corner.
     pub(super) fn turn_activity_strip(&self, session_id: u64) -> Option<AnyElement> {
         let session = self.session(session_id)?;
@@ -439,9 +439,8 @@ impl ConduitApp {
         )
     }
 
-    /// Step and file-churn tags for the latest turn, docked above the
-    /// composer's top-right corner. Clicking them opens the per-step and
-    /// per-file details above the tags; clicking outside closes the panel.
+    /// Step progress for the latest turn, docked above the composer's top-right
+    /// corner. Clicking opens the steps; clicking outside closes the panel.
     pub(super) fn turn_stats_tags(
         &mut self,
         session_id: u64,
@@ -458,8 +457,7 @@ impl ConduitApp {
             .filter(|m| m.kind == ItemKind::Tool)
             .cloned()
             .collect();
-        let (stats, historical_plan) = self.tool_analysis.turn(session_id, &items, cx);
-        let session = self.session(session_id)?;
+        let (_, historical_plan) = self.tool_analysis.turn(session_id, &items, cx);
         let plan = self
             .session_control
             .plans
@@ -467,7 +465,7 @@ impl ConduitApp {
             .cloned()
             .filter(|steps| !steps.is_empty())
             .unwrap_or(historical_plan);
-        if plan.is_empty() && stats.files.is_empty() {
+        if plan.is_empty() {
             return None;
         }
         let live = self.session_control.runs.contains_key(&session_id);
@@ -476,12 +474,6 @@ impl ConduitApp {
             .filter(|step| step.status == PlanStatus::Completed)
             .count();
         let total = plan.len();
-        let root = self
-            .store
-            .workspaces
-            .iter()
-            .find(|workspace| workspace.sessions.iter().any(|item| item.id == session_id))
-            .map(|workspace| workspace.path.to_string_lossy().into_owned());
         let mut tags = h_flex()
             .id("turn-stats")
             .debug_selector(|| "turn-stats".into())
@@ -516,34 +508,6 @@ impl ConduitApp {
                         )),
                 );
         }
-        if !stats.files.is_empty() {
-            tags = tags.child(
-                stat_tag()
-                    .child(
-                        Icon::new(IconName::File)
-                            .size(px(11.))
-                            .text_color(rgb(palette().faint)),
-                    )
-                    .child(
-                        div()
-                            .text_color(rgb(palette().muted))
-                            .child(conduit::i18n::format(
-                                "chat.files",
-                                &[("arg0", format!("{}", stats.files.len()))],
-                            )),
-                    )
-                    .child(
-                        div()
-                            .text_color(rgb(palette().diff_add_text))
-                            .child(format!("+{}", stats.added)),
-                    )
-                    .child(
-                        div()
-                            .text_color(rgb(palette().diff_remove_text))
-                            .child(format!("-{}", stats.removed)),
-                    ),
-            );
-        }
         let trigger = Button::new(SharedString::from(format!(
             "turn-stats-trigger-{session_id}"
         )))
@@ -552,48 +516,16 @@ impl ConduitApp {
         .px(px(0.))
         .rounded(px(8.))
         .cursor_pointer()
-        .accessibility_label(conduit::i18n::text_static(
-            "chat.view_steps_and_file_changes",
-        ))
+        .accessibility_label(conduit::i18n::text_static("chat.view_steps"))
         .child(tags);
         let panel_plan = plan;
-        let panel_stats = stats;
-        let app = cx.weak_entity();
-        let turn_key = session
-            .messages
-            .iter()
-            .rfind(|item| item.kind == ItemKind::User)
-            .map(|item| item.key.clone());
         Some(
             Popover::new(SharedString::from(format!("turn-stats-{session_id}")))
                 .anchor(Anchor::BottomRight)
                 .offset(px(8.))
                 .appearance(false)
                 .trigger(trigger)
-                .content(move |_, window, cx| {
-                    let app = app.clone();
-                    let turn_key = turn_key.clone();
-                    let popover = cx.entity().downgrade();
-                    turn_stats_details(
-                        &panel_plan,
-                        &panel_stats,
-                        root.as_deref(),
-                        live,
-                        window,
-                        move |path, window, cx| {
-                            let _ = popover.update(cx, |popover, cx| popover.dismiss(window, cx));
-                            let _ = app.update(cx, |app, cx| {
-                                app.open_turn_diff(
-                                    session_id,
-                                    turn_key.as_deref(),
-                                    path,
-                                    window,
-                                    cx,
-                                );
-                            });
-                        },
-                    )
-                })
+                .content(move |_, window, _| turn_stats_details(&panel_plan, live, window))
                 .into_any_element(),
         )
     }
@@ -613,17 +545,8 @@ fn stat_tag() -> Div {
         .line_height(px(15.))
 }
 
-/// Steps and per-file churn of the latest turn, shown in a popover above the
-/// stats tags above the composer.
-fn turn_stats_details(
-    plan: &[PlanStep],
-    stats: &TurnFileStats,
-    root: Option<&str>,
-    live: bool,
-    window: &Window,
-    open_diff: impl Fn(&str, &mut Window, &mut App) + 'static,
-) -> AnyElement {
-    let open_diff = Rc::new(open_diff);
+/// Steps of the latest turn, shown in a popover above the composer.
+fn turn_stats_details(plan: &[PlanStep], live: bool, window: &Window) -> AnyElement {
     let mut rows = v_flex()
         .id("turn-stats-details")
         .debug_selector(|| "turn-stats-details".into())
@@ -680,92 +603,6 @@ fn turn_stats_details(
                             PlanStatus::Pending => palette().muted,
                         }))
                         .child(step.text.clone()),
-                ),
-        );
-    }
-    if !plan.is_empty() && !stats.files.is_empty() {
-        rows = rows.child(div().w_full().h(px(1.)).my_1().bg(rgb(palette().border)));
-    }
-    if !stats.files.is_empty() {
-        rows = rows.child(
-            h_flex()
-                .px_2()
-                .pb_1()
-                .items_center()
-                .justify_between()
-                .text_size(px(11.))
-                .text_color(rgb(palette().faint))
-                .child(conduit::i18n::format(
-                    "chat.file_changes_in_this_turn",
-                    &[("arg0", format!("{}", stats.files.len()))],
-                ))
-                .child(conduit::i18n::text_static("chat.click_to_view_diff")),
-        );
-    }
-    for (index, (path, stat)) in stats.files.iter().enumerate() {
-        let path = path.clone();
-        let display_path = workspace_relative_path(&path, root);
-        let open_diff = open_diff.clone();
-        rows = rows.child(
-            Button::new(("turn-stats-file", index))
-                .debug_selector(move || format!("turn-stats-file-{index}"))
-                .ghost()
-                .w_full()
-                .min_w_0()
-                .h(px(34.))
-                .flex_shrink_0()
-                .px_2()
-                .rounded(px(6.))
-                .cursor_pointer()
-                .tooltip(conduit::i18n::format(
-                    "chat.view_changes_in_this_turn",
-                    &[("display_path", display_path.to_string())],
-                ))
-                .accessibility_label(conduit::i18n::format(
-                    "chat.view_this_turn_s_diff_for",
-                    &[("display_path", display_path.to_string())],
-                ))
-                .on_click(move |_, window, cx| open_diff(&path, window, cx))
-                .child(
-                    h_flex()
-                        .w_full()
-                        .min_w_0()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            Icon::new(FullIconName::FileDiff)
-                                .size(px(14.))
-                                .text_color(rgb(palette().faint)),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_left()
-                                .text_size(px(12.))
-                                .text_color(rgb(palette().text))
-                                .child(display_path),
-                        )
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .text_size(px(11.))
-                                .text_color(rgb(palette().diff_add_text))
-                                .child(format!("+{}", stat.added)),
-                        )
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .text_size(px(11.))
-                                .text_color(rgb(palette().diff_remove_text))
-                                .child(format!("-{}", stat.removed)),
-                        )
-                        .child(
-                            Icon::new(IconName::ChevronRight)
-                                .size(px(12.))
-                                .text_color(rgb(palette().faint)),
-                        ),
                 ),
         );
     }

@@ -94,6 +94,7 @@ impl Groups {
         expanded: &HashSet<PathBuf>,
         attention: &HashMap<PathBuf, (u64, bool)>,
         searching: bool,
+        pinned_order: &HashMap<PathBuf, usize>,
     ) -> Vec<cache::Row> {
         use cache::Row;
         let mut blocks: Vec<Vec<Row>> = Vec::new();
@@ -120,6 +121,24 @@ impl Groups {
                 index
             });
             buckets[index].1.push(block);
+        }
+        // A filtered-out pinned member must not make its visible project lose
+        // priority. Only existing buckets are ranked: pins never bypass filters.
+        if !pinned_order.is_empty() {
+            buckets.sort_by_cached_key(|(key, _)| {
+                self.projects
+                    .get(key)
+                    .and_then(|project| {
+                        project
+                            .members
+                            .iter()
+                            .filter_map(|path| pinned_order.get(path))
+                            .min()
+                    })
+                    .or_else(|| pinned_order.get(key))
+                    .copied()
+                    .unwrap_or(usize::MAX)
+            });
         }
         let mut result = Vec::new();
         for (key, blocks) in buckets {
@@ -219,6 +238,10 @@ impl ConduitApp {
         });
         let toggle_key = key.clone();
         let selector = self.sidebar.workspace_index(key).expect("project anchor");
+        let contains_pin = self.sidebar.projects.projects[key]
+            .members
+            .iter()
+            .any(|path| self.store.ui.pinned_workspaces.contains(path));
         h_flex()
             .id(SharedString::from(format!(
                 "workspace-project-{}",
@@ -235,6 +258,11 @@ impl ConduitApp {
                 ],
             ))
             .aria_expanded(expanded)
+            .when(contains_pin, |row| {
+                row.aria_description(conduit::i18n::text_static(
+                    "sidebar.project_contains_pinned_workspaces",
+                ))
+            })
             .relative()
             .h(px(ROW_HEIGHT))
             .pl(px(TREE_AXIS - TREE_TOGGLE_SIZE / 2.))
@@ -289,6 +317,18 @@ impl ConduitApp {
                     .truncate()
                     .child(name.clone()),
             )
+            .when(contains_pin, |row| {
+                row.child(
+                    div()
+                        .debug_selector(move || format!("workspace-project-pinned-{selector}"))
+                        .flex_shrink_0()
+                        .child(
+                            Icon::new(FullIconName::Pin)
+                                .size(px(12.))
+                                .text_color(rgb(palette().muted)),
+                        ),
+                )
+            })
             .when_some(*activity, |row, (id, running)| {
                 row.child(session_activity_dot("project-activity", id, running))
             })
@@ -403,7 +443,13 @@ mod tests {
             (paths[0].clone(), (0, false)),
             (paths[2].clone(), (2, true)),
         ]);
-        let collapsed = groups.project(rows.clone(), &HashSet::new(), &attention, false);
+        let collapsed = groups.project(
+            rows.clone(),
+            &HashSet::new(),
+            &attention,
+            false,
+            &HashMap::new(),
+        );
         assert_eq!(collapsed.len(), 3);
         assert!(matches!(
             &collapsed[0],
@@ -419,8 +465,9 @@ mod tests {
             &HashSet::from([paths[0].clone()]),
             &attention,
             false,
+            &HashMap::new(),
         );
-        let search = groups.project(rows, &HashSet::new(), &attention, true);
+        let search = groups.project(rows, &HashSet::new(), &attention, true, &HashMap::new());
         assert_eq!(expanded, search);
         let ids: Vec<_> = expanded
             .iter()

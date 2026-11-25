@@ -79,6 +79,9 @@ pub struct UiSettings {
     /// Optional packed RGBA display colors keyed by stable workspace path.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub workspace_colors: HashMap<PathBuf, u32>,
+    /// Pinned workspace paths; their relative order follows the saved manual order.
+    #[serde(default, skip_serializing_if = "HashSet::is_empty")]
+    pub pinned_workspaces: HashSet<PathBuf>,
     /// User bindings by stable action ID; an empty list explicitly unbinds an action.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub shortcuts: std::collections::BTreeMap<String, Vec<String>>,
@@ -105,9 +108,12 @@ pub struct UiSettings {
     pub dark_theme: String,
     #[serde(default)]
     pub background: crate::wallpaper::Settings,
-    /// Collapse workspaces with no session activity during the last three days.
+    /// Collapse workspaces with no recent session activity.
     #[serde(default)]
     pub auto_collapse_inactive_workspaces: bool,
+    /// Number of inactive days before a workspace is automatically collapsed.
+    #[serde(default = "default_auto_collapse_inactive_days")]
+    pub auto_collapse_inactive_days: u32,
     /// Display running workspaces first, then the most recently active ones.
     #[serde(default = "default_auto_sort_workspaces")]
     pub auto_sort_workspaces: bool,
@@ -217,6 +223,10 @@ fn default_sessions_per_workspace() -> usize {
 fn default_auto_sort_workspaces() -> bool {
     true
 }
+
+fn default_auto_collapse_inactive_days() -> u32 {
+    1
+}
 fn default_full_width_content() -> bool {
     true
 }
@@ -299,6 +309,7 @@ impl Default for UiSettings {
             terminal_height: default_terminal_height(),
             recent_sessions: Vec::new(),
             workspace_colors: HashMap::new(),
+            pinned_workspaces: HashSet::new(),
             shortcuts: Default::default(),
             sessions_per_workspace: default_sessions_per_workspace(),
             default_session_permission: Default::default(),
@@ -310,6 +321,7 @@ impl Default for UiSettings {
             dark_theme: default_dark_theme(),
             background: Default::default(),
             auto_collapse_inactive_workspaces: false,
+            auto_collapse_inactive_days: default_auto_collapse_inactive_days(),
             auto_sort_workspaces: true,
             full_width_content: default_full_width_content(),
             files_open_beside: false,
@@ -818,6 +830,15 @@ impl Store {
                 restore_session(session);
             }
         }
+        // Pins use the same canonical identity as workspaces, including Windows
+        // display-path aliases. Ignore records for workspaces no longer present.
+        state.ui.pinned_workspaces = state
+            .ui
+            .pinned_workspaces
+            .into_iter()
+            .map(|path| usage_path_aliases.get(&path).cloned().unwrap_or(path))
+            .filter(|path| paths.contains(path))
+            .collect();
         for workspace in state
             .usage_ledger
             .observations
@@ -1452,6 +1473,14 @@ mod tests {
         assert_eq!(store.ui.light_theme, "Conduit Light");
         assert_eq!(store.ui.dark_theme, "Conduit Dark");
         assert!(!store.ui.auto_collapse_inactive_workspaces);
+        assert_eq!(store.ui.auto_collapse_inactive_days, 1);
+        assert_eq!(UiSettings::default().auto_collapse_inactive_days, 1);
+        assert_eq!(
+            serde_json::from_value::<UiSettings>(serde_json::json!({}))
+                .unwrap()
+                .auto_collapse_inactive_days,
+            1
+        );
         assert!(store.ui.auto_sort_workspaces);
         assert!(
             serde_json::from_value::<UiSettings>(serde_json::json!({}))
@@ -1509,6 +1538,7 @@ mod tests {
         store.ui.light_theme = "Catppuccin Latte".into();
         store.ui.dark_theme = "Tokyo Night".into();
         store.ui.auto_collapse_inactive_workspaces = true;
+        store.ui.auto_collapse_inactive_days = 7;
         store.ui.auto_sort_workspaces = false;
         store.ui.max_tabs = 12;
         store.ui.full_width_content = false;
@@ -1569,6 +1599,7 @@ mod tests {
         assert_eq!(reloaded.ui.light_theme, "Catppuccin Latte");
         assert_eq!(reloaded.ui.dark_theme, "Tokyo Night");
         assert!(reloaded.ui.auto_collapse_inactive_workspaces);
+        assert_eq!(reloaded.ui.auto_collapse_inactive_days, 7);
         assert!(!reloaded.ui.auto_sort_workspaces);
         assert_eq!(reloaded.ui.max_tabs, 12);
         assert!(!reloaded.ui.full_width_content);
@@ -1721,6 +1752,53 @@ mod tests {
         let restored: UiSettings =
             serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
         assert_eq!(restored.workspace_colors.get(&path), Some(&0x2a7fffff));
+    }
+
+    #[test]
+    fn pinned_workspaces_default_empty_and_roundtrip_by_path() {
+        let old: UiSettings = serde_json::from_str("{}").unwrap();
+        assert!(old.pinned_workspaces.is_empty());
+        assert!(
+            serde_json::to_value(&old)
+                .unwrap()
+                .get("pinned_workspaces")
+                .is_none()
+        );
+        let pins = HashSet::from([PathBuf::from("/a/project"), PathBuf::from("/b/project")]);
+        let settings = UiSettings {
+            pinned_workspaces: pins.clone(),
+            ..Default::default()
+        };
+        let restored: UiSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored.pinned_workspaces, pins);
+    }
+
+    #[test]
+    fn pinned_workspaces_follow_canonical_paths_and_drop_removed_records_on_reload() {
+        let directory =
+            std::env::temp_dir().join(format!("conduit-workspace-pins-{}", std::process::id()));
+        fs::create_dir_all(directory.join("child")).unwrap();
+        let path = directory.join("state.json");
+        let alias = directory.join("child").join("..");
+        let missing = directory.join("removed");
+        let value = serde_json::json!({
+            "version": 2,
+            "workspaces": [{"path": alias, "sessions": []}],
+            "ui": {"pinned_workspaces": [alias, missing]}
+        });
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let restored = Store::load_from(&path).unwrap();
+        let canonical = directory.canonicalize().unwrap();
+        assert_eq!(restored.workspaces[0].path, canonical);
+        assert_eq!(restored.ui.pinned_workspaces, HashSet::from([canonical]));
+        restored.save_to(&path).unwrap();
+        let reloaded = Store::load_from(&path).unwrap();
+        assert_eq!(reloaded.ui.pinned_workspaces, restored.ui.pinned_workspaces);
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(directory.join("child")).unwrap();
+        // Empty workspaces create no transcript blobs.
+        fs::remove_dir(directory).unwrap();
     }
 
     #[test]

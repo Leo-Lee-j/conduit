@@ -448,6 +448,74 @@ pub fn download(release: Release, cache: PathBuf) -> Task {
     Task { events, cancel }
 }
 
+/// Removes update files the running version no longer needs and returns the
+/// bytes freed. Installers newer than `current` stay, so a downloaded update can
+/// still be installed. Only the newest handoff directory is kept: an update in
+/// progress is always the newest one, and it holds the only useful rollback
+/// backup. Run while no download is in progress.
+pub fn prune_cache(cache: &Path, current: &semver::Version) -> u64 {
+    let Ok(entries) = fs::read_dir(cache) else {
+        return 0;
+    };
+    let mut handoffs = Vec::new();
+    let mut freed = 0;
+    let size = |path: &Path| -> u64 {
+        if path.is_file() {
+            return path.metadata().map_or(0, |metadata| metadata.len());
+        }
+        ignore::WalkBuilder::new(path)
+            .standard_filters(false)
+            .build()
+            .filter_map(|entry| entry.ok()?.metadata().ok())
+            .filter(|metadata| metadata.is_file())
+            .map(|metadata| metadata.len())
+            .sum()
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let is_dir = entry.file_type().is_ok_and(|kind| kind.is_dir());
+        if is_dir {
+            // handoff-<pid>-<unix nanos>
+            if let Some(stamp) = name
+                .strip_prefix("handoff-")
+                .and_then(|rest| rest.split_once('-'))
+                .and_then(|(_, nanos)| nanos.parse::<u128>().ok())
+            {
+                handoffs.push((stamp, path));
+            }
+            continue;
+        }
+        let stale = if name.ends_with(".part") {
+            true
+        } else if let Some(version) = name
+            .strip_prefix("Conduit-")
+            .and_then(|rest| rest.strip_suffix("-windows-x64-setup.exe"))
+        {
+            semver::Version::parse(version).is_ok_and(|version| &version <= current)
+        } else {
+            false
+        };
+        if stale {
+            let bytes = size(&path);
+            if fs::remove_file(&path).is_ok() {
+                freed += bytes;
+            }
+        }
+    }
+    handoffs.sort_unstable();
+    handoffs.pop();
+    for (_, path) in handoffs {
+        let bytes = size(&path);
+        if fs::remove_dir_all(&path).is_ok() {
+            freed += bytes;
+        }
+    }
+    freed
+}
+
 fn download_release(
     release: &Release,
     cache: &Path,

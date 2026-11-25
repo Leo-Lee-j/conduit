@@ -317,6 +317,11 @@ fn pages_reuse_unchanged_messages_and_legacy_v3_roots_still_load() {
         expected
     );
     let mut shortened = load(session.clone()).unwrap();
+    // Short bodies live only in the messages; the receipt does not copy them.
+    let receipt = shortened.transcript.receipt.lock().unwrap().clone().unwrap();
+    assert_eq!(receipt.parts.len(), 200);
+    assert!(receipt.parts.iter().all(|part| part.chunked_fields() == 0));
+    drop(receipt);
     shortened.messages.truncate(130);
     save(&shortened, &directory).unwrap();
     assert!(unload(&mut shortened));

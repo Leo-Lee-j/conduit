@@ -742,6 +742,35 @@ impl ConduitApp {
         }
     }
 
+    pub(super) fn set_workspace_pinned(
+        &mut self,
+        path: &Path,
+        pinned: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.writable
+            || self.closing
+            || !self
+                .store
+                .workspaces
+                .iter()
+                .any(|workspace| workspace.path == path)
+        {
+            return;
+        }
+        let changed = if pinned {
+            self.store.ui.pinned_workspaces.insert(path.to_owned())
+        } else {
+            self.store.ui.pinned_workspaces.remove(path)
+        };
+        if changed {
+            self.persist();
+            self.refresh_sidebar();
+            self.sidebar_view.update(cx, |_, cx| cx.notify());
+            cx.notify();
+        }
+    }
+
     pub(super) fn remove_workspace(&mut self, index: usize, cx: &mut Context<Self>) {
         self.remove_workspace_target = None;
         if index >= self.store.workspaces.len() {
@@ -762,6 +791,7 @@ impl ConduitApp {
         }
         let removed = self.store.workspaces.remove(index);
         self.store.ui.workspace_colors.remove(&removed.path);
+        self.store.ui.pinned_workspaces.remove(&removed.path);
         if self.workspace_color_target.as_ref() == Some(&removed.path) {
             self.workspace_color_target = None;
         }
@@ -831,6 +861,7 @@ impl ConduitApp {
         let path = workspace.path.clone();
         let selected = self.selected_workspace == Some(index);
         let has_color = self.store.ui.workspace_colors.contains_key(&path);
+        let pinned = self.store.ui.pinned_workspaces.contains(&path);
         let trigger = Button::new(("workspace-menu-trigger", index))
             .debug_selector(move || format!("workspace-menu-trigger-{index}"))
             .ghost()
@@ -852,6 +883,33 @@ impl ConduitApp {
             .trigger(trigger)
             .content(move |_, _, cx| {
                 let popover = cx.entity().downgrade();
+                let pin_app = app.clone();
+                let pin_popover = popover.clone();
+                let pin_path = path.clone();
+                let pin = session_menu_button(
+                    ("workspace-pin", index as u64),
+                    conduit::i18n::text_static(if pinned {
+                        "sidebar.unpin_workspace"
+                    } else {
+                        "sidebar.pin_workspace"
+                    }),
+                    if pinned {
+                        FullIconName::PinOff
+                    } else {
+                        FullIconName::Pin
+                    },
+                )
+                .debug_selector(move || format!("workspace-pin-{index}"))
+                .disabled(!can_edit)
+                .on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    pin_app.update(cx, |this, cx| {
+                        this.set_workspace_pinned(&pin_path, !pinned, cx);
+                    });
+                    if let Some(popover) = pin_popover.clone().upgrade() {
+                        popover.update(cx, |popover, cx| popover.dismiss(window, cx));
+                    }
+                });
                 let clear_app = app.clone();
                 let clear_color_app = app.clone();
                 let remove_app = app.clone();
@@ -901,7 +959,7 @@ impl ConduitApp {
                         popover.update(cx, |popover, cx| popover.dismiss(window, cx));
                     }
                 });
-                let mut content = v_flex().w(px(180.)).gap(px(1.));
+                let mut content = v_flex().w(px(180.)).gap(px(1.)).child(pin);
                 if selected {
                     content = content.child(clear);
                 }

@@ -7,6 +7,8 @@ use gpui_kit::component::tag::Tag;
 
 mod cache;
 mod keyboard;
+#[cfg(all(test, feature = "ui-tests"))]
+mod pin_tests;
 mod projects;
 mod sticky;
 #[cfg(all(test, feature = "ui-tests"))]
@@ -97,6 +99,7 @@ pub(super) fn navigation_content() -> Div {
 struct WorkspaceDrag {
     path: PathBuf,
     index: usize,
+    pinned: bool,
 }
 struct WorkspaceDragPreview {
     name: String,
@@ -236,7 +239,7 @@ impl ConduitApp {
         }
     }
 
-    fn refresh_sidebar(&mut self) -> bool {
+    pub(super) fn refresh_sidebar(&mut self) -> bool {
         let inputs = cache::Inputs::new(self);
         self.sidebar
             .refresh(&self.store, &self.session_control, &self.search_ui, inputs)
@@ -349,6 +352,19 @@ impl ConduitApp {
         .into_any_element()
     }
 
+    fn workspace_reorderable(&self, path: &Path) -> bool {
+        self.writable
+            && !self.closing
+            && (!self.store.ui.auto_sort_workspaces
+                || self.store.ui.pinned_workspaces.contains(path))
+    }
+
+    fn can_reorder_workspace(&self, source: &Path, target: &Path) -> bool {
+        self.workspace_reorderable(source)
+            && self.store.ui.pinned_workspaces.contains(source)
+                == self.store.ui.pinned_workspaces.contains(target)
+    }
+
     /// Reorder by stable paths and remap all index-based navigation state.
     pub(super) fn reorder_workspace(
         &mut self,
@@ -356,7 +372,7 @@ impl ConduitApp {
         target: &Path,
         cx: &mut Context<Self>,
     ) {
-        if !self.writable || self.closing {
+        if !self.can_reorder_workspace(source, target) {
             return;
         }
         let Some(from) = self.store.workspaces.iter().position(|w| w.path == source) else {
@@ -1273,6 +1289,8 @@ impl ConduitApp {
         let collapsed = self.workspace_collapsed(&workspace.path);
         let importing = self.history_loading.contains(&workspace.path);
         let workspace_color = self.store.ui.workspace_colors.get(&workspace.path).copied();
+        let pinned = self.store.ui.pinned_workspaces.contains(&workspace.path);
+        let can_reorder = self.workspace_reorderable(&workspace.path);
         let workspace_hover_color = workspace_color.map(|color| {
             let mut tint = gpui_kit::rgba(color);
             tint.a *= 0.24;
@@ -1316,7 +1334,14 @@ impl ConduitApp {
             )))
             .debug_selector(move || format!("workspace-item-{index}"))
             .role(Role::TreeItem)
-            .aria_label(workspace.name())
+            .aria_label(if pinned {
+                conduit::i18n::format(
+                    "sidebar.pinned_workspace_label",
+                    &[("name", workspace.name())],
+                )
+            } else {
+                workspace.name()
+            })
             .aria_expanded(!collapsed)
             .aria_selected(workspace_selected)
             .when(self.sidebar.keyboard_row.as_ref().is_some_and(|row| matches!(row, cache::Row::Workspace { path, .. } if *path == workspace.path)), |row| row.aria_active_descendant())
@@ -1341,11 +1366,12 @@ impl ConduitApp {
                 tint.a *= 0.18;
                 row.bg(tint)
             })
-            .when(can_edit, |row| {
+            .when(can_reorder, |row| {
                 row.on_drag(
                     WorkspaceDrag {
                         path: drag_path,
                         index,
+                        pinned,
                     },
                     move |_, _, _, cx| {
                         cx.stop_propagation();
@@ -1355,6 +1381,9 @@ impl ConduitApp {
                     },
                 )
                 .drag_over::<WorkspaceDrag>(move |row, dragged, _, _| {
+                    if dragged.pinned != pinned {
+                        return row;
+                    }
                     if dragged.path == hover_path {
                         return row.opacity(0.5);
                     }
@@ -1380,6 +1409,14 @@ impl ConduitApp {
             .on_click(cx.listener(move |this, _, window, cx| this.activate_sidebar_workspace(index, last, window, cx)))
             .child(self.sidebar_workspace_icon(index, collapsed, can_edit, cx))
             .child(div().debug_selector(move || format!("workspace-name-{index}")).flex_1().min_w_0().font_semibold().truncate().child(workspace.name()))
+            .when(pinned, |row| {
+                row.child(
+                    div()
+                        .debug_selector(move || format!("workspace-pinned-{index}"))
+                        .flex_shrink_0()
+                        .child(Icon::new(FullIconName::Pin).size(px(12.)).text_color(rgb(palette().muted))),
+                )
+            })
             .child(
                 h_flex()
                     // Share one slot so the count and actions swap

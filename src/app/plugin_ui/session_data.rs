@@ -1,5 +1,7 @@
 //! Session inspector. Consumption comes from deduplicated turn observations;
 //! current context always remains a separate provider snapshot.
+mod files;
+
 use super::right::{RightBody, RightView};
 use super::*;
 use crate::app::state::{PlanStatus, plan_from_messages};
@@ -15,6 +17,8 @@ use std::{cell::RefCell, rc::Rc};
 
 #[derive(Default)]
 pub(super) struct Sections {
+    files_expanded: bool,
+    files: files::Cache,
     tools: bool,
     timing: bool,
     scroll: ScrollHandle,
@@ -736,6 +740,7 @@ impl ConduitApp {
             })
             .or_insert_with(|| {
                 cx.new(|_| Sections {
+                    files_expanded: true,
                     tools: true,
                     timing: true,
                     ..Sections::default()
@@ -745,6 +750,14 @@ impl ConduitApp {
         let Some(session) = self.session(*id) else {
             return RightBody::Loading.into();
         };
+        if session.transcript.loaded {
+            files::refresh(
+                &state,
+                &session.messages,
+                &workspace.path().to_string_lossy(),
+                cx,
+            );
+        }
         let run = self.session_control.runs.get(id);
         let plan = self
             .session_control
@@ -1229,6 +1242,7 @@ impl ConduitApp {
                         .child(api_quality_chart(&quality_samples, request_quality)),
                 ),
         );
+        content = content.child(files::render(*id, session.transcript.loaded, &state, cx));
         let stats = session.transcript.loaded.then(|| {
             expanded.tools(
                 ToolStatsKey {

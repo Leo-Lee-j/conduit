@@ -6,16 +6,16 @@
 //! component theme resolves to colors, which keeps the block following the
 //! active light or dark theme.
 
-use std::{collections::HashMap, ops::Range, sync::LazyLock};
+use std::{collections::HashMap, ops::Range};
 
 use syntect::{
-    parsing::{ParseState, Scope, ScopeStack, SyntaxReference, SyntaxSet},
+    parsing::{ParseState, Scope, ScopeStack, SyntaxReference},
     util::LinesWithEndings,
 };
 
-/// Loading the syntax set takes tens of milliseconds, so it happens once on
-/// the first numbered block and is shared by every block after that.
-static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(two_face::syntax::extra_newlines);
+// The component highlighter's syntax set. Sharing it keeps one deserialized
+// copy of the syntax collection in the process instead of two.
+use gpui_kit::component::highlighter::syntax_set;
 
 /// Highlight names for `code`, ordered and non-overlapping. Unknown or plain
 /// text languages yield nothing.
@@ -31,7 +31,7 @@ pub(super) fn highlight_file(
     path: &std::path::Path,
     code: &str,
 ) -> Vec<(Range<usize>, &'static str)> {
-    let syntaxes = &*SYNTAXES;
+    let syntaxes = syntax_set();
     let name = path
         .file_name()
         .and_then(|n| n.to_str())
@@ -48,7 +48,7 @@ pub(super) fn highlight_file(
 }
 
 fn find_syntax(language: &str) -> Option<&'static SyntaxReference> {
-    let syntaxes = &*SYNTAXES;
+    let syntaxes = syntax_set();
     let canonical = canonical_language(language);
     let alias = match canonical.as_str() {
         "text" => return None,
@@ -95,7 +95,7 @@ fn canonical_language(name: &str) -> String {
 
 /// Runs syntect over `text` and keeps the spans that map to a highlight name.
 fn parse(syntax: &SyntaxReference, text: &str) -> Vec<(Range<usize>, &'static str)> {
-    let syntaxes = &*SYNTAXES;
+    let syntaxes = syntax_set();
     let mut parser = ParseState::new(syntax);
     let mut scopes = ScopeStack::new();
     let mut names = HashMap::<Scope, Option<&'static str>>::new();

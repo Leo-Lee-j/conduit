@@ -258,7 +258,7 @@ pub(super) fn menu_popover_style() -> StyleRefinement {
 pub(super) fn session_menu_button(
     id: (&'static str, u64),
     label: &'static str,
-    icon: IconName,
+    icon: impl Into<Icon>,
 ) -> Button {
     Button::new(id)
         .ghost()
@@ -272,7 +272,7 @@ pub(super) fn session_menu_button(
                 .w_full()
                 .gap_2()
                 .items_center()
-                .child(Icon::new(icon).small().text_color(rgb(palette().faint)))
+                .child(icon.into().small().text_color(rgb(palette().faint)))
                 .child(
                     div()
                         .text_size(ui_text_size(12.))

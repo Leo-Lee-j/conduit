@@ -8,7 +8,7 @@ default-run = "conduit"
 
 [workspace]
 members = ["crates/pet-core"]
-exclude = ["vendor/gpui-kit"]
+exclude = ["vendor/gpui-kit", "vendor/gpui-pre-windows"]
 resolver = "3"
 
 [dependencies]
@@ -81,3 +81,7 @@ opt-level = 2
 [patch."https://github.com/longbridge/gpui-kit.git"]
 gpui-base = { path = "vendor/gpui-kit/crates/base" }
 gpui-component = { path = "vendor/gpui-kit/crates/component" }
+
+# Windows renderer with on-demand path textures; see vendor/gpui-pre-windows/CONDUIT.md.
+[patch.crates-io]
+gpui-pre-windows = { path = "vendor/gpui-pre-windows" }

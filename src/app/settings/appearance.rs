@@ -2,6 +2,92 @@
 
 use super::*;
 use crate::store::UiIconSize;
+use gpui_kit::component::{input::NumberInput, switch::Switch};
+
+impl ConduitApp {
+    pub(in crate::app) fn on_auto_collapse_days_change(
+        &mut self,
+        input: &Entity<InputState>,
+        event: &InputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.writable || self.closing {
+            return;
+        }
+        if matches!(
+            event,
+            InputEvent::Change | InputEvent::Blur | InputEvent::PressEnter { .. }
+        ) {
+            if let Ok(days) = input.read(cx).value().parse::<u32>()
+                && days > 0
+                && self.store.ui.auto_collapse_inactive_days != days
+            {
+                self.store.ui.auto_collapse_inactive_days = days;
+                self.persist();
+                cx.notify();
+            }
+            if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
+                let value = self.store.ui.auto_collapse_inactive_days.max(1).to_string();
+                if input.read(cx).value().as_ref() != value {
+                    input.update(cx, |input, cx| input.set_value(value, window, cx));
+                }
+            }
+        }
+    }
+}
+
+fn auto_collapse_field(view: Entity<ConduitApp>) -> SettingField<SharedString> {
+    SettingField::render(move |options, _, cx| {
+        let app = view.read(cx);
+        let enabled = app.store.ui.auto_collapse_inactive_workspaces;
+        let input = app.settings_ui.auto_collapse_inactive_days.clone();
+        let view = view.clone();
+        h_flex()
+            .debug_selector(|| "auto-collapse-inactive-controls".into())
+            .gap_3()
+            .items_center()
+            .child(
+                h_flex()
+                    .debug_selector(|| "auto-collapse-inactive-days".into())
+                    .gap_2()
+                    .child(
+                        div().w(px(104.)).flex_shrink_0().child(
+                            NumberInput::new(&input)
+                                .small()
+                                .accessibility_label(conduit::i18n::text_static(
+                                    "settings.appearance.auto_collapse_inactive_days",
+                                ))
+                                .disabled(options.is_disabled() || !enabled),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .text_color(rgb(palette().muted))
+                            .child(conduit::i18n::text_static("settings.appearance.days")),
+                    ),
+            )
+            .child(
+                Switch::new("auto-collapse-inactive-switch")
+                    .accessibility_label(conduit::i18n::text_static(
+                        "settings.appearance.auto_collapse_inactive_workspaces",
+                    ))
+                    .checked(enabled)
+                    .with_size(options.size())
+                    .disabled(options.is_disabled())
+                    .on_click(move |checked, _, cx| {
+                        view.update(cx, |app, cx| {
+                            if !app.writable || app.closing {
+                                return;
+                            }
+                            app.store.ui.auto_collapse_inactive_workspaces = *checked;
+                            app.persist();
+                            cx.notify();
+                        });
+                    }),
+            )
+    })
+}
 
 #[cfg(all(test, feature = "ui-tests"))]
 mod tests;
@@ -878,11 +964,7 @@ impl ConduitApp {
             |app| app.store.ui.auto_sort_workspaces,
             |app, value| app.store.ui.auto_sort_workspaces = value,
         );
-        let auto_collapse = switch_field(
-            view.clone(),
-            |app| app.store.ui.auto_collapse_inactive_workspaces,
-            |app, value| app.store.ui.auto_collapse_inactive_workspaces = value,
-        );
+        let auto_collapse = auto_collapse_field(view.clone());
 
         // Search/navigation depend on these indices: 0 appearance, 1 typography,
         // 2 background. Font subsections and previews must not add top-level groups.
