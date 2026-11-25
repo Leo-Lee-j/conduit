@@ -572,6 +572,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn paired_theme_text_selections_are_visible_and_readable() {
+        for source in [
+            include_str!("../../assets/themes/conduit-lights.json"),
+            include_str!("../../assets/themes/conduit-darks.json"),
+        ] {
+            let pack: gpui_kit::component::ThemeSet = serde_json::from_str(source).unwrap();
+            assert_eq!(pack.themes.len(), 3);
+            for config in pack.themes {
+                let mut theme = Theme::default();
+                theme.apply_config(&Rc::new(config));
+                let palette = palette_from_theme(&theme);
+                // Check the actual composited wash: the theme loader caps selection alpha.
+                for background in [palette.canvas, palette.surface, palette.inline_code_bg] {
+                    let selection = color_on(theme.selection, background);
+                    assert!(
+                        contrast(selection, background) >= 1.4,
+                        "{}: selection {selection:06x} blends into {background:06x}",
+                        theme.theme_name()
+                    );
+                    assert!(
+                        contrast(palette.text, selection) >= 4.5,
+                        "{}: text is unreadable on selection {selection:06x}",
+                        theme.theme_name()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn dark_theme_status_text_and_selected_rows_remain_readable() {
         let pack: gpui_kit::component::ThemeSet =
             serde_json::from_str(include_str!("../../assets/themes/conduit-darks.json")).unwrap();
