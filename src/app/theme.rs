@@ -155,7 +155,7 @@ pub(super) fn chrome_background(color: u32) -> gpui_kit::Rgba {
 static ACTIVE_PALETTE: std::sync::RwLock<Palette> = std::sync::RwLock::new(DARK_PALETTE);
 
 pub(super) fn palette() -> Palette {
-    *ACTIVE_PALETTE.read().unwrap()
+    *ACTIVE_PALETTE.read().unwrap_or_else(|e| e.into_inner())
 }
 
 pub(super) fn sidebar_session_text_color() -> u32 {
@@ -171,7 +171,7 @@ pub(super) fn is_dark_mode() -> bool {
 
 pub(crate) fn set_palette(mode: gpui_kit::component::ThemeMode) {
     DARK_MODE.store(mode.is_dark(), std::sync::atomic::Ordering::Relaxed);
-    *ACTIVE_PALETTE.write().unwrap() = palette_for_mode(mode);
+    *ACTIVE_PALETTE.write().unwrap_or_else(|e| e.into_inner()) = palette_for_mode(mode);
 }
 
 pub(super) fn palette_for_mode(mode: gpui_kit::component::ThemeMode) -> Palette {
@@ -217,6 +217,7 @@ pub(crate) fn install_theme_packs(cx: &mut gpui_kit::App) {
     }
     for pack in THEME_PACKS {
         if let Err(error) = ThemeRegistry::global_mut(cx).load_themes_from_str(pack) {
+            conduit::diagnostics::record_crash("bundled themes", &format!("{error}"));
             eprintln!(
                 "{}",
                 conduit::i18n::format(
@@ -277,7 +278,7 @@ pub(crate) fn apply_theme(mode: ThemeMode, light: &str, dark: &str, cx: &mut gpu
         current.theme_name().as_ref(),
         "Conduit Light" | "Conduit Dark"
     ) {
-        *ACTIVE_PALETTE.write().unwrap() = palette_from_theme(current);
+        *ACTIVE_PALETTE.write().unwrap_or_else(|e| e.into_inner()) = palette_from_theme(current);
     }
 }
 

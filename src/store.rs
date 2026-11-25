@@ -666,15 +666,11 @@ impl Store {
                 {
                     std::env::temp_dir().join(format!("conduit-tests-{}", std::process::id()))
                 }
+                // Shared with crash.log. Keeps cargo run separate from the
+                // installed app, including both its state files and the
+                // data-directory instance lock.
                 #[cfg(not(test))]
-                PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_else(|| ".".into()))
-                    // Keep cargo run separate from the installed app, including
-                    // both its state files and the data-directory instance lock.
-                    .join(if cfg!(debug_assertions) {
-                        "Conduit-dev"
-                    } else {
-                        "Conduit"
-                    })
+                conduit::diagnostics::default_data_dir()
             });
         // Detached saves can outlive a test even with --test-threads=1. Give
         // each test thread its own files, including under an explicit data root.

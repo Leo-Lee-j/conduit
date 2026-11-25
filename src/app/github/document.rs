@@ -19,7 +19,7 @@ impl GithubUi {
 }
 
 impl ConduitApp {
-    #[cfg(test)]
+    #[cfg(all(test, feature = "ui-tests"))]
     pub(in crate::app) fn open_github(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         self.github_ui.sidebar_active = true;
         self.show_git_navigation(cx);

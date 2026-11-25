@@ -62,7 +62,7 @@ impl Watcher {
     pub(super) fn sync(&mut self, mut targets: Vec<(u64, PathBuf)>) {
         targets.sort_by_key(|(id, _)| *id);
         let changed = {
-            let mut shared = self.shared.lock().unwrap();
+            let mut shared = self.shared.lock().unwrap_or_else(|e| e.into_inner());
             if shared.targets == targets {
                 false
             } else {
@@ -76,7 +76,12 @@ impl Watcher {
             self.worker.take();
         }
         if self.worker.is_none()
-            && !self.shared.lock().unwrap().targets.is_empty()
+            && !self
+                .shared
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .targets
+                .is_empty()
             && self.retry_at.is_none_or(|at| Instant::now() >= at)
         {
             self.retry_at = Some(Instant::now() + RETRY);
@@ -92,13 +97,19 @@ impl Watcher {
     }
 
     pub(super) fn take_changes(&mut self, now: Instant) -> Vec<u64> {
-        self.shared.lock().unwrap().take(now)
+        self.shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take(now)
     }
 }
 
 impl Drop for Watcher {
     fn drop(&mut self) {
-        self.shared.lock().unwrap().stopped = true;
+        self.shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .stopped = true;
         if let Some(worker) = &self.worker {
             worker.thread().unpark();
         }
@@ -123,7 +134,7 @@ fn run(shared: Arc<Mutex<Signals>>) {
     let mut registrations = BTreeMap::<PathBuf, Registration>::new();
     loop {
         let targets = {
-            let shared = shared.lock().unwrap();
+            let shared = shared.lock().unwrap_or_else(|e| e.into_inner());
             if shared.stopped {
                 return;
             }
@@ -196,10 +207,11 @@ fn run(shared: Arc<Mutex<Signals>>) {
             }
         }
         if !changed.is_empty() {
-            shared
-                .lock()
-                .unwrap()
-                .signal(generation, changed, Instant::now());
+            shared.lock().unwrap_or_else(|e| e.into_inner()).signal(
+                generation,
+                changed,
+                Instant::now(),
+            );
         }
         if registrations.is_empty() {
             thread::park();

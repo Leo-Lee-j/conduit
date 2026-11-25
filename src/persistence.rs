@@ -11,6 +11,8 @@ struct Snapshot {
     revision: u64,
     store: Store,
     receipt: Option<mpsc::Sender<Result<(), String>>>,
+    // Non-deduplicated loaded message bytes; snapshots are immutable, so computed at most once.
+    bytes: Option<usize>,
 }
 /// A receipt belongs to one immutable snapshot, never a later coalesced save.
 pub(crate) struct SaveReceipt(mpsc::Receiver<Result<(), String>>);
@@ -61,7 +63,9 @@ impl Persistence {
         thread::spawn(move || {
             while waits.recv().is_ok() {
                 loop {
-                    let Some(snapshot) = queue.lock().unwrap().pop_front() else {
+                    let Some(snapshot) =
+                        queue.lock().unwrap_or_else(|e| e.into_inner()).pop_front()
+                    else {
                         break;
                     };
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -105,7 +109,7 @@ impl Persistence {
         store: &Store,
         receipt: Option<mpsc::Sender<Result<(), String>>>,
     ) -> bool {
-        let mut pending = self.pending.lock().unwrap();
+        let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
         if receipt.is_some() && pending.len() >= 32 {
             self.error = Some(
                 conduit::i18n::text_static("persistence.too_many_pending_messages_wait_for_disk")
@@ -117,16 +121,34 @@ impl Persistence {
             .back()
             .is_some_and(|snapshot| snapshot.receipt.is_none());
         let keep = pending.len() - usize::from(replace);
+        let mut incoming_bytes = None;
         let (retained, largest) = if keep == 0 {
             (0, 0)
         } else {
-            retained_bytes(
-                pending
-                    .iter()
-                    .take(keep)
-                    .map(|s| &s.store)
-                    .chain(std::iter::once(store)),
-            )
+            // Cheap upper bound first: retained - largest <= sum(sizes) - max(sizes).
+            // Only fall back to the exact identity-deduplicated walk when the bound
+            // could exceed the budget, so the rejection condition is unchanged.
+            let incoming = loaded_bytes(store);
+            incoming_bytes = Some(incoming);
+            let (mut sum, mut max) = (incoming, incoming);
+            for snapshot in pending.iter_mut().take(keep) {
+                let bytes = *snapshot
+                    .bytes
+                    .get_or_insert_with(|| loaded_bytes(&snapshot.store));
+                sum = sum.saturating_add(bytes);
+                max = max.max(bytes);
+            }
+            if sum - max <= self.extra_bytes_budget {
+                (0, 0)
+            } else {
+                retained_bytes(
+                    pending
+                        .iter()
+                        .take(keep)
+                        .map(|s| &s.store)
+                        .chain(std::iter::once(store)),
+                )
+            }
         };
         if retained.saturating_sub(largest) > self.extra_bytes_budget {
             self.error = Some(
@@ -147,6 +169,7 @@ impl Persistence {
             revision: self.requested,
             store: store.clone(),
             receipt,
+            bytes: incoming_bytes,
         });
         drop(pending);
         match self.wake.try_send(()) {
@@ -185,6 +208,16 @@ impl Persistence {
             }
         }
     }
+}
+
+/// Loaded message bytes of one snapshot without cross-snapshot deduplication.
+fn loaded_bytes(store: &Store) -> usize {
+    store
+        .workspaces
+        .iter()
+        .flat_map(|w| &w.sessions)
+        .map(|s| crate::transcript::resident_bytes(&s.messages))
+        .sum()
 }
 
 fn retained_bytes<'a>(stores: impl Iterator<Item = &'a Store>) -> (usize, usize) {

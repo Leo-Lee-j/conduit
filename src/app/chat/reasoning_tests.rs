@@ -110,7 +110,7 @@ fn recorded_codex_reasoning_body_renders_through_completion_and_reload(cx: &mut 
             text.chars().count() > 160
                 && text.lines().any(|line| {
                     let line = line.trim();
-                    !line.is_empty() && !(line.starts_with("**") && line.ends_with("**"))
+                    !(line.is_empty() || (line.starts_with("**") && line.ends_with("**")))
                 })
         })
         .max_by_key(|(_, text, _)| text.len())

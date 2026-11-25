@@ -30,10 +30,10 @@ impl ShortcutEditor {
         let key = keystroke.key.as_str();
         if key == "shift" && self.shortcut.id == "search_files" {
             let now = std::time::Instant::now();
-            if !self
+            if self
                 .first_shift
                 .take()
-                .is_some_and(|first| now.duration_since(first) <= Duration::from_millis(450))
+                .is_none_or(|first| now.duration_since(first) > Duration::from_millis(450))
             {
                 self.first_shift = Some(now);
                 cx.notify();

@@ -248,7 +248,11 @@ impl ConduitApp {
             self.queued_messages.insert(id, message);
             return;
         };
-        self.set_composer_provider(self.session(id).unwrap().provider);
+        let Some(provider) = self.session(id).map(|session| session.provider) else {
+            self.queued_messages.insert(id, message);
+            return;
+        };
+        self.set_composer_provider(provider);
         self.drafts.insert(id, message.text.clone());
         self.composer_files.insert(
             target,

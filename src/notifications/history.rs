@@ -110,7 +110,9 @@ impl History {
                 let _lock = lock;
                 while receiver.recv().is_ok() {
                     loop {
-                        let Some((revision, snapshot)) = pending.lock().unwrap().take() else {
+                        let Some((revision, snapshot)) =
+                            pending.lock().unwrap_or_else(|e| e.into_inner()).take()
+                        else {
                             break;
                         };
                         let result = save(&path, &snapshot).map_err(|error| {
@@ -123,7 +125,9 @@ impl History {
                     }
                 }
                 // Drop may enqueue a final snapshot before disconnecting the wake channel.
-                if let Some((_, snapshot)) = pending.lock().unwrap().take() {
+                if let Some((_, snapshot)) =
+                    pending.lock().unwrap_or_else(|e| e.into_inner()).take()
+                {
                     let _ = save(&path, &snapshot);
                 }
             });
@@ -161,7 +165,8 @@ impl History {
         }
         self.requested = center.revision();
         self.last_submit = Instant::now();
-        *self.pending.lock().unwrap() = Some((self.requested, center.snapshot()));
+        *self.pending.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some((self.requested, center.snapshot()));
         if let Err(mpsc::TrySendError::Disconnected(())) = wake.try_send(()) {
             self.error = Some(
                 conduit::i18n::text_static(

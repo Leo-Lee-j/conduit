@@ -499,7 +499,9 @@ fn response(
 ) -> Result<ureq::http::Response<ureq::Body>> {
     check_cancel(cancel)?;
     if api {
-        RATE.lock().unwrap().take(Instant::now())?;
+        RATE.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take(Instant::now())?;
     }
     let response = HTTP
         .get(url)
@@ -516,7 +518,8 @@ fn response(
         .call();
     let response = match response {
         Err(ureq::Error::StatusCode(429)) => {
-            RATE.lock().unwrap().blocked_until = Some(Instant::now() + Duration::from_secs(60));
+            RATE.lock().unwrap_or_else(|e| e.into_inner()).blocked_until =
+                Some(Instant::now() + Duration::from_secs(60));
             bail!(Failure::RateLimited);
         }
         result => result.context(Failure::Network)?,

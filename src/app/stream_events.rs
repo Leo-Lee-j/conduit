@@ -873,7 +873,15 @@ impl ConduitApp {
             }
             self.sync_chat_rows();
             if structural_change {
-                self.scroll.remeasure_items(0..self.scroll.item_count());
+                // Structural changes stay within the turn that owns the event
+                // (approvals and `Finished` belong to the last turn), so rows
+                // before that turn keep their measured heights.
+                let count = self.scroll.item_count();
+                let start = self
+                    .chat_rows
+                    .turn_start_row(dirty_messages.iter().copied().min())
+                    .min(count);
+                self.scroll.remeasure_items(start..count);
             } else {
                 dirty_messages.sort_unstable();
                 dirty_messages.dedup();

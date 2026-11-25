@@ -572,10 +572,10 @@ impl ConduitApp {
     ) {
         if !self.writable
             || self.closing
-            || !gpui_kit::component::ThemeRegistry::global(cx)
+            || gpui_kit::component::ThemeRegistry::global(cx)
                 .themes()
                 .get(name)
-                .is_some_and(|theme| theme.mode == mode)
+                .is_none_or(|theme| theme.mode != mode)
         {
             return;
         }

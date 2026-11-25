@@ -143,7 +143,7 @@ static BRAND_IMAGES: std::sync::LazyLock<std::sync::Mutex<BrandImageCache>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
 fn brand_render(name: &'static str, dark: bool, width: i32, height: i32) -> Arc<RenderImage> {
-    let mut cache = BRAND_IMAGES.lock().expect("brand image cache");
+    let mut cache = BRAND_IMAGES.lock().unwrap_or_else(|e| e.into_inner());
     cache
         .entry((name, dark, width, height))
         .or_insert_with(|| {

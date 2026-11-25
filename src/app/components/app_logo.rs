@@ -52,7 +52,7 @@ fn rasterize(pixels: u32) -> Arc<RenderImage> {
 }
 
 fn rendered_logo(pixels: u32) -> Arc<RenderImage> {
-    let mut cache = IMAGES.lock().expect("application logo cache");
+    let mut cache = IMAGES.lock().unwrap_or_else(|e| e.into_inner());
     let image = if let Some(index) = cache.iter().position(|(size, _)| *size == pixels) {
         cache.remove(index).expect("cached logo").1
     } else {

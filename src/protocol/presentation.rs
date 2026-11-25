@@ -3,30 +3,15 @@
 use super::{Event, Step};
 use serde_json::Value;
 use std::collections::BTreeSet;
-use std::io::Write;
 
 const DIAGNOSTIC_LOG_LIMIT: u64 = 256 * 1024;
 
 fn log_ignored(path: &std::path::Path, kind: &str) -> std::io::Result<()> {
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _guard = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let line = format!("{now} ignored protocol notification {kind}\n");
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let truncate = std::fs::metadata(path)
-        .is_ok_and(|meta| meta.len().saturating_add(line.len() as u64) > DIAGNOSTIC_LOG_LIMIT);
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .append(!truncate)
-        .truncate(truncate)
-        .open(path)?;
-    file.write_all(line.as_bytes())
+    conduit::diagnostics::append_bounded(
+        path,
+        &format!("ignored protocol notification {kind}"),
+        DIAGNOSTIC_LOG_LIMIT,
+    )
 }
 
 #[derive(Default)]

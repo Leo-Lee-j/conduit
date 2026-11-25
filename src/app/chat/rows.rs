@@ -67,6 +67,20 @@ impl Rows {
     pub fn group(&self, message: usize) -> Option<Group> {
         self.row(message).and_then(|row| self.rows[row].group)
     }
+    /// First display row of the user turn containing `message`, or of the last
+    /// turn when `message` is `None`. Groups, reply availability and footers
+    /// never cross a user message, so layout changes inside a turn cannot
+    /// reach rows before it. Falls back to row 0 when no user message exists.
+    pub fn turn_start_row(&self, message: Option<usize>) -> usize {
+        let end = message.map_or(self.entries.len(), |message| {
+            (message + 1).min(self.entries.len())
+        });
+        self.entries[..end]
+            .iter()
+            .rposition(|entry| entry.shape.user)
+            .and_then(|user| self.row(user))
+            .unwrap_or(0)
+    }
     pub fn refresh(
         &mut self,
         session: Option<&SessionRecord>,
