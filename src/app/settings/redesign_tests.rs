@@ -559,6 +559,30 @@ fn settings_redesign_resize_and_categories_preserve_engines_and_pending_draft_en
         assert!(cx.debug_bounds("settings-search-result-0").is_some());
         assert_eq!(business_state(&app, cx), before);
     }
+
+    // Browsing a different engine must carry across management pages while
+    // preserving saved defaults, the active session, and the unsent draft.
+    select_page(&app, cx, 3);
+    click(cx, "settings-engine-2");
+    let mut browsed = before.clone();
+    browsed["management_engine"] = serde_json::to_value(Provider::OpenCode).unwrap();
+    for page in [8, 10, 4, 9] {
+        select_page(&app, cx, page);
+        app.read_with(cx, |app, _| {
+            assert_eq!(app.connection_settings.engine, Provider::OpenCode);
+            assert_eq!(app.extensions_ui.engine, Provider::OpenCode);
+        });
+        assert_eq!(business_state(&app, cx), browsed);
+    }
+    click(cx, "extensions-engine-1");
+    for page in [4, 3, 8, 10] {
+        select_page(&app, cx, page);
+        app.read_with(cx, |app, _| {
+            assert_eq!(app.connection_settings.engine, Provider::Codex);
+            assert_eq!(app.extensions_ui.engine, Provider::Codex);
+        });
+        assert_eq!(business_state(&app, cx), before);
+    }
 }
 
 #[gpui_kit::test]

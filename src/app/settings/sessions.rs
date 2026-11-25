@@ -20,7 +20,7 @@ impl ConduitApp {
             self.settings_conversation_permission_group(disabled, view.clone()),
             self.settings_conversation_display_group(disabled, view.clone()),
             settings_section(conduit::i18n::text_static(
-                "settings.defaults.automatic_naming",
+                "settings.sessions.naming_section",
             ))
             .items(self.settings_automatic_naming_items(disabled, view.clone()))
             .items(self.settings_naming_model_items(disabled, view.clone()))
@@ -181,7 +181,7 @@ impl ConduitApp {
                 })
         });
         settings_section(conduit::i18n::text_static(
-            "settings.general.default_session_permission",
+            "settings.sessions.permission_section",
         ))
         .item(
             SettingItem::new(
@@ -211,26 +211,28 @@ impl ConduitApp {
             |app| app.store.ui.auto_collapse_question_history,
             ConduitApp::set_question_history_collapsed,
         );
-        settings_section(conduit::i18n::text_static("settings.sessions.chat_display"))
-            .items(vec![
-                SettingItem::new(
-                    conduit::i18n::text_static("settings.general.collapse_reasoning"),
-                    collapse_reasoning,
-                )
-                .description(settings_description(conduit::i18n::text_static(
-                    "settings.general.collapse_reasoning_description",
-                )))
-                .disabled(disabled),
-                SettingItem::new(
-                    conduit::i18n::text_static("settings.general.auto_collapse_question_history"),
-                    collapse_questions,
-                )
-                .description(settings_description(conduit::i18n::text_static(
-                    "settings.general.auto_collapse_question_history_description",
-                )))
-                .disabled(disabled),
-            ])
-            .footer(|_, _| conduit::i18n::text_static("settings.sessions.chat_display_scope"))
+        settings_section(conduit::i18n::text_static(
+            "settings.sessions.display_section",
+        ))
+        .items(vec![
+            SettingItem::new(
+                conduit::i18n::text_static("settings.general.collapse_reasoning"),
+                collapse_reasoning,
+            )
+            .description(settings_description(conduit::i18n::text_static(
+                "settings.general.collapse_reasoning_description",
+            )))
+            .disabled(disabled),
+            SettingItem::new(
+                conduit::i18n::text_static("settings.general.auto_collapse_question_history"),
+                collapse_questions,
+            )
+            .description(settings_description(conduit::i18n::text_static(
+                "settings.general.auto_collapse_question_history_description",
+            )))
+            .disabled(disabled),
+        ])
+        .footer(|_, _| conduit::i18n::text_static("settings.sessions.chat_display_scope"))
     }
 
     /// Compatibility route 5 retains group 0 for the switch/trigger and group 1

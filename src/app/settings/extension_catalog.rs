@@ -89,6 +89,8 @@ impl ConduitApp {
             .flex_shrink_0()
             .child(
                 Button::new("extensions-installed-tab")
+                    .small()
+                    .ghost()
                     .label(text("installed"))
                     .selected(!discover)
                     .on_click(move |_, _, cx| {
@@ -101,6 +103,8 @@ impl ConduitApp {
             )
             .child(
                 Button::new("extensions-discover-tab")
+                    .small()
+                    .ghost()
                     .debug_selector(|| "extensions-discover-tab".into())
                     .label(text("discover"))
                     .selected(discover)

@@ -1109,4 +1109,49 @@ fn settings_change_defaults_opens_new_session_controls(cx: &mut TestAppContext) 
         cx.debug_bounds("default-channel-0").is_some()
             || cx.debug_bounds("default-channel-1").is_some()
     );
+
+    // Search and confirm through the real picker: the model ID is persisted for
+    // new sessions, and an unavailable saved ID survives merely opening it.
+    cx.simulate_resize(size(px(1200.), px(800.)));
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.writable = true;
+            app.persistence = crate::persistence::Persistence::with_writer(|_| Ok(()));
+            app.store.providers.push(ai_service("search-default"));
+            app.store.session_defaults.insert(
+                crate::domain::Provider::Codex,
+                crate::store::SessionDefaults {
+                    channel: crate::providers::ModelChannel::Provider("search-default".into()),
+                    model: Some("unlisted-saved-model".into()),
+                },
+            );
+            app.select_settings_engine(crate::domain::Provider::Codex, window, cx);
+        })
+    });
+    draw(cx);
+    let picker = cx.debug_bounds("default-model-1").unwrap().center();
+    cx.simulate_mouse_down(picker, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(picker, MouseButton::Left, Modifiers::default());
+    draw(cx);
+    app.read_with(cx, |app, _| {
+        assert_eq!(
+            app.store.session_defaults[&crate::domain::Provider::Codex]
+                .model
+                .as_deref(),
+            Some("unlisted-saved-model")
+        );
+    });
+    cx.simulate_input("other-model");
+    draw(cx);
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    settle_ai_save(&app, cx);
+    app.read_with(cx, |app, _| {
+        let defaults = &app.store.session_defaults[&crate::domain::Provider::Codex];
+        assert_eq!(
+            defaults.channel,
+            crate::providers::ModelChannel::Provider("search-default".into())
+        );
+        assert_eq!(defaults.model.as_deref(), Some("other-model"));
+    });
 }

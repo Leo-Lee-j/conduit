@@ -351,6 +351,9 @@ impl ConduitApp {
             .debug_selector(|| "service-default-summary".into())
             .w_full()
             .flex_shrink_0()
+            .p_3()
+            .rounded_lg()
+            .bg(rgb(palette().surface_strong))
             .gap_2()
             .child(
                 h_flex()
@@ -368,7 +371,7 @@ impl ConduitApp {
                         Button::new("services-default-catalog")
                             .debug_selector(|| "services-default-catalog".into())
                             .small()
-                            .outline()
+                            .ghost()
                             .label(service_text("settings.services.change_default"))
                             .icon(FullIconName::ChevronRight)
                             .on_click(move |_, window, cx| {
@@ -384,8 +387,6 @@ impl ConduitApp {
             .child(
                 h_flex()
                     .w_full()
-                    .refine_style(&settings_group_style())
-                    .py_2()
                     .gap_2()
                     .flex_wrap()
                     .child(
@@ -725,12 +726,12 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.select_settings_engine(engine, window, cx);
         self.connection_settings
             .model_search
             .update(cx, |input, cx| input.set_value("", window, cx));
         self.connection_settings.models_expanded = true;
         self.connection_settings.sources_expanded = true;
-        self.connection_settings.engine = engine;
         if self.connection_settings.service_selection.as_ref() != Some(&(engine, channel.clone())) {
             self.connection_settings
                 .service_detail_scroll

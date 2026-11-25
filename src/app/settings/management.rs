@@ -29,14 +29,10 @@ pub(super) fn engine_tabs(
     let mut tabs = h_flex()
         .id("management-engines")
         .debug_selector(|| "management-engines".into())
-        .w_full()
+        .flex_1()
         .min_w_0()
         .flex_wrap()
-        .gap_1()
-        .p_1()
-        .rounded_lg()
-        .border_1()
-        .border_color(settings_group_border());
+        .gap_1();
     for (index, candidate) in Provider::ALL.into_iter().enumerate() {
         let view = view.clone();
         let selected = candidate == engine;
@@ -71,25 +67,7 @@ pub(super) fn engine_tabs(
                 })
                 .on_click(move |_, window, cx| {
                     view.update(cx, |app, cx| {
-                        if extensions {
-                            app.extensions_ui.engine = candidate;
-                            app.extensions_ui.feedback = None;
-                            app.ensure_extensions(window, cx, false);
-                        } else {
-                            app.connection_settings.engine = candidate;
-                            app.connection_settings.service_selection = None;
-                            app.connection_settings.service_detail_open = false;
-                            app.connection_settings.service_tab =
-                                super::services::DetailTab::Models;
-                            app.connection_settings.models_expanded = false;
-                            app.connection_settings.sources_expanded = false;
-                            app.connection_settings.model_limit = 50;
-                            app.connection_settings
-                                .model_search
-                                .update(cx, |input, cx| input.set_value("", window, cx));
-                            app.settings_ui.group = None;
-                        }
-                        cx.notify();
+                        app.select_settings_engine(candidate, window, cx);
                     })
                 }),
         );
@@ -97,8 +75,7 @@ pub(super) fn engine_tabs(
     tabs.into_any_element()
 }
 
-/// Engine choices use the full pane width and wrap only when their labels
-/// no longer fit. Page actions stay on a separate row.
+/// Engine choices and page modes share a toolbar, wrapping when space is limited.
 pub(super) fn management_toolbar(
     engine: Provider,
     extensions: bool,
@@ -114,6 +91,7 @@ pub(super) fn management_toolbar(
         .min_w_0()
         .flex_shrink_0()
         .flex_wrap()
+        .items_center()
         .gap_2()
         .px(px(inset))
         .pt(px(inset))
@@ -121,4 +99,39 @@ pub(super) fn management_toolbar(
         .when_some(mode_tabs, |bar, modes| bar.child(modes))
         .when_some(actions, |bar, actions| bar.child(actions))
         .into_any_element()
+}
+
+impl ConduitApp {
+    /// Browsing is shared across settings pages and never changes session defaults.
+    pub(super) fn select_settings_engine(
+        &mut self,
+        engine: Provider,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.connection_settings.engine == engine && self.extensions_ui.engine == engine {
+            return;
+        }
+        if self.connection_settings.engine != engine {
+            self.connection_settings.service_selection = None;
+            self.connection_settings.service_detail_open = false;
+            self.connection_settings.service_tab = super::services::DetailTab::Models;
+            self.connection_settings.models_expanded = false;
+            self.connection_settings.sources_expanded = false;
+            self.connection_settings.model_limit = 50;
+            self.connection_settings
+                .model_search
+                .update(cx, |input, cx| {
+                    input.set_value("", window, cx);
+                });
+        }
+        self.connection_settings.engine = engine;
+        self.extensions_ui.engine = engine;
+        self.extensions_ui.feedback = None;
+        self.settings_ui.group = None;
+        if matches!(self.settings_ui.page, 4 | 9) {
+            self.ensure_extensions(window, cx, false);
+        }
+        cx.notify();
+    }
 }

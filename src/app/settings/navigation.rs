@@ -389,6 +389,7 @@ impl ConduitApp {
             .search
             .update(cx, |input, cx| input.set_value("", window, cx));
         if route.extensions() {
+            self.extensions_ui.engine = self.connection_settings.engine;
             self.extensions_ui.mcp = route == SettingsRoute::Mcp;
             self.ensure_extensions(window, cx, false);
         } else {

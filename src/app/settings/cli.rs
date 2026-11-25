@@ -501,14 +501,13 @@ impl ConduitApp {
         let closing = self.closing;
         let expanded = self.connection_settings.path_help;
         let descriptor = provider.descriptor();
-        let card =
-            SettingItem::render(move |_, _, _| {
-                let toggle = view.clone();
-                let choose = view.clone();
-                let clear = view.clone();
-                let update = view.clone();
-                let help = view.clone();
-                v_flex()
+        let card = SettingItem::render(move |_, _, _| {
+            let toggle = view.clone();
+            let choose = view.clone();
+            let clear = view.clone();
+            let update = view.clone();
+            let help = view.clone();
+            v_flex()
                 .w_full()
                 .gap_2()
                 .child(
@@ -577,6 +576,15 @@ impl ConduitApp {
                                 })),
                         ),
                 )
+                .when(!available, |body| {
+                    body.child(
+                        h_flex().w_full().gap_3().flex_wrap()
+                            .child(Button::new(("engine-setup", index)).primary().small()
+                                .label(conduit::i18n::text_static("settings.cli.installation_and_sign_in_instructions"))
+                                .on_click(move |_, _, cx| cx.open_url(descriptor.guide)))
+                            .child(settings_description(conduit::i18n::text_static("settings.cli.setup_hint"))),
+                    )
+                })
                 .child(
                     v_flex()
                         .w_full()
@@ -712,13 +720,14 @@ impl ConduitApp {
                                 ),
                         ),
                 )
-                .child(
+                .child(settings_accordion(
+                    "settings-path-help",
+                    conduit::i18n::text_static("settings.cli.advanced_configuration"),
+                    expanded,
                     v_flex()
                         .w_full()
                         .gap_2()
-                        .pt_3()
-                        .border_t_1()
-                        .border_color(rgb(palette().border))
+                        .pt_2()
                         .child(
                             div()
                                 .text_size(ui_text_size(12.))
@@ -789,18 +798,13 @@ impl ConduitApp {
                                         ))
                                         .on_click(move |_, _, cx| cx.open_url(descriptor.guide)),
                                 ),
-                        ),
-                )
-                .child(settings_accordion(
-                    "settings-path-help",
-                    conduit::i18n::text_static("settings.cli.path_lookup_and_when_changes_apply"),
-                    expanded,
-                    div()
+                        )
+                        .child(div()
                         .text_size(ui_text_size(12.))
                         .text_color(rgb(palette().muted))
                         .child(conduit::i18n::text_static(
                             "settings.cli.lookup_order_environment_variable_app_specified_path",
-                        )),
+                        ))),
                     move |open, _, cx| {
                         help.update(cx, |app, cx| {
                             app.connection_settings.path_help = open;
@@ -808,7 +812,7 @@ impl ConduitApp {
                         })
                     },
                 ))
-            });
+        });
         SettingGroup::new()
             .variant(GroupBoxVariant::Normal)
             .item(card)

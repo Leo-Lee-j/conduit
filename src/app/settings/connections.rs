@@ -158,7 +158,7 @@ impl ConduitApp {
                                 ))
                                 .on_click(move |_, window, cx| {
                                     skills.update(cx, |app, cx| {
-                                        app.extensions_ui.engine = engine;
+                                        app.select_settings_engine(engine, window, cx);
                                         app.select_settings_page(4, window, cx);
                                     })
                                 }),
@@ -173,7 +173,7 @@ impl ConduitApp {
                                 ))
                                 .on_click(move |_, window, cx| {
                                     mcp.update(cx, |app, cx| {
-                                        app.extensions_ui.engine = engine;
+                                        app.select_settings_engine(engine, window, cx);
                                         app.select_settings_page(9, window, cx);
                                     })
                                 }),

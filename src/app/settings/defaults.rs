@@ -1,5 +1,6 @@
 //! Persistent defaults apply only when constructing a new conversation.
 use super::*;
+mod model_picker;
 
 /// Resolve a legacy CCS alias only for display, and only to an existing
 /// registry entry for the same engine. Never migrate the persisted selection.
@@ -155,47 +156,23 @@ impl ConduitApp {
             .map(|(_, label)| label.clone())
             .unwrap_or_else(|| selection.model.clone().unwrap_or_default());
         let selected_model_id = selection.model.clone();
+        if model_unconfirmed {
+            models.push((selected_model_id.clone(), label.clone()));
+        }
         let model_view = view.clone();
-        let model = SettingField::render(move |_, _, _| {
-            let models = models.clone();
-            let selected_model_id = selected_model_id.clone();
-            let view = model_view.clone();
-            Button::new(("default-model", engine as usize))
-                .debug_selector(move || format!("default-model-{}", engine as usize))
-                .outline()
-                .small()
-                .max_w(rems(14.))
-                .label(label.clone())
-                .tooltip(label.clone())
-                .icon(FullIconName::ChevronDown)
-                .disabled(disabled || service_unavailable)
-                .dropdown_menu(move |mut menu, _, _| {
-                    for (model, label) in &models {
-                        let model = model.clone();
-                        let view = view.clone();
-                        menu = menu.item(
-                            PopupMenuItem::new(label.clone())
-                                .checked(model == selected_model_id)
-                                .on_click(move |_, window, cx| {
-                                    view.update(cx, |app, cx| {
-                                        let channel = default_channel_for_display(
-                                            engine,
-                                            &app.default_selection(engine).channel,
-                                            &app.store.providers,
-                                        );
-                                        app.set_service_default(
-                                            engine,
-                                            channel,
-                                            model.clone(),
-                                            window,
-                                            cx,
-                                        );
-                                    });
-                                }),
-                        );
-                    }
-                    menu
+        let model = SettingField::render(move |_, _, _| model_picker::DefaultModelPicker {
+            app: model_view.clone(),
+            engine,
+            channel: selection.channel.clone(),
+            choices: models
+                .iter()
+                .map(|(id, label)| model_picker::ModelChoice {
+                    id: id.clone(),
+                    label: label.clone(),
                 })
+                .collect(),
+            selected: selected_model_id.clone(),
+            disabled: disabled || service_unavailable,
         });
         settings_section(format!(
             "{} · {}",

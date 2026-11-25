@@ -520,7 +520,7 @@ impl ConduitApp {
         cx: &mut Context<Self>,
     ) {
         if let Some(engine) = result.engine {
-            self.connection_settings.engine = engine;
+            self.select_settings_engine(engine, window, cx);
         }
         // Old naming search targets still resolve to the consolidated section.
         let page = if result.page == 5 { 10 } else { result.page };
@@ -543,6 +543,7 @@ impl ConduitApp {
         self.settings_ui.git_expanded |= result.page == 6;
         self.settings_ui.prompt_expanded |= result.page == 6 && group == Some(2);
         self.connection_settings.models_expanded |= result.page == 8;
+        self.connection_settings.path_help |= page == 3;
         self.select_settings_page(page, window, cx);
         self.settings_ui.group = group;
         if let (Some(engine), Some(target)) = (result.engine, result.target) {
