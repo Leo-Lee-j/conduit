@@ -1,8 +1,10 @@
 //! Engine-independent contract between CLI integrations and the process runtime.
 mod builtin;
+mod gemini;
 mod opencode;
 mod qoder;
 pub use builtin::{claude, codex};
+pub use gemini::gemini;
 pub use opencode::COMMAND_SOURCE as OPENCODE_COMMANDS;
 pub use opencode::opencode;
 pub use qoder::qoder;

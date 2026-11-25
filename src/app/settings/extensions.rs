@@ -106,8 +106,10 @@ impl ConduitApp {
             kind,
         );
         let edit_view = view.clone();
-        let disabled = self.extensions_ui.engine == Provider::Qoder
-            || !self.writable
+        let disabled = matches!(
+            self.extensions_ui.engine,
+            Provider::Qoder | Provider::Gemini
+        ) || !self.writable
             || self.closing
             || self.extensions_ui.importing;
         let import_view = view;
@@ -179,8 +181,10 @@ impl ConduitApp {
     }
 
     fn import_skill(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.extensions_ui.engine == Provider::Qoder
-            || !self.writable
+        if matches!(
+            self.extensions_ui.engine,
+            Provider::Qoder | Provider::Gemini
+        ) || !self.writable
             || self.closing
             || self.extensions_ui.importing
         {

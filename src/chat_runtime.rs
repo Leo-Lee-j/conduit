@@ -31,6 +31,8 @@ mod claude_subagent_tests;
 #[cfg(test)]
 mod claude_tests;
 #[cfg(test)]
+mod gemini_tests;
+#[cfg(test)]
 mod local_http;
 #[cfg(test)]
 mod opencode_tests;
@@ -2056,6 +2058,7 @@ mod tests {
             Provider::Codex => std::env::var("CONDUIT_CODEX_TEST_MODEL"),
             Provider::OpenCode => std::env::var("CONDUIT_OPENCODE_TEST_MODEL"),
             Provider::Qoder => std::env::var("CONDUIT_QODER_TEST_MODEL"),
+            Provider::Gemini => std::env::var("CONDUIT_GEMINI_TEST_MODEL"),
         }
         .ok()
         .filter(|value| !value.is_empty());

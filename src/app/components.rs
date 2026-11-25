@@ -191,6 +191,7 @@ pub(super) fn provider_icon(provider: Provider) -> Div {
         Provider::Codex => "codex",
         Provider::OpenCode => "opencode",
         Provider::Qoder => "qoder",
+        Provider::Gemini => "gemini",
     })
 }
 

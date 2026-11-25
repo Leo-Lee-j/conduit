@@ -181,6 +181,7 @@ fn settings_cli_updates_report_versions_errors_and_discard_changed_paths(cx: &mu
                 Provider::Codex => "settings-check-updates-1",
                 Provider::OpenCode => "settings-check-updates-2",
                 Provider::Qoder => "settings-check-updates-3",
+                Provider::Gemini => "settings-check-updates-4",
             })
             .is_some()
         );

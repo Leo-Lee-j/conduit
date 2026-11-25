@@ -431,6 +431,7 @@ fn settings_connections_switch_engines_and_guard_service_editors(cx: &mut TestAp
         for (selector, provider) in [
             ("settings-engine-1", Provider::Codex),
             ("settings-engine-3", Provider::Qoder),
+            ("settings-engine-4", Provider::Gemini),
             ("settings-engine-2", Provider::OpenCode),
             ("settings-nav-8", Provider::OpenCode),
             ("settings-engine-0", Provider::Claude),
@@ -2105,6 +2106,86 @@ fn qoder_picker_persists_session_catalog_and_resets_effort_when_model_changes(
         assert_eq!(restored.provider, Provider::Qoder);
         assert_eq!(restored.native_id.as_deref(), Some("qoder-context"));
         assert_eq!(restored.opencode.variant.as_deref(), Some("high"));
+        assert_eq!(restored.opencode.models().len(), 2);
+    });
+    click!("session-model-option-2");
+    cx.update(|_, cx| {
+        app.update(cx, |app, _| {
+            let session = app.session(1).unwrap();
+            assert_eq!(session.model.as_deref(), Some("model-b"));
+            assert!(session.opencode.variant.is_none());
+            assert!(session.opencode.variants().is_empty());
+            assert_eq!(session.opencode.models().len(), 2);
+            app.writable = false;
+        });
+    });
+}
+
+#[gpui_kit::test]
+fn gemini_picker_persists_native_models_without_reasoning_controls(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    use crate::domain::Provider;
+    use gpui_kit::{AppContext as _, Modifiers, MouseButton};
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut session = super::tests::session();
+            session.provider = Provider::Gemini;
+            session.native_id = Some("gemini-context".into());
+            session.reasoning_effort = crate::providers::ReasoningEffort::Default;
+            session.opencode.options = serde_json::json!([
+                {"id":"model","options":[{"value":"model-a","name":"Alpha"},{"value":"model-b","name":"Beta"}]}
+            ]);
+            let store = crate::store::Store {
+                workspaces: vec![crate::domain::Workspace {
+                    path: std::env::temp_dir().join("conduit-gemini-picker-ui"), sessions: vec![session]
+                }],
+                ..Default::default()
+            };
+            let mut app = super::ConduitApp::with_store(window,cx,Ok(store),false,false);
+            app.selected_workspace = Some(0);
+            app.selected_session = Some(1);
+            app.new_session_provider = Provider::Gemini;
+            app.writable = true;
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app,window,cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    macro_rules! click {
+        ($selector:expr) => {{
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            let point = cx.debug_bounds($selector).expect($selector).center();
+            cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+            cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        }};
+    }
+    click!("composer-model-control");
+    assert!(cx.debug_bounds("session-effort-control").is_none());
+    assert!(cx.debug_bounds("opencode-effort-0").is_none());
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        let session = app.session(1).unwrap();
+        assert_eq!(app.session_route(1).unwrap().acp_variant.as_deref(), None);
+        assert!(
+            app.channel_route(Provider::Gemini, &super::ModelChannel::Ccs("test".into()))
+                .is_err()
+        );
+        let restored: crate::domain::SessionRecord =
+            serde_json::from_value(serde_json::to_value(session).unwrap()).unwrap();
+        assert_eq!(restored.provider, Provider::Gemini);
+        assert_eq!(restored.native_id.as_deref(), Some("gemini-context"));
+        assert!(restored.opencode.variant.is_none());
         assert_eq!(restored.opencode.models().len(), 2);
     });
     click!("session-model-option-2");

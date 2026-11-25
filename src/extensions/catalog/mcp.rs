@@ -532,7 +532,10 @@ pub fn preview(
     spec: &InstallSpec,
 ) -> Result<String> {
     use crate::domain::Provider;
-    ensure!(engine != Provider::Qoder, text("unsupported"));
+    ensure!(
+        !matches!(engine, Provider::Qoder | Provider::Gemini),
+        text("unsupported")
+    );
     let mut server = serde_json::Map::new();
     if spec.remote {
         server.insert("url".into(), json!(spec.target));

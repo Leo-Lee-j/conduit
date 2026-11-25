@@ -7,6 +7,13 @@ use serde_json::json;
 
 fn request() -> AdapterRequest {
     let mut route = RuntimeRoute::default();
+    route.env.insert(
+        "GEMINI_CLI_HOME".into(),
+        std::env::temp_dir()
+            .join("conduit-gemini-missing-adapter-home")
+            .to_string_lossy()
+            .into_owned(),
+    );
     route
         .env
         .insert("OPENCODE_CONFIG_CONTENT".into(), "{}".into());
@@ -32,6 +39,7 @@ fn automation_policy_keeps_local_reads_and_denies_mcp_even_after_elevation() {
         Provider::Codex,
         Provider::OpenCode,
         Provider::Qoder,
+        Provider::Gemini,
     ] {
         let mut request = request();
         request.tool_policy = ToolPolicy::Automation;
@@ -75,6 +83,22 @@ fn automation_policy_keeps_local_reads_and_denies_mcp_even_after_elevation() {
                         .any(|arg| arg == "features.shell_tool=false")
                 );
             }
+            Provider::Gemini => {
+                let policy = launch
+                    .args
+                    .windows(2)
+                    .find(|w| w[0] == "--admin-policy")
+                    .unwrap();
+                let rules = std::fs::read_to_string(&policy[1]).unwrap();
+                assert!(rules.contains("read_file"));
+                assert!(rules.contains("deny"));
+                assert!(
+                    launch
+                        .args
+                        .iter()
+                        .any(|a| a == "--allowed-mcp-server-names")
+                );
+            }
             Provider::OpenCode => {
                 let config: Value =
                     serde_json::from_str(&launch.environment["OPENCODE_CONFIG_CONTENT"]).unwrap();
@@ -106,7 +130,7 @@ fn automation_policy_keeps_local_reads_and_denies_mcp_even_after_elevation() {
         match provider {
             Provider::Codex => assert_eq!(response["result"]["action"], "decline"),
             Provider::Claude => assert_eq!(response["response"]["response"]["behavior"], "deny"),
-            Provider::OpenCode | Provider::Qoder => {
+            Provider::OpenCode | Provider::Qoder | Provider::Gemini => {
                 assert_eq!(response["result"]["outcome"]["optionId"], "no")
             }
         }

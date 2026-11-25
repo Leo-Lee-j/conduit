@@ -462,7 +462,12 @@ impl Render for ConfigEditor {
 
 impl ConduitApp {
     pub(super) fn open_mcp_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.extensions_ui.engine == Provider::Qoder || !self.writable || self.closing {
+        if matches!(
+            self.extensions_ui.engine,
+            Provider::Qoder | Provider::Gemini
+        ) || !self.writable
+            || self.closing
+        {
             return;
         }
         let engine = self.extensions_ui.engine;
@@ -525,7 +530,12 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.extensions_ui.engine == Provider::Qoder || !self.writable || self.closing {
+        if matches!(
+            self.extensions_ui.engine,
+            Provider::Qoder | Provider::Gemini
+        ) || !self.writable
+            || self.closing
+        {
             return;
         }
         let engine = self.extensions_ui.engine;

@@ -155,6 +155,7 @@ impl UsagePanel {
             Provider::Codex,
             Provider::OpenCode,
             Provider::Qoder,
+            Provider::Gemini,
         ] {
             let id = engine.descriptor().id;
             engines = engines.child(

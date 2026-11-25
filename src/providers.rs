@@ -37,7 +37,7 @@ impl ReasoningEffort {
     pub fn for_provider(provider: Provider) -> Self {
         match provider {
             Provider::Claude | Provider::Codex => Self::Medium,
-            Provider::OpenCode | Provider::Qoder => Self::Default,
+            Provider::OpenCode | Provider::Qoder | Provider::Gemini => Self::Default,
         }
     }
 
@@ -143,6 +143,8 @@ impl ModelProvider {
         if !self.engine.descriptor().capabilities.model_services {
             bail!(conduit::i18n::text(if self.engine == Provider::Qoder {
                 "qoder.native_route"
+            } else if self.engine == Provider::Gemini {
+                "gemini.native_route"
             } else {
                 "providers.opencode_uses_its_native_provider_configuration_configure"
             }));
@@ -223,7 +225,7 @@ impl RuntimeRoute {
         let url = discovery::runtime_base_url(url, engine);
         let mut route = Self::default();
         match engine {
-            Provider::OpenCode | Provider::Qoder => {}
+            Provider::OpenCode | Provider::Qoder | Provider::Gemini => {}
             Provider::Claude => {
                 route.env.insert("ANTHROPIC_BASE_URL".into(), url);
                 route

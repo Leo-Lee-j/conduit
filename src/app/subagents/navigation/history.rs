@@ -158,7 +158,7 @@ impl ConduitApp {
 
     pub(super) fn history_binding(&self, key: &TaskKey) -> Option<crate::subagents::ChildBinding> {
         let root = self.session(key.root)?;
-        if root.provider == Provider::Qoder {
+        if matches!(root.provider, Provider::Qoder | Provider::Gemini) {
             return None;
         }
         let native = root.native_id.as_deref().filter(|id| !id.is_empty())?;

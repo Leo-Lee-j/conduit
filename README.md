@@ -27,7 +27,7 @@
   <a href="CONTRIBUTING.md">Contribute</a>
 </p>
 
-Conduit brings **Claude Code, Codex, OpenCode, and Qoder CLI** into a shared desktop workspace. Organize conversations and tasks by project, follow agents and subagents, review code beside a conversation, and take changes through Git and pull request review.
+Conduit brings **Claude Code, Codex, OpenCode, Qoder CLI, and Gemini CLI** into a shared desktop workspace. Organize conversations and tasks by project, follow agents and subagents, review code beside a conversation, and take changes through Git and pull request review.
 
 Conduit is under active development and currently supports **Windows x64**. The interface supports **English and 简体中文**, switchable in **Settings → General → Language**. New installations default to English; older configurations without a language setting retain Chinese. Most detailed guides are currently in Chinese.
 
@@ -37,9 +37,9 @@ The native workspace, showing the fictional Orbit demo project. Conversations, t
 
 ## Why Conduit?
 
-- **Choose your agent.** Use Claude Code, Codex, OpenCode, or Qoder CLI, with streaming replies, tool approvals, cancellation, and per-session model settings.
+- **Choose your agent.** Use Claude Code, Codex, OpenCode, Qoder CLI, or Gemini CLI, with streaming replies, tool approvals, cancellation, and per-session model settings.
 - **Keep conversations organized.** Run sessions in parallel, search history, pin or archive conversations, and queue follow-up messages. Existing Claude Code, Codex, and OpenCode terminal history is imported by workspace and can be resumed.
-- **Follow subagents.** Open child conversations and return to the parent without losing your place. Codex supports targeted input and interruption; OpenCode supports continuing an idle child after the parent connection closes. Claude child history is read-only; Qoder child history and controls are not yet integrated. See the [subagent guide (中文)](docs/design/subagent-conversations.md) for the supported scope.
+- **Follow subagents.** Open child conversations and return to the parent without losing your place. Codex supports targeted input and interruption; OpenCode supports continuing an idle child after the parent connection closes. Claude child history is read-only; Qoder and Gemini child history and controls are not yet integrated. See the [subagent guide (中文)](docs/design/subagent-conversations.md) for the supported scope.
 - **Review what changed.** Open files across the full content area or beside a conversation, with syntax highlighting, search, Markdown outlines, and Mermaid diagrams. Visible files refresh when they change on disk. Inspect unified or side-by-side diffs from a conversation turn; file and diff previews remain read-only.
 - **Take changes through Git and review.** Stage selected files, manage branches and worktrees, generate commit messages, commit, and push. Inspect GitHub PRs or GitLab MRs, follow CI checks and review discussions, and turn failed checks into repair tasks. Commits include only the staged changes in the files you select.
 - **Carry context between tasks.** Track goals and acceptance checklists, reuse session templates, prepare editable handoffs between engines, and fork Codex conversations from recorded completed turns. Save individual file checkpoints and collect artifact paths or service links. Scheduled tasks use read-only sessions while Conduit is running.
@@ -66,7 +66,7 @@ The native workspace, showing the fictional Orbit demo project. Conversations, t
 ### What you need
 
 - **Windows x64** for the current desktop release.
-- At least one supported CLI — **Claude Code, Codex, OpenCode, or Qoder CLI** — installed and authenticated. Confirm it works in a terminal first.
+- At least one supported CLI — **Claude Code, Codex, OpenCode, Qoder CLI, or Gemini CLI** — installed and authenticated. Confirm it works in a terminal first. See the [Gemini CLI setup and supported scope](docs/gemini.md).
 - **Git** installed if you want to use the Git features.
 
 Conduit uses the selected CLI's authentication and execution capabilities. It does not include a model service; model access and usage are handled through your configured CLI and provider.
@@ -125,7 +125,7 @@ To build from source, follow [CONTRIBUTING.md](CONTRIBUTING.md) for the Windows 
 
 ## Acknowledgements
 
-Built with **Rust**, **GPUI**, and [GPUI Kit](https://github.com/longbridge/gpui-kit). Thanks to the projects behind Claude Code, Codex, OpenCode, and Qoder CLI, and to [LobeHub Icons](https://github.com/lobehub/lobe-icons) for the engine and model marks.
+Built with **Rust**, **GPUI**, and [GPUI Kit](https://github.com/longbridge/gpui-kit). Thanks to the projects behind Claude Code, Codex, OpenCode, Qoder CLI, and Gemini CLI, and to [LobeHub Icons](https://github.com/lobehub/lobe-icons) for the engine and model marks.
 
 See [application icon generation](assets/app-icons/README.md) and [third-party icon attribution](assets/icons/README.md) for asset details.
 

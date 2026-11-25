@@ -45,6 +45,7 @@ pub fn release_url(provider: Provider) -> &'static str {
         Provider::Codex => "https://api.github.com/repos/openai/codex/releases/latest",
         Provider::OpenCode => "https://api.github.com/repos/anomalyco/opencode/releases/latest",
         Provider::Qoder => "https://registry.npmjs.org/@qoder-ai/qodercli/latest",
+        Provider::Gemini => "https://registry.npmjs.org/@google/gemini-cli/latest",
     }
 }
 
@@ -54,6 +55,7 @@ pub fn guide_url(provider: Provider) -> &'static str {
         Provider::Codex => "https://developers.openai.com/codex/cli",
         Provider::OpenCode => "https://opencode.ai/docs/cli/#upgrade",
         Provider::Qoder => "https://docs.qoder.com/cli/installation",
+        Provider::Gemini => "https://geminicli.com/docs/get-started/installation/",
     }
 }
 
@@ -66,7 +68,7 @@ struct Release {
 
 fn compare_release(provider: Provider, installed: &str, bytes: &[u8]) -> Result<UpdateInfo> {
     let normalized;
-    let bytes = if provider == Provider::Qoder {
+    let bytes = if matches!(provider, Provider::Qoder | Provider::Gemini) {
         #[derive(Deserialize)]
         struct NpmRelease {
             version: String,

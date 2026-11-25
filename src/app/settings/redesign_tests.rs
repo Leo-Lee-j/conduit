@@ -79,11 +79,12 @@ const NAV_SELECTORS: [&str; 12] = [
     "settings-nav-10",
     "settings-nav-11",
 ];
-const DEFAULT_CHANNEL_SELECTORS: [&str; 4] = [
+const DEFAULT_CHANNEL_SELECTORS: [&str; Provider::ALL.len()] = [
     "default-channel-0",
     "default-channel-1",
     "default-channel-2",
     "default-channel-3",
+    "default-channel-4",
 ];
 
 fn click(cx: &mut VisualTestContext, selector: &'static str) {

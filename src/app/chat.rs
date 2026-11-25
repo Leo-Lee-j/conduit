@@ -368,7 +368,10 @@ impl ConduitApp {
                     .map_or_else(|| model.to_string(), |catalog| catalog.label(model))
             })
             .unwrap_or_else(|| conduit::i18n::text_static("chat.cli_default_model").into());
-        let effort = if matches!(session.provider, Provider::OpenCode | Provider::Qoder) {
+        let effort = if matches!(
+            session.provider,
+            Provider::OpenCode | Provider::Qoder | Provider::Gemini
+        ) {
             run.acp_variant
                 .clone()
                 .unwrap_or_else(|| conduit::i18n::text_static("chat.default").into())

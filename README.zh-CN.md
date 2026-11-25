@@ -27,7 +27,7 @@
   <a href="CONTRIBUTING.zh-CN.md">参与贡献</a>
 </p>
 
-Conduit 将 **Claude Code、Codex、OpenCode 和 Qoder CLI** 带入同一个桌面工作区。按项目组织对话与任务，跟进主代理和子代理，在对话旁检查代码，再完成 Git 提交与合并请求审查。
+Conduit 将 **Claude Code、Codex、OpenCode、Qoder CLI 和 Gemini CLI** 带入同一个桌面工作区。按项目组织对话与任务，跟进主代理和子代理，在对话旁检查代码，再完成 Git 提交与合并请求审查。
 
 项目正在持续开发，目前支持 **Windows x64**。应用界面支持 **English 与简体中文**，可在 **设置 → 通用 → 语言** 中即时切换。新安装默认英文；缺少语言设置的旧配置继续使用中文。大部分详细指南目前以中文维护。
 
@@ -37,9 +37,9 @@ Conduit 将 **Claude Code、Codex、OpenCode 和 Qoder CLI** 带入同一个桌�
 
 ## 为什么使用 Conduit？
 
-- **自由选择编程助手。** 使用 Claude Code、Codex、OpenCode 或 Qoder CLI，支持流式回复、工具审批、取消任务，以及按会话选择模型。
+- **自由选择编程助手。** 使用 Claude Code、Codex、OpenCode、Qoder CLI 或 Gemini CLI，支持流式回复、工具审批、取消任务，以及按会话选择模型。
 - **让对话井然有序。** 并行运行多个会话，搜索历史，置顶或归档对话，并排队后续消息。已有的 Claude Code、Codex 和 OpenCode 终端历史会按工作区导入，可继续原生会话。
-- **跟进子代理。** 打开子会话，再返回主会话，保留原来的阅读位置。Codex 支持定向追加消息和中断；OpenCode 支持父连接释放后的空闲子会话续聊。Claude 子历史只读，Qoder 子历史与控制尚未接入。各引擎范围见[子代理指南](docs/design/subagent-conversations.md)。
+- **跟进子代理。** 打开子会话，再返回主会话，保留原来的阅读位置。Codex 支持定向追加消息和中断；OpenCode 支持父连接释放后的空闲子会话续聊。Claude 子历史只读，Qoder 和 Gemini 子历史与控制尚未接入。各引擎范围见[子代理指南](docs/design/subagent-conversations.md)。
 - **看清每一次修改。** 文件可占满内容区或在对话旁预览，支持语法高亮、查找、Markdown 大纲与 Mermaid 图表。可见文件随磁盘修改自动刷新；按轮次查看统一或并排 Diff。文件与 Diff 预览仍为只读。
 - **完成 Git 与审查流程。** 勾选文件暂存、管理分支与 worktree、生成提交说明、提交与推送。查看 GitHub PR 或 GitLab MR、跟进 CI 和审查讨论，将失败检查转为修复任务。提交只包含所选文件中已暂存的修改。
 - **在任务之间延续上下文。** 管理目标与验收清单、复用会话模板、准备跨引擎的可编辑交接，并从已记录的完成轮次创建 Codex 原生会话分支。保存单文件检查点，收藏产物路径与服务链接；应用运行期间可调度只读自动任务。
@@ -66,7 +66,7 @@ Conduit 将 **Claude Code、Codex、OpenCode 和 Qoder CLI** 带入同一个桌�
 ### 准备条件
 
 - 当前桌面版需要 **Windows x64**。
-- 安装并登录至少一个受支持的 CLI：**Claude Code、Codex、OpenCode 或 Qoder CLI**，先确认它可以在终端中正常运行。
+- 安装并登录至少一个受支持的 CLI：**Claude Code、Codex、OpenCode、Qoder CLI 或 Gemini CLI**，先确认它可以在终端中正常运行。Gemini 的配置和支持范围见[接入说明](docs/gemini.md)。
 - 如需使用 Git 功能，请在本机安装 **Git**。
 
 Conduit 复用所选 CLI 的认证与执行能力，不自带模型服务。模型访问与用量由你配置的 CLI 和模型服务商处理。
@@ -125,7 +125,7 @@ cargo run --locked --features remote --bin conduit
 
 ## 致谢
 
-Conduit 使用 **Rust**、**GPUI** 和 [GPUI Kit](https://github.com/longbridge/gpui-kit) 构建。感谢 Claude Code、Codex、OpenCode、Qoder CLI 背后的项目，以及提供引擎与模型标志的 [LobeHub Icons](https://github.com/lobehub/lobe-icons)。
+Conduit 使用 **Rust**、**GPUI** 和 [GPUI Kit](https://github.com/longbridge/gpui-kit) 构建。感谢 Claude Code、Codex、OpenCode、Qoder CLI、Gemini CLI 背后的项目，以及提供引擎与模型标志的 [LobeHub Icons](https://github.com/lobehub/lobe-icons)。
 
 资源说明见[应用图标生成](assets/app-icons/README.md)与[第三方图标来源](assets/icons/README.md)。
 

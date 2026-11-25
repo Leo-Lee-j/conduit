@@ -90,6 +90,7 @@ pub fn runtime_route(
         Provider::Codex => "codex",
         Provider::OpenCode => "opencode",
         Provider::Qoder => "qoder",
+        Provider::Gemini => "gemini",
     };
     let raw: String = connection
         .query_row(
@@ -107,6 +108,7 @@ pub fn runtime_route(
     })?;
     match engine {
         Provider::Qoder => bail!(conduit::i18n::text("qoder.native_route")),
+        Provider::Gemini => bail!(conduit::i18n::text("gemini.native_route")),
         Provider::OpenCode => bail!(conduit::i18n::text(
             "ccs.ccs_routing_is_not_yet_supported_for"
         )),
@@ -252,6 +254,7 @@ pub fn load_from(path: &Path) -> CcsCatalog {
             Provider::Codex => "codex",
             Provider::OpenCode => "opencode",
             Provider::Qoder => "qoder",
+            Provider::Gemini => "gemini",
         };
         let endpoint: rusqlite::Result<Option<String>> = connection.query_row(
             "SELECT CASE WHEN app_type = 'claude' THEN json_extract(settings_config, '$.env.ANTHROPIC_BASE_URL') ELSE json_extract(settings_config, '$.config') END FROM providers WHERE id = ?1 AND app_type = ?2",

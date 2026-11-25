@@ -38,6 +38,7 @@ pub enum ApprovalKind {
     ClaudeTool,
     OpenCodeTool,
     QoderTool,
+    GeminiTool,
     /// A native CLI MCP call, independent of the chat filesystem permission.
     McpTool,
     CodexUserInput,
@@ -463,6 +464,7 @@ impl Protocol {
                             opencode::permission_option(approval, "allow_always").is_some()
                         }
                         ApprovalKind::Permissions
+                        | ApprovalKind::GeminiTool
                         | ApprovalKind::ClaudeTool
                         | ApprovalKind::McpTool => false,
                         ApprovalKind::CodexUserInput
@@ -575,7 +577,7 @@ impl Protocol {
             return args;
         }
         match self.provider {
-            Provider::Qoder => unreachable!("Qoder uses its own CliAdapter"),
+            Provider::Qoder | Provider::Gemini => unreachable!("Engine uses its own CliAdapter"),
             Provider::OpenCode => vec![
                 "acp".into(),
                 "--pure".into(),
@@ -733,7 +735,7 @@ impl Protocol {
     }
     pub fn initialize(&self) -> Value {
         match self.provider {
-            Provider::Qoder => unreachable!("Qoder uses its own CliAdapter"),
+            Provider::Qoder | Provider::Gemini => unreachable!("Engine uses its own CliAdapter"),
             Provider::OpenCode => {
                 json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}}})
             }
@@ -764,7 +766,7 @@ impl Protocol {
 
     pub fn accept(&mut self, value: Value) -> Step {
         self.initialized |= match self.provider {
-            Provider::Qoder => unreachable!("Qoder uses its own CliAdapter"),
+            Provider::Qoder | Provider::Gemini => unreachable!("Engine uses its own CliAdapter"),
             Provider::Codex => {
                 value["id"] == 1 && value.get("result").is_some() && value.get("error").is_none()
             }
@@ -776,7 +778,7 @@ impl Protocol {
             Provider::OpenCode => self.text_only && value["type"] == "text",
         };
         let mut step = match self.provider {
-            Provider::Qoder => unreachable!("Qoder uses its own CliAdapter"),
+            Provider::Qoder | Provider::Gemini => unreachable!("Engine uses its own CliAdapter"),
             Provider::Codex => self.codex(value),
             Provider::Claude => self.claude(value),
             Provider::OpenCode => self.opencode(value),
@@ -1582,7 +1584,7 @@ impl Protocol {
         }
         let allow = allow && self.tool_policy != ToolPolicy::Automation;
         match self.provider {
-            Provider::Qoder => unreachable!("Qoder uses its own CliAdapter"),
+            Provider::Qoder | Provider::Gemini => unreachable!("Engine uses its own CliAdapter"),
             Provider::OpenCode => opencode::approval_response_with_fallback(
                 approval,
                 allow,
@@ -1628,6 +1630,7 @@ impl Protocol {
                 }
                 ApprovalKind::OpenCodeTool
                 | ApprovalKind::QoderTool
+                | ApprovalKind::GeminiTool
                 | ApprovalKind::ClaudeTool
                 | ApprovalKind::CodexUserInput
                 | ApprovalKind::CodexAsyncUserInput

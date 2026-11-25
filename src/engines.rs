@@ -105,6 +105,26 @@ pub const REGISTRY: &[EngineDescriptor] = &[
         adapter: crate::cli_adapter::qoder,
         commands: None,
     },
+    EngineDescriptor {
+        provider: Provider::Gemini,
+        id: "gemini",
+        label: "Gemini CLI",
+        executable: "gemini.exe",
+        path_env: "CONDUIT_GEMINI_PATH",
+        install_env: "APPDATA",
+        install_path: "npm/gemini.cmd",
+        npm_binary: None,
+        tested_version: "0.71.1",
+        version_signature: "",
+        guide: "https://geminicli.com/docs/get-started/installation/",
+        capabilities: EngineCapabilities {
+            model_services: false,
+            mcp_toggle: false,
+            protocol: "ACP",
+        },
+        adapter: crate::cli_adapter::gemini,
+        commands: None,
+    },
 ];
 
 impl Provider {

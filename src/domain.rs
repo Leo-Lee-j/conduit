@@ -15,10 +15,17 @@ pub enum Provider {
     Codex,
     OpenCode,
     Qoder,
+    Gemini,
 }
 
 impl Provider {
-    pub const ALL: [Self; 4] = [Self::Claude, Self::Codex, Self::OpenCode, Self::Qoder];
+    pub const ALL: [Self; 5] = [
+        Self::Claude,
+        Self::Codex,
+        Self::OpenCode,
+        Self::Qoder,
+        Self::Gemini,
+    ];
     pub fn label(self) -> &'static str {
         self.descriptor().label
     }
@@ -65,6 +72,21 @@ impl PermissionLevel {
             Self::WorkspaceWrite => "domain.workspace_write_description",
             Self::FullAccess => "domain.full_access_description",
         })
+    }
+
+    pub fn description_for(self, provider: Provider) -> &'static str {
+        match (provider, self) {
+            (Provider::Gemini, Self::ReadOnly) => {
+                conduit::i18n::text_static("gemini.permission_read_only")
+            }
+            (Provider::Gemini, Self::WorkspaceWrite) => {
+                conduit::i18n::text_static("gemini.permission_ask")
+            }
+            (Provider::Gemini, Self::FullAccess) => {
+                conduit::i18n::text_static("gemini.permission_full_access")
+            }
+            _ => self.description(),
+        }
     }
 
     pub fn codex_approval_policy(self) -> serde_json::Value {

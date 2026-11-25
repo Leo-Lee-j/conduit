@@ -92,7 +92,10 @@ impl Render for SessionModelPicker {
         let channel = selection.channel;
         let selected = selection.model;
         let effort = selection.effort;
-        let native_models = if matches!(engine, Provider::OpenCode | Provider::Qoder) {
+        let native_models = if matches!(
+            engine,
+            Provider::OpenCode | Provider::Qoder | Provider::Gemini
+        ) {
             let catalog_models = app
                 .composer_channel_models(&self.binding, engine, &ModelChannel::Cli)
                 .1;
@@ -105,11 +108,14 @@ impl Render for SessionModelPicker {
         } else {
             vec![]
         };
-        let (note, mut models) = if matches!(engine, Provider::OpenCode | Provider::Qoder)
-            && channel == ModelChannel::Cli
+        let (note, mut models) = if matches!(
+            engine,
+            Provider::OpenCode | Provider::Qoder | Provider::Gemini
+        ) && channel == ModelChannel::Cli
         {
             (
-                if engine == Provider::Qoder && !native_models.is_empty() {
+                if matches!(engine, Provider::Qoder | Provider::Gemini) && !native_models.is_empty()
+                {
                     None
                 } else {
                     app.composer_channel_models(&self.binding, engine, &ModelChannel::Cli)
@@ -547,7 +553,10 @@ impl Render for SessionModelPicker {
                 },
             )
             .when(
-                !matches!(engine, Provider::OpenCode | Provider::Qoder),
+                !matches!(
+                    engine,
+                    Provider::OpenCode | Provider::Qoder | Provider::Gemini
+                ),
                 |panel| {
                     panel.child(
                     v_flex()
@@ -719,6 +728,7 @@ impl SessionModelPicker {
                             Provider::Codex => "engine-option-codex",
                             Provider::OpenCode => "engine-option-opencode",
                             Provider::Qoder => "engine-option-qoder",
+                            Provider::Gemini => "engine-option-gemini",
                         })
                         .ghost()
                         .h(px(34.))
@@ -914,6 +924,7 @@ impl ConduitApp {
     /// CLI's own safety gates for this session.
     pub(super) fn permission_picker(&self, view: Entity<Self>) -> AnyElement {
         let binding = self.composer_binding();
+        let provider = self.composer_selection_for(&binding).engine;
         let permission = self
             .send_target(true)
             .and_then(|id| self.session(id))
@@ -1001,9 +1012,13 @@ impl ConduitApp {
                         .accessibility_label(format!(
                             "{}. {}",
                             option.label(),
-                            option.description()
+                            option.description_for(provider)
                         ))
-                        .child(Self::permission_option_content(option, active))
+                        .child(Self::permission_option_with_description(
+                            option,
+                            active,
+                            option.description_for(provider),
+                        ))
                         .when(active, |button| button.bg(rgb(palette().surface_hover)))
                         .on_click(move |_, window, cx| {
                             app.update(cx, |this, cx| {
@@ -1023,6 +1038,14 @@ impl ConduitApp {
     }
 
     pub(super) fn permission_option_content(option: PermissionLevel, active: bool) -> Div {
+        Self::permission_option_with_description(option, active, option.description())
+    }
+
+    fn permission_option_with_description(
+        option: PermissionLevel,
+        active: bool,
+        description: &'static str,
+    ) -> Div {
         let (icon, color) = match option {
             PermissionLevel::ReadOnly => (FullIconName::Eye, palette().muted),
             PermissionLevel::WorkspaceWrite => (FullIconName::SquarePen, palette().muted),
@@ -1054,7 +1077,7 @@ impl ConduitApp {
                         div()
                             .text_size(ui_text_size(11.))
                             .text_color(rgb(palette().muted))
-                            .child(option.description()),
+                            .child(description),
                     ),
             )
             .when(active, |row| row.child(Icon::new(IconName::Check).small()))
@@ -1109,7 +1132,11 @@ impl ConduitApp {
         let provider = selection.engine;
         let selected_model = selection.model;
         let (_, mut models) = self.composer_channel_models(&binding, provider, &selection.channel);
-        if matches!(provider, Provider::OpenCode | Provider::Qoder) && models.is_empty() {
+        if matches!(
+            provider,
+            Provider::OpenCode | Provider::Qoder | Provider::Gemini
+        ) && models.is_empty()
+        {
             models = self
                 .native_model_preferences(provider)
                 .merge(&selection.opencode.models(), false);
@@ -1133,7 +1160,10 @@ impl ConduitApp {
         } else {
             self.channel_label(provider, &selection.channel)
         };
-        let effort = if matches!(provider, Provider::OpenCode | Provider::Qoder) {
+        let effort = if matches!(
+            provider,
+            Provider::OpenCode | Provider::Qoder | Provider::Gemini
+        ) {
             selection
                 .opencode
                 .effective_variant()
@@ -1188,7 +1218,10 @@ impl ConduitApp {
                             .child(label),
                     )
                     .when(
-                        if matches!(provider, Provider::OpenCode | Provider::Qoder) {
+                        if matches!(
+                            provider,
+                            Provider::OpenCode | Provider::Qoder | Provider::Gemini
+                        ) {
                             selection.opencode.effective_variant().is_some()
                         } else {
                             selection.effort != ReasoningEffort::Default
@@ -1356,6 +1389,8 @@ impl ConduitApp {
             engine.descriptor().capabilities.model_services || *channel == ModelChannel::Cli,
             conduit::i18n::text(if engine == Provider::Qoder {
                 "qoder.native_route"
+            } else if engine == Provider::Gemini {
+                "gemini.native_route"
             } else {
                 "providers.opencode_uses_its_native_provider_configuration_configure"
             })
@@ -1453,7 +1488,7 @@ impl ConduitApp {
             .content(move |_, _, cx| {
                 let popover = cx.entity().downgrade();
                 let mut list = v_flex().w(px(220.)).gap(px(1.));
-                let options: [(Option<Provider>, &str); 5] = [
+                let options: [(Option<Provider>, &str); 6] = [
                     (
                         None,
                         conduit::i18n::text_static("generation.follow_current_session"),
@@ -1462,6 +1497,7 @@ impl ConduitApp {
                     (Some(Provider::Codex), Provider::Codex.label()),
                     (Some(Provider::OpenCode), Provider::OpenCode.label()),
                     (Some(Provider::Qoder), Provider::Qoder.label()),
+                    (Some(Provider::Gemini), Provider::Gemini.label()),
                 ];
                 for (index, (option, name)) in options.into_iter().enumerate() {
                     let view = view.clone();
@@ -1870,7 +1906,7 @@ impl ConduitApp {
             .content(move |_, _, cx| {
                 let popover = cx.entity().downgrade();
                 let mut list = v_flex().w(px(220.)).gap(px(1.));
-                let options: [(Option<Provider>, &str); 5] = [
+                let options: [(Option<Provider>, &str); 6] = [
                     (
                         None,
                         conduit::i18n::text_static("generation.follow_current_session"),
@@ -1879,6 +1915,7 @@ impl ConduitApp {
                     (Some(Provider::Codex), Provider::Codex.label()),
                     (Some(Provider::OpenCode), Provider::OpenCode.label()),
                     (Some(Provider::Qoder), Provider::Qoder.label()),
+                    (Some(Provider::Gemini), Provider::Gemini.label()),
                 ];
                 for (index, (option, name)) in options.into_iter().enumerate() {
                     let view = view.clone();
