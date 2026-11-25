@@ -478,12 +478,6 @@ impl ConduitApp {
                                 }),
                         ),
                 )
-                .child(note(text(match state.source {
-                    Source::Github => "github_hint",
-                    Source::SkillsSh => "skills_hint",
-                    Source::McpRegistry => "registry_hint",
-                    Source::Featured => "featured_hint",
-                })))
                 .when(
                     index == 0 && state.source == Source::Github && state.query.is_empty(),
                     |body| {

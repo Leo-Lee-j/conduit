@@ -392,12 +392,6 @@ impl ConduitApp {
             .min_w_0()
             .gap_3()
             .child(
-                div()
-                    .text_size(ui_text_size(12.))
-                    .text_color(rgb(palette().muted))
-                    .child(conduit::i18n::text_static("wallpaper.description")),
-            )
-            .child(
                 h_flex()
                     .flex_wrap()
                     .gap_2()

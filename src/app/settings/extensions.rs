@@ -721,16 +721,6 @@ impl ConduitApp {
                     .py_2()
                     .gap_1()
                     .child(toolbar)
-                    .child(
-                            div()
-                                .text_size(ui_text_size(12.))
-                                .text_color(rgb(palette().muted))
-                                .child(conduit::i18n::text_static(if self.extensions_ui.workspace.is_some() {
-                                    "settings.extensions.workspace_scope_hint"
-                                } else {
-                                    "settings.extensions.global_scope_hint"
-                                })),
-                    )
                     .when_some(self.extensions_ui.feedback.clone(), |body, message| {
                         body.child(div().text_size(ui_text_size(12.)).child(message))
                     })

@@ -906,9 +906,6 @@ impl ConduitApp {
         SettingGroup::new()
             .variant(GroupBoxVariant::Normal)
             .items(items)
-            .footer(|_, _| {
-                conduit::i18n::text_static("settings.models.sync_reads_from_clis_and_cc_switch")
-            })
     }
 
     pub(super) fn models_provider_group(

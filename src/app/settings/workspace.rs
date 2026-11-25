@@ -70,7 +70,6 @@ impl ConduitApp {
                 });
             });
         }
-        let compact = narrow || f32::from(window.viewport_size().height) < 650.;
         v_flex()
             .id("settings-workspace")
             .key_context("ConduitSettings")
@@ -84,7 +83,7 @@ impl ConduitApp {
             .bg(chrome_background(palette().canvas))
             .text_color(rgb(palette().text))
             .child(self.settings_body(window, navigation_width, available_width, cx.entity(), cx))
-            .child(self.settings_save_status(compact))
+            .child(self.settings_save_status())
             .on_action(cx.listener(|this, _: &OpenSettingsShortcut, window, cx| {
                 this.settings_ui
                     .search
@@ -170,7 +169,7 @@ impl ConduitApp {
         }
     }
 
-    fn settings_save_status(&self, narrow: bool) -> AnyElement {
+    fn settings_save_status(&self) -> AnyElement {
         let disabled = !self.writable || self.closing;
         let (icon, color, message) = if let Some(error) = &self.persistence.error {
             (
@@ -201,18 +200,6 @@ impl ConduitApp {
                     .into(),
             )
         };
-        let hint = match self.settings_ui.page {
-            3 => conduit::i18n::text_static(
-                "settings.workspace.paths_save_immediately_new_sessions_use_the",
-            ),
-            8 => conduit::i18n::text_static("settings.workspace.services_scope"),
-            4 | 9 => {
-                conduit::i18n::text_static("settings.workspace.source_files_save_in_the_editor_and")
-            }
-            5 => conduit::i18n::text_static("settings.workspace.naming_scope"),
-            10 => conduit::i18n::text_static("settings.workspace.session_scopes"),
-            _ => conduit::i18n::text_static("settings.workspace.changes_apply_to_this_device"),
-        };
         h_flex()
             .id("settings-workspace-footer")
             .debug_selector(|| "settings-workspace-footer".into())
@@ -228,11 +215,6 @@ impl ConduitApp {
             .text_size(ui_text_size(12.))
             .child(Icon::new(icon).small().text_color(rgb(color)))
             .child(div().text_color(rgb(color)).child(message))
-            .when(!narrow, |footer| {
-                footer
-                    .child(div().flex_1())
-                    .child(div().text_color(rgb(palette().muted)).child(hint))
-            })
             .into_any_element()
     }
 }

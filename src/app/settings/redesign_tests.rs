@@ -360,6 +360,10 @@ fn settings_redesign_legacy_naming_route_and_migrated_search_reveal_real_targets
         ("自动命名", 10, 3),
         ("重命名 标题", 10, 3),
         ("font", 1, 1),
+        // Existing preview search entries must still reveal the typography controls.
+        ("文字预览与恢复默认", 1, 1),
+        ("预览界面 聊天 代码", 1, 1),
+        ("reset 预览", 1, 1),
     ] {
         cx.update(|_, cx| {
             app.update(cx, |app, cx| {

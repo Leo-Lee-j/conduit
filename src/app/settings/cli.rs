@@ -581,8 +581,7 @@ impl ConduitApp {
                         h_flex().w_full().gap_3().flex_wrap()
                             .child(Button::new(("engine-setup", index)).primary().small()
                                 .label(conduit::i18n::text_static("settings.cli.installation_and_sign_in_instructions"))
-                                .on_click(move |_, _, cx| cx.open_url(descriptor.guide)))
-                            .child(settings_description(conduit::i18n::text_static("settings.cli.setup_hint"))),
+                                .on_click(move |_, _, cx| cx.open_url(descriptor.guide))),
                     )
                 })
                 .child(

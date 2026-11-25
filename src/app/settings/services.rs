@@ -243,18 +243,6 @@ impl ConduitApp {
                 )
             })
             .when(!supports_services, |body| {
-                body.child(
-                    div()
-                        .p_4()
-                        .rounded_lg()
-                        .border_1()
-                        .border_color(rgb(palette().border))
-                        .text_size(ui_text_size(13.))
-                        .text_color(rgb(palette().muted))
-                        .child(service_text("settings.services.native_only")),
-                )
-            })
-            .when(!supports_services, |body| {
                 body.child(self.service_details(
                     engine,
                     &ModelChannel::Cli,

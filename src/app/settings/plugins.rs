@@ -95,7 +95,6 @@ impl ConduitApp {
                             }),
                     ),
             )
-            .child(caption(text("hint")))
             .when_some(state.feedback.clone(), |list, message| {
                 list.child(caption(message))
             })
@@ -304,8 +303,7 @@ impl ConduitApp {
                 v_flex()
                     .py_4()
                     .gap_2()
-                    .child(div().text_size(ui_text_size(14.)).child(text("empty")))
-                    .child(caption(text("empty_description"))),
+                    .child(div().text_size(ui_text_size(14.)).child(text("empty"))),
             );
         }
         if !state.errors.is_empty() {
@@ -554,14 +552,14 @@ impl ConduitApp {
                         "encourager.setting.context",
                         pet_switch_control(context_button),
                     ))
-                    .child(
-                        caption(conduit::i18n::text_static(if include_context {
-                            "encourager.setting.privacy_context_on"
-                        } else {
-                            "encourager.setting.privacy_context_off"
-                        }))
-                        .px_3(),
-                    ),
+                    .when(include_context, |section| {
+                        section.child(
+                            caption(conduit::i18n::text_static(
+                                "encourager.setting.privacy_context_on",
+                            ))
+                            .px_3(),
+                        )
+                    }),
             )
             .into_any_element()
     }

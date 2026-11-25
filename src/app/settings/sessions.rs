@@ -23,12 +23,7 @@ impl ConduitApp {
                 "settings.sessions.naming_section",
             ))
             .items(self.settings_automatic_naming_items(disabled, view.clone()))
-            .items(self.settings_naming_model_items(disabled, view.clone()))
-            .footer(|_, _| {
-                conduit::i18n::text_static(
-                    "settings.general.naming_runs_in_the_background_failures_keep",
-                )
-            }),
+            .items(self.settings_naming_model_items(disabled, view.clone())),
             self.settings_empty_session_cleanup_group(disabled, view.clone()),
             self.settings_auto_archive_group(disabled, view),
         ])
@@ -77,20 +72,18 @@ impl ConduitApp {
                     menu
                 })
         });
-        settings_section(conduit::i18n::text_static("settings.sessions.auto_archive"))
-            .items(vec![
-                SettingItem::new(
-                    conduit::i18n::text_static("settings.sessions.auto_archive_enabled"),
-                    enabled,
-                )
-                .disabled(disabled),
-                SettingItem::new(
-                    conduit::i18n::text_static("settings.sessions.auto_archive_after"),
-                    period,
-                )
-                .disabled(disabled),
-            ])
-            .footer(|_, _| conduit::i18n::text_static("settings.sessions.auto_archive_scope"))
+        settings_section(conduit::i18n::text_static("settings.sessions.auto_archive")).items(vec![
+            SettingItem::new(
+                conduit::i18n::text_static("settings.sessions.auto_archive_enabled"),
+                enabled,
+            )
+            .disabled(disabled),
+            SettingItem::new(
+                conduit::i18n::text_static("settings.sessions.auto_archive_after"),
+                period,
+            )
+            .disabled(disabled),
+        ])
     }
 
     fn settings_empty_session_cleanup_group(
@@ -125,9 +118,6 @@ impl ConduitApp {
             )
             .disabled(disabled),
         ])
-        .footer(|_, _| {
-            conduit::i18n::text_static("settings.sessions.auto_cleanup_empty_sessions_scope")
-        })
     }
 
     fn settings_conversation_permission_group(
@@ -217,7 +207,6 @@ impl ConduitApp {
             )
             .disabled(disabled),
         ])
-        .footer(|_, _| conduit::i18n::text_static("settings.sessions.chat_display_scope"))
     }
 
     /// Compatibility route 5 retains group 0 for the switch/trigger and group 1
@@ -235,15 +224,9 @@ impl ConduitApp {
             settings_section(conduit::i18n::text_static(
                 "settings.general.session_naming",
             ))
-            .items(self.settings_automatic_naming_items(disabled, view.clone()))
-            .footer(|_, _| {
-                conduit::i18n::text_static(
-                    "settings.general.naming_runs_in_the_background_failures_keep",
-                )
-            }),
+            .items(self.settings_automatic_naming_items(disabled, view.clone())),
             settings_section(conduit::i18n::text_static("settings.general.naming_model"))
-                .items(self.settings_naming_model_items(disabled, view.clone()))
-                .footer(|_, _| conduit::i18n::text_static("settings.sessions.naming_model_scope")),
+                .items(self.settings_naming_model_items(disabled, view.clone())),
         ])
     }
 

@@ -110,7 +110,6 @@ impl ConduitApp {
                     ),
             )
             .child(filters)
-            .child(caption(text("catalog_hint")))
             .when(state.loading, |list| {
                 list.child(caption(text("catalog_loading")))
             })

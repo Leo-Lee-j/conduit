@@ -209,7 +209,6 @@ impl ConduitApp {
             route,
             model,
         ])
-        .footer(|_, _| conduit::i18n::text_static("settings.sessions.defaults_scope"))
     }
 
     pub(super) fn provider_configuration_references(&self, id: &str) -> Vec<String> {

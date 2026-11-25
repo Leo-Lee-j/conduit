@@ -215,8 +215,8 @@ impl ConduitApp {
             FullIconName::Settings,
         )
         .groups(vec![
-            settings_section(conduit::i18n::text_static("settings.general.local_data"))
-                .items(vec![
+            settings_section(conduit::i18n::text_static("settings.general.local_data")).items(
+                vec![
                     value_item(
                         conduit::i18n::text_static("settings.general.data_directory"),
                         data_dir,
@@ -225,12 +225,8 @@ impl ConduitApp {
                         conduit::i18n::text_static("settings.general.configuration_file"),
                         state_file,
                     ),
-                ])
-                .footer(|_, _| {
-                    conduit::i18n::text_static(
-                        "settings.general.configuration_is_stored_locally_only",
-                    )
-                }),
+                ],
+            ),
             settings_section(conduit::i18n::text_static(
                 "settings.general.application_updates",
             ))
@@ -509,12 +505,7 @@ impl ConduitApp {
                 .title(conduit::i18n::text_static(
                     "settings.general.commit_message_prompt",
                 ))
-                .item(edit)
-                .footer(|_, _| {
-                    conduit::i18n::text_static(
-                        "settings.general.changes_save_automatically_and_apply_to_the",
-                    )
-                }),
+                .item(edit),
             settings_section(conduit::i18n::text_static(
                 "settings.general.branch_updates",
             ))

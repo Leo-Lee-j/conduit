@@ -483,6 +483,16 @@ fn font_settings_heading(
             conduit::i18n::text_static("settings.appearance.code_typography_scope"),
         ),
     };
+    let mut keywords = vec![title, scope];
+    if matches!(target, FontTarget::Interface) {
+        keywords.extend([
+            conduit::i18n::text_static("settings.appearance.typography"),
+            conduit::i18n::text_static("settings.appearance.typography_preview"),
+            conduit::i18n::text_static("settings.appearance.chat_preview"),
+            conduit::i18n::text_static("settings.appearance.code_preview"),
+            conduit::i18n::text_static("mermaid.preview"),
+        ]);
+    }
     SettingItem::render(move |_, _, _| {
         h_flex()
             .debug_selector(move || id.into())
@@ -523,7 +533,7 @@ fn font_settings_heading(
                 )
             })
     })
-    .keywords([title, scope])
+    .keywords(keywords)
     .disabled(disabled)
 }
 
@@ -585,23 +595,13 @@ fn typography_previews(typography: &ChatTypography) -> AnyElement {
         .border_color(rgb(palette().border))
         .gap_3()
         .child(
-            v_flex()
-                .gap_1()
-                .child(
-                    div()
-                        .text_size(ui_text_size(13.))
-                        .font_semibold()
-                        .text_color(rgb(palette().text))
-                        .child(conduit::i18n::text_static(
-                            "settings.appearance.typography_preview",
-                        )),
-                )
-                .child(
-                    settings_description(conduit::i18n::text_static(
-                        "settings.appearance.static_preview_description",
-                    ))
-                    .mt_0(),
-                ),
+            div()
+                .text_size(ui_text_size(13.))
+                .font_semibold()
+                .text_color(rgb(palette().text))
+                .child(conduit::i18n::text_static(
+                    "settings.appearance.typography_preview",
+                )),
         )
         .child(
             h_flex()
@@ -971,14 +971,22 @@ impl ConduitApp {
                 .item(
                     SettingItem::new(
                         conduit::i18n::text_static("settings.appearance.light_theme"),
-                        theme_select_field(view.clone(), gpui_kit::component::ThemeMode::Light, disabled),
+                        theme_select_field(
+                            view.clone(),
+                            gpui_kit::component::ThemeMode::Light,
+                            disabled,
+                        ),
                     )
                     .disabled(disabled),
                 )
                 .item(
                     SettingItem::new(
                         conduit::i18n::text_static("settings.appearance.dark_theme"),
-                        theme_select_field(view.clone(), gpui_kit::component::ThemeMode::Dark, disabled),
+                        theme_select_field(
+                            view.clone(),
+                            gpui_kit::component::ThemeMode::Dark,
+                            disabled,
+                        ),
                     )
                     .disabled(disabled),
                 )
@@ -1006,37 +1014,30 @@ impl ConduitApp {
                 )
                 .item(
                     SettingItem::new(
-                        conduit::i18n::text_static("settings.appearance.auto_collapse_inactive_workspaces"),
+                        conduit::i18n::text_static(
+                            "settings.appearance.auto_collapse_inactive_workspaces",
+                        ),
                         auto_collapse,
                     )
                     .disabled(disabled),
-                )
-                .footer(|_, _| {
-                    settings_description(conduit::i18n::text_static(
-                        "settings.appearance.applies_immediately_system_mode_follows_windows_appearance",
-                    ))
-                    .mt_0()
-                }),
+                ),
             settings_section(conduit::i18n::text_static("settings.appearance.typography"))
                 .items(vec![
-                    SettingItem::render(|_, _, _| {
-                        settings_description(conduit::i18n::text_static(
-                            "settings.appearance.changes_apply_immediately_and_are_saved_automatically",
-                        ))
-                        .mt_0()
-                    })
-                    .keywords([
-                        conduit::i18n::text_static("settings.appearance.typography"),
-                        conduit::i18n::text_static("settings.appearance.typography_preview"),
-                        conduit::i18n::text_static("settings.appearance.chat_preview"),
-                        conduit::i18n::text_static("settings.appearance.code_preview"),
-                        conduit::i18n::text_static("mermaid.preview"),
-                    ]),
                     font_settings_heading(FontTarget::Interface, disabled, view.clone()),
                     ui_font,
-                    SettingItem::new(conduit::i18n::text_static("settings.appearance.interface_font_size"), ui_size)
-                        .keywords([conduit::i18n::text_static("settings.appearance.application"), conduit::i18n::text_static("settings.appearance.interface"), conduit::i18n::text_static("settings.appearance.font_size"), conduit::i18n::text_static("settings.appearance.size"), "font", "size"])
-                        .disabled(disabled),
+                    SettingItem::new(
+                        conduit::i18n::text_static("settings.appearance.interface_font_size"),
+                        ui_size,
+                    )
+                    .keywords([
+                        conduit::i18n::text_static("settings.appearance.application"),
+                        conduit::i18n::text_static("settings.appearance.interface"),
+                        conduit::i18n::text_static("settings.appearance.font_size"),
+                        conduit::i18n::text_static("settings.appearance.size"),
+                        "font",
+                        "size",
+                    ])
+                    .disabled(disabled),
                     SettingItem::new(
                         conduit::i18n::text_static("settings.appearance.functional_icon_size"),
                         icon_size,
@@ -1050,30 +1051,53 @@ impl ConduitApp {
                     .disabled(disabled),
                     font_settings_heading(FontTarget::Chat, disabled, view.clone()),
                     chat_font,
-                    SettingItem::new(conduit::i18n::text_static("settings.appearance.font_size"), chat_size)
-                        .disabled(disabled),
-                    SettingItem::new(conduit::i18n::text_static("settings.appearance.line_height"), chat_line_height)
-                        .disabled(disabled),
+                    SettingItem::new(
+                        conduit::i18n::text_static("settings.appearance.font_size"),
+                        chat_size,
+                    )
+                    .disabled(disabled),
+                    SettingItem::new(
+                        conduit::i18n::text_static("settings.appearance.line_height"),
+                        chat_line_height,
+                    )
+                    .disabled(disabled),
                     font_settings_heading(FontTarget::Code, disabled, view.clone()),
                     code_font,
-                    SettingItem::new(conduit::i18n::text_static("settings.appearance.code_font_size"), code_size)
-                        .disabled(disabled),
-                    SettingItem::new(conduit::i18n::text_static("settings.appearance.copy_button"), code_copy)
-                        .disabled(disabled),
-                    SettingItem::new(conduit::i18n::text_static("settings.appearance.line_numbers"), code_line_numbers)
-                        .disabled(disabled),
-                    SettingItem::new(conduit::i18n::text_static("settings.appearance.syntax_highlighting"), code_syntax)
-                        .disabled(disabled),
+                    SettingItem::new(
+                        conduit::i18n::text_static("settings.appearance.code_font_size"),
+                        code_size,
+                    )
+                    .disabled(disabled),
+                    SettingItem::new(
+                        conduit::i18n::text_static("settings.appearance.copy_button"),
+                        code_copy,
+                    )
+                    .disabled(disabled),
+                    SettingItem::new(
+                        conduit::i18n::text_static("settings.appearance.line_numbers"),
+                        code_line_numbers,
+                    )
+                    .disabled(disabled),
+                    SettingItem::new(
+                        conduit::i18n::text_static("settings.appearance.syntax_highlighting"),
+                        code_syntax,
+                    )
+                    .disabled(disabled),
                     reset,
                 ])
                 // Previews sit outside the settings surface; they contain no
                 // preference actions and remain readable in read-only mode.
-                .footer(move |_, cx| {
-                    typography_previews(&preview_view.read(cx).chat_typography())
-                }),
+                .footer(move |_, cx| typography_previews(&preview_view.read(cx).chat_typography())),
             settings_section(conduit::i18n::text_static("wallpaper.title")).item(
-                SettingItem::render(move |_, _, cx| view.read(cx).background_controls(view.clone()))
-                    .keywords([conduit::i18n::text_static("wallpaper.title"), "Wallhaven", "wallpaper", "background"]),
+                SettingItem::render(move |_, _, cx| {
+                    view.read(cx).background_controls(view.clone())
+                })
+                .keywords([
+                    conduit::i18n::text_static("wallpaper.title"),
+                    "Wallhaven",
+                    "wallpaper",
+                    "background",
+                ]),
             ),
         ])
     }
