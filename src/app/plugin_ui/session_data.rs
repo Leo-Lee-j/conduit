@@ -808,7 +808,11 @@ impl ConduitApp {
             (text("session_data.idle"), false)
         };
         let color = if running {
-            palette().activity_completed
+            if palette().restrained_projects {
+                palette().activity_running
+            } else {
+                palette().activity_completed
+            }
         } else if run.is_some() || session.interrupted {
             palette().warning_text
         } else {
@@ -936,12 +940,31 @@ impl ConduitApp {
                     }),
             );
         if let Some(ratio) = context_ratio {
-            let color = if ratio >= 0.9 {
+            let colors = palette();
+            let warning_threshold = if colors.restrained_projects {
+                0.8
+            } else {
+                0.75
+            };
+            let critical = if colors.restrained_projects {
+                ratio > 0.95
+            } else {
+                ratio >= 0.9
+            };
+            let color = if critical {
                 palette().error_text
-            } else if ratio >= 0.75 {
+            } else if ratio >= warning_threshold {
                 palette().warning_text
+            } else if colors.restrained_projects {
+                colors.activity_running
             } else {
                 palette().highlight_text
+            };
+            let bar_color = if colors.restrained_projects && !critical && ratio >= warning_threshold
+            {
+                colors.context_warning_fill
+            } else {
+                color
             };
             context = context
                 .child(
@@ -981,7 +1004,7 @@ impl ConduitApp {
                 .child(
                     progress::Progress::new("session-context-progress")
                         .value((ratio * 100.).clamp(0., 100.) as f32)
-                        .color(rgb(color))
+                        .color(rgb(bar_color))
                         .with_size(px(9.))
                         .w_full()
                         .accessibility_label(conduit::i18n::format(
@@ -1005,7 +1028,7 @@ impl ConduitApp {
                                 ),
                             )],
                         )))
-                        .when(ratio >= 0.9, |row| {
+                        .when(critical, |row| {
                             row.child(
                                 caption(text("session_data.context_high")).text_color(rgb(color)),
                             )

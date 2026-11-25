@@ -1289,13 +1289,17 @@ impl ConduitApp {
         let collapsed = self.workspace_collapsed(&workspace.path);
         let importing = self.history_loading.contains(&workspace.path);
         let workspace_color = self.store.ui.workspace_colors.get(&workspace.path).copied();
+        let restrained_projects = palette().restrained_projects;
+        let marker_color = super::theme::project_marker_color(&workspace.path, workspace_color);
         let pinned = self.store.ui.pinned_workspaces.contains(&workspace.path);
         let can_reorder = self.workspace_reorderable(&workspace.path);
-        let workspace_hover_color = workspace_color.map(|color| {
-            let mut tint = gpui_kit::rgba(color);
-            tint.a *= 0.24;
-            tint
-        });
+        let workspace_hover_color = workspace_color
+            .filter(|_| !restrained_projects)
+            .map(|color| {
+                let mut tint = gpui_kit::rgba(color);
+                tint.a *= 0.24;
+                tint
+            });
         let compact_path = workspace.path.clone();
         let drag_path = workspace.path.clone();
         let drop_path = workspace.path.clone();
@@ -1362,10 +1366,24 @@ impl ConduitApp {
                 Some(color) => style.bg(color),
                 None => style.bg(rgb(palette().surface_hover)),
             })
-            .when_some(workspace_color, |row, color| {
+            .when_some(workspace_color.filter(|_| !restrained_projects), |row, color| {
                 let mut tint = gpui_kit::rgba(color);
                 tint.a *= 0.18;
                 row.bg(tint)
+            })
+            .when(restrained_projects && workspace_selected, |row| row.bg(rgb(palette().highlight_bg)))
+            .when_some(marker_color.filter(|_| restrained_projects), |row, color| {
+                row.child(
+                    div()
+                        .debug_selector(move || format!("workspace-color-marker-{index}"))
+                        .absolute()
+                        .left(px(0.))
+                        .top(px(8.))
+                        .w(px(3.))
+                        .h(px(ROW_HEIGHT - 16.))
+                        .rounded(px(2.))
+                        .bg(gpui_kit::rgba(color)),
+                )
             })
             .when(can_reorder, |row| {
                 row.on_drag(

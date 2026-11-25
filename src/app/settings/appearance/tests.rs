@@ -30,6 +30,9 @@ fn theme_selection_preserves_mode_fonts_drafts_and_restores_saved_choices(cx: &m
     });
     // Drive the real select subscriptions, including a choice for the inactive mode.
     for (mode, name) in [
+        (ThemeMode::Light, "Graphite & Indigo"),
+        (ThemeMode::Light, "Warm Paper & Terracotta"),
+        (ThemeMode::Light, "Slate & Teal"),
         (ThemeMode::Light, "Catppuccin Latte"),
         (ThemeMode::Dark, "Tokyo Night"),
         (ThemeMode::Dark, "Catppuccin Mocha"),
@@ -83,6 +86,18 @@ fn theme_selection_preserves_mode_fonts_drafts_and_restores_saved_choices(cx: &m
             assert_eq!(Theme::global(cx).theme_name().as_ref(), expected);
             app.store.ui.appearance = AppearanceMode::Light;
             app.apply_appearance(window, cx);
+            for name in [
+                "Graphite & Indigo",
+                "Warm Paper & Terracotta",
+                "Slate & Teal",
+                "Catppuccin Latte",
+            ] {
+                app.select_theme(ThemeMode::Light, name, window, cx);
+                assert_eq!(app.store.ui.light_theme, name);
+                assert_eq!(Theme::global(cx).theme_name().as_ref(), name);
+                assert_eq!(Theme::global(cx).font_size, px(18.));
+                assert_eq!(app.input.read(cx).value().as_ref(), "retain this draft");
+            }
             assert_eq!(Theme::global(cx).theme_name().as_ref(), "Catppuccin Latte");
             // Read-only settings cannot alter the saved choice.
             app.writable = false;

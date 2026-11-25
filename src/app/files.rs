@@ -2504,10 +2504,12 @@ impl ConduitApp {
             };
             let workspace = self.tab_workspace(&tab);
             let workspace_color = match tab {
-                DocumentTab::Chat(_) => workspace
-                    .as_ref()
-                    .and_then(|path| self.store.ui.workspace_colors.get(path))
-                    .copied(),
+                DocumentTab::Chat(_) => workspace.as_ref().and_then(|path| {
+                    super::theme::project_marker_color(
+                        path,
+                        self.store.ui.workspace_colors.get(path).copied(),
+                    )
+                }),
                 _ => None,
             };
             let starts_group =

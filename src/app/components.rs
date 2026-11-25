@@ -35,6 +35,8 @@ pub(super) fn session_activity_dot(scope: &'static str, id: u64, running: bool) 
         .rounded_full()
         .bg(rgb(if running {
             palette().activity_running
+        } else if palette().restrained_projects {
+            palette().muted
         } else {
             palette().activity_completed
         }))

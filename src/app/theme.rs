@@ -7,6 +7,7 @@ use std::rc::Rc;
 /// Conduit themes retain their palettes for existing installations.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) struct Palette {
+    pub(super) restrained_projects: bool,
     pub(super) canvas: u32,
     pub(super) sidebar_bg: u32,
     pub(super) document_tab_bar_bg: u32,
@@ -37,6 +38,7 @@ pub(super) struct Palette {
     pub(super) warning_bg: u32,
     pub(super) warning_icon_bg: u32,
     pub(super) warning_text: u32,
+    pub(super) context_warning_fill: u32,
     pub(super) warning_chip_bg: u32,
     pub(super) warning_chip_text: u32,
     pub(super) warning_muted: u32,
@@ -48,6 +50,7 @@ pub(super) struct Palette {
 }
 
 const DARK_PALETTE: Palette = Palette {
+    restrained_projects: false,
     canvas: 0x0e0e10,
     sidebar_bg: 0x131315,
     document_tab_bar_bg: 0x1b1b1e,
@@ -78,6 +81,7 @@ const DARK_PALETTE: Palette = Palette {
     warning_bg: 0x1d1a14,
     warning_icon_bg: 0x2a2317,
     warning_text: 0xe3b96b,
+    context_warning_fill: 0xe3b96b,
     warning_chip_bg: 0x332b1b,
     warning_chip_text: 0xd6b26b,
     warning_muted: 0x9c9284,
@@ -89,6 +93,7 @@ const DARK_PALETTE: Palette = Palette {
 };
 
 const LIGHT_PALETTE: Palette = Palette {
+    restrained_projects: false,
     canvas: 0xf7f7f8,
     sidebar_bg: 0xf1f1f3,
     document_tab_bar_bg: 0xeaeaed,
@@ -119,6 +124,7 @@ const LIGHT_PALETTE: Palette = Palette {
     warning_bg: 0xfff8e9,
     warning_icon_bg: 0xf9eed2,
     warning_text: 0x8a5b00,
+    context_warning_fill: 0x8a5b00,
     warning_chip_bg: 0xf5e8c8,
     warning_chip_text: 0x785200,
     warning_muted: 0x8c7c5d,
@@ -169,6 +175,36 @@ pub(super) fn is_dark_mode() -> bool {
     DARK_MODE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Project identity is projected for the new light themes without rewriting saved colors.
+pub(super) fn project_marker_color(path: &std::path::Path, stored: Option<u32>) -> Option<u32> {
+    if !palette().restrained_projects {
+        return stored;
+    }
+    let hue = if let Some(color) = stored {
+        let color = gpui_kit::Hsla::from(gpui_kit::rgba(color));
+        if color.h < 0.12 || color.h > 0.84 {
+            0.70
+        } else {
+            color.h
+        }
+    } else {
+        let hash = path
+            .to_string_lossy()
+            .bytes()
+            .fold(2166136261_u32, |hash, byte| {
+                (hash ^ u32::from(byte)).wrapping_mul(16777619)
+            });
+        [0.62, 0.46, 0.70, 0.34, 0.54, 0.22][hash as usize % 6]
+    };
+    let color: gpui_kit::Rgba = gpui_kit::hsla(hue, 0.28, 0.52, 1.).into();
+    Some(
+        ((color.r * 255.).round() as u32) << 24
+            | ((color.g * 255.).round() as u32) << 16
+            | ((color.b * 255.).round() as u32) << 8
+            | 255,
+    )
+}
+
 pub(crate) fn set_palette(mode: gpui_kit::component::ThemeMode) {
     DARK_MODE.store(mode.is_dark(), std::sync::atomic::Ordering::Relaxed);
     *ACTIVE_PALETTE.write().unwrap_or_else(|e| e.into_inner()) = palette_for_mode(mode);
@@ -184,6 +220,7 @@ pub(super) fn palette_for_mode(mode: gpui_kit::component::ThemeMode) -> Palette 
 
 const THEME_PACKS: &[&str] = &[
     include_str!("../../assets/themes/conduit.json"),
+    include_str!("../../assets/themes/conduit-lights.json"),
     include_str!("../../assets/themes/adventure.json"),
     include_str!("../../assets/themes/alduin.json"),
     include_str!("../../assets/themes/asciinema.json"),
@@ -352,6 +389,10 @@ fn readable(color: u32, backgrounds: &[u32]) -> u32 {
 }
 
 fn palette_from_theme(theme: &Theme) -> Palette {
+    let restrained_projects = matches!(
+        theme.theme_name().as_ref(),
+        "Graphite & Indigo" | "Warm Paper & Terracotta" | "Slate & Teal"
+    );
     let canvas = color_on(theme.background, if theme.is_dark() { 0 } else { 0xffffff });
     let surface = color_on(theme.popover, canvas);
     let sidebar_bg = color_on(theme.tab_bar, canvas);
@@ -373,6 +414,7 @@ fn palette_from_theme(theme: &Theme) -> Palette {
     let danger = readable(color_on(theme.danger, canvas), &backgrounds);
     let warning = readable(color_on(theme.warning, canvas), &backgrounds);
     Palette {
+        restrained_projects,
         canvas,
         sidebar_bg,
         document_tab_bar_bg,
@@ -388,8 +430,16 @@ fn palette_from_theme(theme: &Theme) -> Palette {
         activity_completed: success,
         focus: color_on(theme.ring, canvas),
         on_text: canvas,
-        highlight_text: warning,
-        highlight_bg: blend(warning, canvas, 0.12),
+        highlight_text: if restrained_projects {
+            primary
+        } else {
+            warning
+        },
+        highlight_bg: if restrained_projects {
+            color_on(theme.list_active, canvas)
+        } else {
+            blend(warning, canvas, 0.12)
+        },
         diff_add_text: success,
         diff_remove_text: danger,
         inline_code_bg: color_on(theme.secondary, canvas),
@@ -403,6 +453,11 @@ fn palette_from_theme(theme: &Theme) -> Palette {
         warning_bg: blend(warning, canvas, 0.06),
         warning_icon_bg: blend(warning, canvas, 0.12),
         warning_text: warning,
+        context_warning_fill: if restrained_projects {
+            0xd98a12
+        } else {
+            warning
+        },
         warning_chip_bg: blend(warning, canvas, 0.12),
         warning_chip_text: warning,
         warning_muted: muted,
