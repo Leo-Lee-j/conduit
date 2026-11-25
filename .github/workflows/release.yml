@@ -119,6 +119,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           if ($env:RELEASE_TAG -notmatch '^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') { throw 'A stable vX.Y.Z tag is required.' }
+          ./scripts/prepare-release-notes.ps1 -Tag $env:RELEASE_TAG
           if ($env:GITHUB_REPOSITORY -cne 'Leo-Lee-j/conduit') { throw 'Update repository must match src/update.rs before releasing a fork.' }
           $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
           if ($LASTEXITCODE) { throw 'Cargo metadata failed.' }
@@ -195,35 +196,13 @@ jobs:
           artifact-ids: ${{ needs.build.outputs.artifact-id }}
           merge-multiple: true
           path: target
-      - name: Generate release notes and sign manifest
+      - name: Prepare release notes and sign manifest
         shell: pwsh
         env:
           CONDUIT_UPDATE_PRIVATE_KEY: ${{ secrets.CONDUIT_UPDATE_PRIVATE_KEY }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $payload = @{ tag_name = $env:RELEASE_TAG } | ConvertTo-Json
-          [IO.File]::WriteAllText('target/notes-request.json', $payload)
-          $notes = gh api --method POST "repos/$env:GITHUB_REPOSITORY/releases/generate-notes" --input target/notes-request.json | ConvertFrom-Json
-          if ($LASTEXITCODE) { throw 'Release note generation failed.' }
-          # GitHub's generated notes list PRs; direct-commit releases need a fallback.
-          if ($notes.body -notmatch '(?m)^[-*]\s') {
-            $published = gh release list --json tagName,isDraft --limit 100 | ConvertFrom-Json
-            if ($LASTEXITCODE) { throw 'Cannot inspect published releases.' }
-            $previous = @($published | Where-Object {
-              -not $_.isDraft -and $_.tagName -match '^v\d+\.\d+\.\d+$' -and
-              [version]$_.tagName.Substring(1) -lt [version]$env:RELEASE_TAG.Substring(1)
-            } | Sort-Object { [version]$_.tagName.Substring(1) } -Descending | Select-Object -First 1)
-            if ($previous.Count -eq 0) {
-              $readme = Get-Content -LiteralPath README.md -Raw
-              $features = [regex]::Match($readme, '(?s)## 功能\s*(.*?)\s*## ').Groups[1].Value.Trim()
-              $notes.body = "Conduit 首个公开版本，支持 Windows x64。`n`n## 功能`n`n$features`n`n$($notes.body)"
-            } else {
-              $commits = @(git log --no-merges --format='- %s (%h)' "$($previous[0].tagName)..$env:RELEASE_TAG")
-              if ($LASTEXITCODE) { throw 'Cannot generate commit changelog.' }
-              $notes.body = "## 更新内容`n`n$($commits -join "`n")`n`n$($notes.body)"
-            }
-          }
-          [IO.File]::WriteAllText('target/dist/release-notes.md', $notes.body)
+          ./scripts/prepare-release-notes.ps1 -Tag $env:RELEASE_TAG -OutputPath target/dist/release-notes.md
           $installer = "target/dist/Conduit-$($env:RELEASE_TAG.Substring(1))-windows-x64-setup.exe"
           & ./target/release/release-manifest.exe $installer target/dist/release-notes.md
           if ($LASTEXITCODE) { throw 'Manifest signing failed.' }
