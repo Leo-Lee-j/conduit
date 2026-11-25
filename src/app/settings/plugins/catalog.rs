@@ -5,49 +5,42 @@ impl ConduitApp {
     pub(in crate::app::settings) fn settings_plugins_content(
         &self,
         view: Entity<Self>,
-    ) -> AnyElement {
+    ) -> SettingsContent {
         let discover = self.plugins.packages.catalog.discover;
         let installed_view = view.clone();
         let discovery_view = view.clone();
-        v_flex()
-            .h_full()
-            .min_h_0()
-            .w_full()
+        let toolbar = h_flex()
+            .px_4()
+            .pt_3()
+            .pb_2()
+            .gap_2()
             .child(
-                h_flex()
-                    .px_4()
-                    .pt_3()
-                    .pb_2()
-                    .gap_2()
-                    .child(
-                        Button::new("plugins-installed-tab")
-                            .debug_selector(|| "plugins-installed-tab".into())
-                            .label(text("installed_tab"))
-                            .selected(!discover)
-                            .on_click(move |_, _, cx| {
-                                installed_view.update(cx, |app, cx| {
-                                    app.plugins.packages.catalog.discover = false;
-                                    cx.notify();
-                                });
-                            }),
-                    )
-                    .child(
-                        Button::new("plugins-discover-tab")
-                            .debug_selector(|| "plugins-discover-tab".into())
-                            .label(text("discover_tab"))
-                            .selected(discover)
-                            .on_click(move |_, window, cx| {
-                                discovery_view
-                                    .update(cx, |app, cx| app.show_plugin_discovery(window, cx));
-                            }),
-                    ),
+                Button::new("plugins-installed-tab")
+                    .debug_selector(|| "plugins-installed-tab".into())
+                    .label(text("installed_tab"))
+                    .selected(!discover)
+                    .on_click(move |_, _, cx| {
+                        installed_view.update(cx, |app, cx| {
+                            app.plugins.packages.catalog.discover = false;
+                            cx.notify();
+                        });
+                    }),
             )
-            .child(div().flex_1().min_h_0().w_full().child(if discover {
-                self.settings_plugin_catalog(view)
-            } else {
-                self.settings_installed_plugins_content(view)
-            }))
-            .into_any_element()
+            .child(
+                Button::new("plugins-discover-tab")
+                    .debug_selector(|| "plugins-discover-tab".into())
+                    .label(text("discover_tab"))
+                    .selected(discover)
+                    .on_click(move |_, window, cx| {
+                        discovery_view.update(cx, |app, cx| app.show_plugin_discovery(window, cx));
+                    }),
+            );
+        SettingsContent::new(if discover {
+            self.settings_plugin_catalog(view)
+        } else {
+            self.settings_installed_plugins_content(view)
+        })
+        .with_toolbar(toolbar)
     }
     fn settings_plugin_catalog(&self, view: Entity<Self>) -> AnyElement {
         let state = &self.plugins.packages.catalog;
@@ -74,15 +67,7 @@ impl ConduitApp {
                     }),
             );
         }
-        let mut list = v_flex()
-            .id("plugin-catalog-list")
-            .debug_selector(|| "plugin-catalog-list".into())
-            .h_full()
-            .min_h_0()
-            .w_full()
-            .overflow_y_scroll()
-            .p_4()
-            .gap_4()
+        let mut list = settings_scroll_area("plugin-catalog-list")
             .child(
                 v_flex()
                     .gap_2()
@@ -205,14 +190,8 @@ impl ConduitApp {
             list = list.child(
                 v_flex()
                     .id(SharedString::from(format!("catalog-{key}")))
-                    .p_4()
+                    .refine_style(&settings_group_style())
                     .gap_2()
-                    .rounded_md()
-                    .bg(rgb(if is_dark_mode() {
-                        palette().surface_strong
-                    } else {
-                        palette().surface_hover
-                    }))
                     .child(
                         h_flex()
                             .flex_wrap()

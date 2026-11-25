@@ -31,9 +31,80 @@ enum Body {
     Messages { messages: Vec<Arc<Message>> },
 }
 
+/// What a save receipt keeps for one message: the chunk hashes of large fields.
+/// Inline fields are not copied, because the receipt only matches the exact
+/// immutable ChatItem that already holds them.
+#[derive(Debug)]
+pub(super) struct Part {
+    text: Option<Text>,
+    input: Option<Text>,
+    detail: Option<Text>,
+}
+
+impl Part {
+    fn new(message: &Message) -> Self {
+        let chunked = |text: &Text| matches!(text, Text::Chunks { .. }).then(|| text.clone());
+        Self {
+            text: chunked(&message.text),
+            input: chunked(&message.input),
+            detail: chunked(&message.detail),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn chunked_fields(&self) -> usize {
+        [&self.text, &self.input, &self.detail]
+            .into_iter()
+            .flatten()
+            .count()
+    }
+
+    fn chunk_hashes(&self) -> impl Iterator<Item = &String> {
+        [&self.text, &self.input, &self.detail]
+            .into_iter()
+            .flatten()
+            .flat_map(|text| match text {
+                Text::Chunks { hashes, .. } => hashes.as_slice(),
+                Text::Inline(_) => &[],
+            })
+    }
+
+    /// Serializable form of an unchanged message, rebuilt only while a page is written.
+    fn message(&self, item: &ChatItem) -> Message {
+        let field = |saved: &Option<Text>, value: &str| {
+            saved
+                .clone()
+                .unwrap_or_else(|| Text::Inline(value.to_owned()))
+        };
+        Message {
+            metadata: metadata(item),
+            text: field(&self.text, &item.text),
+            input: field(&self.input, &item.input),
+            detail: field(&self.detail, &item.detail),
+        }
+    }
+}
+
+/// Copy metadata explicitly so large input/output strings are never cloned here.
+fn metadata(item: &ChatItem) -> ChatItemData {
+    ChatItemData {
+        reasoning_summary: item.reasoning_summary,
+        key: item.key.clone(),
+        kind: item.kind.clone(),
+        created_at: item.created_at,
+        elapsed_ms: item.elapsed_ms,
+        status: item.status.clone(),
+        approval: item.approval.clone(),
+        model: item.model.clone(),
+        text: String::new(),
+        input: String::new(),
+        detail: String::new(),
+    }
+}
+
 pub(super) struct Prepared {
     pub reference: Reference,
-    pub parts: Vec<Arc<Message>>,
+    pub parts: Vec<Arc<Part>>,
     pub pages: Vec<String>,
     // Pins staged children until the root has a lease and is durably published.
     _guards: Vec<Arc<Lease>>,
@@ -76,22 +147,8 @@ impl Writer<'_> {
     }
 
     fn message(&mut self, item: &ChatItem) -> Result<Arc<Message>> {
-        // Copy metadata explicitly so large input/output strings are never cloned here.
-        let metadata = ChatItemData {
-            reasoning_summary: item.reasoning_summary,
-            key: item.key.clone(),
-            kind: item.kind.clone(),
-            created_at: item.created_at,
-            elapsed_ms: item.elapsed_ms,
-            status: item.status.clone(),
-            approval: item.approval.clone(),
-            model: item.model.clone(),
-            text: String::new(),
-            input: String::new(),
-            detail: String::new(),
-        };
         Ok(Arc::new(Message {
-            metadata,
+            metadata: metadata(item),
             text: self.text(&item.text)?,
             input: self.text(&item.input)?,
             detail: self.text(&item.detail)?,
@@ -115,26 +172,38 @@ pub(super) fn prepare(
     if let Some(previous) = previous {
         for (identity, part) in previous.messages.iter().zip(&previous.parts) {
             reusable.insert(identity.as_ptr(), part);
-            for text in [&part.text, &part.input, &part.detail] {
-                if let Text::Chunks { hashes, .. } = text {
-                    writer.known.extend(hashes.iter().cloned());
-                }
-            }
+            writer.known.extend(part.chunk_hashes().cloned());
         }
     }
+    // Messages written by this save keep their serialized form until the save ends.
+    let mut written = Vec::with_capacity(session.messages.len());
     let parts = session
         .messages
         .iter()
         .map(|item| {
-            reusable
-                .get(&item.identity().as_ptr())
-                .map_or_else(|| writer.message(item), |part| Ok((*part).clone()))
+            if let Some(part) = reusable.get(&item.identity().as_ptr()) {
+                written.push(None);
+                return Ok(Arc::clone(part));
+            }
+            let message = writer.message(item)?;
+            let part = Arc::new(Part::new(&message));
+            written.push(Some(message));
+            Ok(part)
         })
         .collect::<Result<Vec<_>>>()?;
+    let messages = |range: std::ops::Range<usize>| -> Vec<Arc<Message>> {
+        range
+            .map(|index| {
+                written[index]
+                    .clone()
+                    .unwrap_or_else(|| Arc::new(parts[index].message(&session.messages[index])))
+            })
+            .collect()
+    };
     let mut page_hashes = Vec::new();
     let root = if parts.len() <= PAGE_MESSAGES {
         Body::Messages {
-            messages: parts.clone(),
+            messages: messages(0..parts.len()),
         }
     } else {
         let pages = parts
@@ -163,7 +232,7 @@ pub(super) fn prepare(
                     return Ok(hash.clone());
                 }
                 let bytes = serde_json::to_vec(&Body::Messages {
-                    messages: page.to_vec(),
+                    messages: messages(start..start + page.len()),
                 })?;
                 writer.blob(&bytes, "json")
             })
@@ -214,6 +283,13 @@ fn checked(directory: &Path, hash: &str, extension: &str) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+fn take_text(directory: &Path, text: Text) -> Result<String> {
+    match text {
+        Text::Inline(text) => Ok(text),
+        chunks => read_text(directory, &chunks),
+    }
+}
+
 fn read_text(directory: &Path, text: &Text) -> Result<String> {
     match text {
         Text::Inline(text) => Ok(text.clone()),
@@ -249,7 +325,7 @@ fn read_text(directory: &Path, text: &Text) -> Result<String> {
 
 pub(super) struct Loaded {
     pub messages: Vec<ChatItem>,
-    pub parts: Vec<Arc<Message>>,
+    pub parts: Vec<Arc<Part>>,
     pub pages: Vec<String>,
 }
 
@@ -307,19 +383,26 @@ pub(super) fn read(reference: &Reference) -> Result<Loaded> {
             "transcript.chunks.session_messages_do_not_match_the_summary"
         ));
     }
-    let messages = parts
-        .iter()
-        .map(|part| {
-            let mut item = part.metadata.clone();
-            item.text = read_text(&reference.directory, &part.text)?;
-            item.input = read_text(&reference.directory, &part.input)?;
-            item.detail = read_text(&reference.directory, &part.detail)?;
-            Ok(item.into())
-        })
-        .collect::<Result<Vec<_>>>()?;
+    // Inline text moves into the message; the receipt keeps only chunk hashes.
+    let mut messages = Vec::with_capacity(parts.len());
+    let mut receipt = Vec::with_capacity(parts.len());
+    for part in parts {
+        let part = Arc::try_unwrap(part).unwrap_or_else(|shared| (*shared).clone());
+        receipt.push(Arc::new(Part::new(&part)));
+        let Message {
+            metadata: mut item,
+            text,
+            input,
+            detail,
+        } = part;
+        item.text = take_text(&reference.directory, text)?;
+        item.input = take_text(&reference.directory, input)?;
+        item.detail = take_text(&reference.directory, detail)?;
+        messages.push(item.into());
+    }
     Ok(Loaded {
         messages,
-        parts,
+        parts: receipt,
         pages: page_hashes,
     })
 }

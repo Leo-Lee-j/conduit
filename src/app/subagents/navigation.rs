@@ -216,7 +216,7 @@ impl ConduitApp {
         match root.provider {
             Provider::Claude => self.routed_agent(key)?.conversation_id.clone(),
             Provider::Codex | Provider::OpenCode => Some(key.agent.clone()),
-            Provider::Qoder => None,
+            Provider::Qoder | Provider::Gemini => None,
         }
     }
 
@@ -806,8 +806,8 @@ impl ConduitApp {
                         .min_w_0()
                         .rounded(px(8.))
                         .bg(rgb(palette().surface_hover))
-                        .px_4()
-                        .py_3()
+                        .px(px(super::super::chat::CHAT_CARD_INSET_X))
+                        .py(px(super::super::chat::CHAT_CARD_INSET_Y))
                         .child(message),
                 )
                 .into_any_element(),

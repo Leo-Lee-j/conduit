@@ -1,16 +1,31 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Snapshot of a history file's metadata, used to skip unchanged files during startup import.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryFileStamp {
+    pub len: u64,
+    pub modified: Option<u128>,
+    pub created: Option<u128>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum Provider {
     Claude,
     Codex,
     OpenCode,
     Qoder,
+    Gemini,
 }
 
 impl Provider {
-    pub const ALL: [Self; 4] = [Self::Claude, Self::Codex, Self::OpenCode, Self::Qoder];
+    pub const ALL: [Self; 5] = [
+        Self::Claude,
+        Self::Codex,
+        Self::OpenCode,
+        Self::Qoder,
+        Self::Gemini,
+    ];
     pub fn label(self) -> &'static str {
         self.descriptor().label
     }
@@ -34,7 +49,7 @@ impl Provider {
 pub enum PermissionLevel {
     /// View only: Codex read-only sandbox.
     ReadOnly,
-    /// Read plus edits inside the workspace (default).
+    /// Workspace operations and network access, without filesystem escalation (default).
     #[default]
     WorkspaceWrite,
     /// Unrestricted filesystem/network access; shown with a warning.
@@ -51,14 +66,38 @@ impl PermissionLevel {
         }
     }
 
+    pub fn description(self) -> &'static str {
+        conduit::i18n::text_static(match self {
+            Self::ReadOnly => "domain.read_only_description",
+            Self::WorkspaceWrite => "domain.workspace_write_description",
+            Self::FullAccess => "domain.full_access_description",
+        })
+    }
+
+    pub fn description_for(self, provider: Provider) -> &'static str {
+        match (provider, self) {
+            (Provider::Gemini, Self::ReadOnly) => {
+                conduit::i18n::text_static("gemini.permission_read_only")
+            }
+            (Provider::Gemini, Self::WorkspaceWrite) => {
+                conduit::i18n::text_static("gemini.permission_ask")
+            }
+            (Provider::Gemini, Self::FullAccess) => {
+                conduit::i18n::text_static("gemini.permission_full_access")
+            }
+            _ => self.description(),
+        }
+    }
+
     pub fn codex_approval_policy(self) -> serde_json::Value {
-        let filesystem_approvals = self == Self::WorkspaceWrite;
         // `never` also rejects native MCP confirmations before they reach us.
+        // Workspace chat runs freely inside its sandbox; an approval must not
+        // turn that workspace grant into unrestricted filesystem access.
         serde_json::json!({"granular": {
-            "sandbox_approval": filesystem_approvals,
-            "rules": filesystem_approvals,
+            "sandbox_approval": false,
+            "rules": false,
             "skill_approval": false,
-            "request_permissions": filesystem_approvals,
+            "request_permissions": false,
             "mcp_elicitations": true
         }})
     }
@@ -80,9 +119,22 @@ impl PermissionLevel {
     }
 }
 
+/// Token counts for one native request, which need not be a whole user turn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestUsage {
+    pub input: Option<u64>,
+    pub cached: Option<u64>,
+    pub cache_write: Option<u64>,
+    pub output: Option<u64>,
+}
+
 /// Cumulative consumption and an independent latest-request context snapshot.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Usage {
+    /// Latest request recovered from CLI history. Marks this snapshot as a
+    /// historical fallback; live usage replaces it and uses the local ledger.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<RequestUsage>,
     #[serde(default)]
     pub input_tokens_known: bool,
     #[serde(default)]
@@ -91,6 +143,9 @@ pub struct Usage {
     pub output_tokens_known: bool,
     pub input_tokens: u64,
     pub cached_input_tokens: u64,
+    /// Cache writes are included in input; absent when the provider does not report them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_input_tokens: Option<u64>,
     pub output_tokens: u64,
     pub total_tokens: u64,
     /// Model context window; 0 when the CLI has not reported it.
@@ -154,6 +209,8 @@ impl Usage {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_list: Option<crate::task_list::Snapshot>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub subagents: Vec<crate::subagents::Agent>,
     /// Native child conversations stay available to their parent, outside workspace lists.

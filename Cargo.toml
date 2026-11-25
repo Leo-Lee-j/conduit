@@ -1,12 +1,18 @@
 [package]
 name = "conduit"
-version = "0.3.15"
+version = "0.3.21"
 edition = "2024"
 license = "GPL-3.0-only"
 publish = false
 default-run = "conduit"
 
+[workspace]
+members = ["crates/pet-core"]
+exclude = ["vendor/gpui-kit", "vendor/gpui-pre-windows"]
+resolver = "3"
+
 [dependencies]
+pet-core = { path = "crates/pet-core" }
 anyhow = "1"
 rust-i18n = "=4.2.4"
 alacritty_terminal = { version = "=0.25.1", default-features = false }
@@ -23,7 +29,7 @@ toml = "0.8"
 toml_edit = "0.22.27"
 two-face = { version = "0.4.5", default-features = false, features = ["syntect-fancy"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_System_Console", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_ProcessStatus", "Win32_Security", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_System_Console", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_ProcessStatus", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_UI_Input_KeyboardAndMouse"] }
 ureq = { version = "3", default-features = false, features = ["json", "rustls", "platform-verifier", "win-system-proxy"] }
 base64 = "0.22"
 ed25519-dalek = "2.2"
@@ -75,3 +81,7 @@ opt-level = 2
 [patch."https://github.com/longbridge/gpui-kit.git"]
 gpui-base = { path = "vendor/gpui-kit/crates/base" }
 gpui-component = { path = "vendor/gpui-kit/crates/component" }
+
+# Windows renderer with on-demand path textures; see vendor/gpui-pre-windows/CONDUIT.md.
+[patch.crates-io]
+gpui-pre-windows = { path = "vendor/gpui-pre-windows" }

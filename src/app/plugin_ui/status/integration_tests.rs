@@ -77,8 +77,16 @@ fn record(
     _: &mut Window,
     cx: &mut Context<ConduitApp>,
 ) -> bool {
-    app.message = Some(format!("{:?}:{}", request.origin(), request.command()));
-    cx.notify();
+    app.notify_user(
+        crate::notifications::Notice::new(
+            crate::notifications::Source::App,
+            crate::notifications::Level::Info,
+            "Plugin command",
+            format!("{:?}:{}", request.origin(), request.command()),
+        )
+        .presentation(crate::notifications::Presentation::History),
+        cx,
+    );
     true
 }
 

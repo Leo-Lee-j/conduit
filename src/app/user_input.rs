@@ -91,7 +91,9 @@ pub(super) fn history_text(approval: &ToolApproval) -> String {
 
 /// Natural-height question content shared by the transcript and details dock.
 pub(super) fn history_content(scope: &str, approval: &ToolApproval) -> AnyElement {
+    let history_id = format!("{scope}-question-history");
     let mut content = v_flex()
+        .debug_selector(move || history_id.clone())
         .w_full()
         .min_w_0()
         .p_4()
@@ -225,6 +227,7 @@ mod tests {
                     workspaces: vec![Workspace {
                         path: std::env::temp_dir(),
                         sessions: vec![SessionRecord {
+                            task_list: None,
                             subagents: Default::default(),
                             is_subagent: false,
                             branching: Default::default(),
@@ -732,9 +735,19 @@ impl ConduitApp {
                             run.runtime.answer(submit_id.clone(), answers);
                             run.status =
                                 conduit::i18n::text_static("user_input.submitting_answer").into();
-                            if this.viewing_subagent() {
+                            if this.reference_chat() == Some(session)
+                                && this.reference_pane_visible()
+                            {
+                                if let Some(view) = this.reference_chat_view(session) {
+                                    view.read(cx)
+                                        .input
+                                        .read(cx)
+                                        .focus_handle(cx)
+                                        .focus(window, cx);
+                                }
+                            } else if this.viewing_subagent() {
                                 this.focus_subagent_page(window, cx);
-                            } else {
+                            } else if this.selected_session == Some(session) {
                                 this.input.read(cx).focus_handle(cx).focus(window, cx);
                             }
                             cx.notify();
@@ -751,6 +764,9 @@ impl ConduitApp {
             .into_any_element()
     }
 }
+
+#[cfg(all(test, feature = "ui-tests"))]
+mod focus_tests;
 
 #[cfg(test)]
 mod history_tests {

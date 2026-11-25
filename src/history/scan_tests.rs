@@ -36,6 +36,7 @@ impl Fixture {
         Scanner::open(
             Some(&self.root),
             vec![self.workspace.clone()],
+            Vec::new(),
             &self.index,
             Some(&self.opencode_path()),
             &AtomicBool::new(false),
@@ -47,11 +48,9 @@ impl Fixture {
         let mut batch = scanner.next(&cancel);
         while !batch.done {
             let next = scanner.next(&cancel);
+            batch.merge_read_metrics(&next);
             batch.sessions[0].extend(next.sessions.into_iter().next().unwrap());
             batch.warnings.extend(next.warnings);
-            batch.bytes_read += next.bytes_read;
-            batch.verified_bytes += next.verified_bytes;
-            batch.cache_hits += next.cache_hits;
             batch.completed = next.completed;
             batch.done = next.done;
         }
@@ -107,6 +106,48 @@ impl Drop for Fixture {
         let _ = std::fs::remove_dir_all(&self.root);
     }
 }
+
+#[test]
+fn parser_upgrade_restores_usage_even_when_old_history_stamps_match() {
+    let fixture = Fixture::new();
+    let path = fixture.file(Provider::Codex, "usage");
+    std::fs::write(
+        &path,
+        super::usage_tests::codex_lines(&fixture.workspace, 1000, 100),
+    )
+    .unwrap();
+    let first = fixture.scan();
+    assert_eq!(first.sessions[0][0].usage.context_tokens, Some(105));
+    {
+        let connection = rusqlite::Connection::open(&fixture.index).unwrap();
+        connection
+            .execute(
+                "UPDATE history_files SET metadata = json_set(metadata, '$.version', 9)",
+                [],
+            )
+            .unwrap();
+    }
+    let mut scanner = Scanner::open(
+        Some(&fixture.root),
+        vec![fixture.workspace.clone()],
+        first.file_stamps,
+        &fixture.index,
+        None,
+        &AtomicBool::new(false),
+    );
+    let mut imported = Vec::new();
+    loop {
+        let batch = scanner.next(&AtomicBool::new(false));
+        assert!(batch.warnings.is_empty());
+        imported.extend(batch.sessions.into_iter().flatten());
+        if batch.done {
+            break;
+        }
+    }
+    assert_eq!(imported.len(), 1);
+    assert_eq!(imported[0].usage.context_tokens, Some(105));
+    assert_eq!(imported[0].usage.input_tokens, 1000);
+}
 fn append(path: &Path, text: &str) {
     File::options()
         .append(true)
@@ -155,6 +196,40 @@ fn opencode_part(
             ],
         )
         .unwrap();
+}
+
+#[test]
+fn opencode_usage_is_not_multiplied_by_message_parts_or_repeated_scans() {
+    let fixture = Fixture::new();
+    let connection = fixture.opencode();
+    opencode_session(&connection, &fixture, "usage");
+    connection
+        .execute(
+            "INSERT INTO message VALUES ('reply', 'usage', 1791619301390, ?1)",
+            [serde_json::json!({"role":"assistant","tokens":{
+                "input":10,"output":5,"reasoning":3,"cache":{"read":80,"write":10}
+            }})
+            .to_string()],
+        )
+        .unwrap();
+    for index in 1..=150 {
+        opencode_part(
+            &connection,
+            "usage",
+            "reply",
+            &index.to_string(),
+            serde_json::json!({"type":"text","text":"part"}),
+        );
+    }
+    for _ in 0..2 {
+        let batch = fixture.scan();
+        assert!(batch.warnings.is_empty());
+        let usage = batch.sessions[0][0].usage;
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 5);
+        assert_eq!(usage.history.unwrap().cached, Some(80));
+        assert_eq!(usage.context_tokens, Some(108));
+    }
 }
 
 #[test]
@@ -225,6 +300,14 @@ fn opencode_history_joins_cli_imports_without_duplicates_or_source_writes() {
     let original = std::fs::read(fixture.opencode_path()).unwrap();
     let cold = fixture.scan();
     assert!(cold.warnings.is_empty(), "{:?}", cold.warnings);
+    assert!(cold.opencode_bytes > 0);
+    assert_eq!(
+        cold.bytes_read,
+        cold.claude_parse_bytes
+            + cold.codex_parse_bytes
+            + cold.codex_probe_bytes
+            + cold.opencode_bytes
+    );
     assert_eq!(
         cold.sessions[0].len(),
         3,
@@ -504,6 +587,8 @@ fn reclassifying_an_existing_subagent_preserves_metadata_and_cold_body_without_i
         "messages":[{"key":"local-reply", "kind":"Assistant", "text":"Locally preserved reply", "elapsed_ms":1234}]
     })).unwrap();
     let incoming = ImportedSession {
+        usage: Default::default(),
+        task_list: None,
         is_subagent: true,
         provider: Provider::Codex,
         native_id: "child".into(),
@@ -557,16 +642,22 @@ fn persistent_cache_and_append_match_a_fresh_claude_parse() {
     let cold = fixture.scan();
     assert!(cold.warnings.is_empty(), "{:?}", cold.warnings);
     assert_eq!(cold.bytes_read, first.len() as u64);
+    assert_eq!(cold.claude_parse_bytes, first.len() as u64);
+    assert_eq!(cold.codex_parse_bytes, 0);
     let warm = fixture.scan();
     assert_eq!(warm.bytes_read, 0);
     assert_eq!(warm.verified_bytes, 0);
     assert_eq!(warm.cache_hits, 1);
+    assert_eq!(warm.claude_cache_hits, 1);
+    assert_eq!(warm.codex_cache_hits, 0);
     assert_eq!(messages(&cold), messages(&warm));
     let suffix = fixture.claude("native", "second");
     append(&path, &suffix);
     let incremental = fixture.scan();
     assert_eq!(incremental.bytes_read, suffix.len() as u64);
     assert_eq!(incremental.verified_bytes, first.len() as u64);
+    assert_eq!(incremental.claude_verified_bytes, first.len() as u64);
+    assert_eq!(incremental.codex_verified_bytes, 0);
     let expected = parse_claude_lines((first + &suffix).lines().map(str::to_owned))
         .unwrap()
         .1;
@@ -588,7 +679,14 @@ fn codex_incremental_state_preserves_fallback_dedup_and_turn_timing() {
         serde_json::json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}}),
     ].iter().map(|value| format!("{value}\n")).collect::<String>();
     std::fs::write(&path, &first).unwrap();
-    assert_eq!(fixture.scan().sessions[0][0].messages.len(), 2);
+    let initial = fixture.scan();
+    assert_eq!(initial.sessions[0][0].messages.len(), 2);
+    assert_eq!(initial.codex_parse_bytes, first.len() as u64);
+    assert_eq!(initial.codex_probe_bytes, first.len() as u64);
+    assert_eq!(initial.claude_parse_bytes, 0);
+    let warm = fixture.scan();
+    assert_eq!(warm.codex_cache_hits, 1);
+    assert_eq!(warm.bytes_read, 0);
     let suffix = [
         serde_json::json!({"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","id":"answer","text":"answer"}}}),
         serde_json::json!({"type":"event_msg","timestamp":"2026-11-04T00:00:02Z","payload":{"type":"task_complete","turn_id":"turn"}}),
@@ -685,6 +783,7 @@ fn workspace_index_filters_foreign_sessions_but_allows_later_workspace_import() 
     let mut other = Scanner::open(
         Some(&fixture.root),
         vec![fixture.root.join("other")],
+        Vec::new(),
         &fixture.index,
         None,
         &cancel,
@@ -694,6 +793,7 @@ fn workspace_index_filters_foreign_sessions_but_allows_later_workspace_import() 
     let mut other = Scanner::open(
         Some(&fixture.root),
         vec![fixture.root.join("other")],
+        Vec::new(),
         &fixture.index,
         None,
         &cancel,
@@ -948,4 +1048,85 @@ fn a_file_changed_between_batches_is_retried_without_publishing_partial_messages
     assert!(result.done);
     assert!(result.warnings.is_empty());
     assert_eq!(result.sessions[0][0].messages[0].text, "new");
+}
+
+#[test]
+fn skips_unchanged_files_on_second_scan() {
+    let _locale = crate::test_support::chinese();
+    let fixture = Fixture::new();
+    let path = fixture.file(Provider::Claude, "conversation");
+    let content = fixture.claude("native-id", "first message");
+    std::fs::write(&path, &content).unwrap();
+
+    let first = fixture.scan();
+    assert_eq!(first.sessions[0].len(), 1);
+    assert_eq!(first.skipped, 0);
+    assert!(first.bytes_read > 0);
+    assert!(!first.file_stamps[0].is_empty());
+    let stamp = first.file_stamps[0].get(&path).cloned().unwrap();
+
+    let mut second_scanner = Scanner::open(
+        Some(&fixture.root),
+        vec![fixture.workspace.clone()],
+        vec![first.file_stamps.into_iter().next().unwrap()],
+        &fixture.index,
+        Some(&fixture.opencode_path()),
+        &AtomicBool::new(false),
+    );
+    let cancel = AtomicBool::new(false);
+    let mut second = second_scanner.next(&cancel);
+    while !second.done {
+        let next = second_scanner.next(&cancel);
+        second.merge_read_metrics(&next);
+        second.sessions[0].extend(next.sessions.into_iter().next().unwrap());
+        second.warnings.extend(next.warnings);
+        second.completed = next.completed;
+        second.done = next.done;
+    }
+
+    assert_eq!(
+        second.sessions[0].len(),
+        0,
+        "skipped file should not emit sessions"
+    );
+    assert_eq!(second.skipped, 1);
+    assert_eq!(second.bytes_read, 0);
+    assert_eq!(second.verified_bytes, 0);
+    assert!(
+        second.file_stamps[0].is_empty(),
+        "skipped files don't write new stamps"
+    );
+
+    // Change the file: third scan should reparse.
+    std::fs::write(
+        &path,
+        format!(
+            "{}{}",
+            content,
+            fixture.claude("native-id", "second message")
+        ),
+    )
+    .unwrap();
+    let mut third_scanner = Scanner::open(
+        Some(&fixture.root),
+        vec![fixture.workspace.clone()],
+        vec![[(path.clone(), stamp)].into_iter().collect()],
+        &fixture.index,
+        Some(&fixture.opencode_path()),
+        &AtomicBool::new(false),
+    );
+    let mut third = third_scanner.next(&cancel);
+    while !third.done {
+        let batch = third_scanner.next(&cancel);
+        third.merge_read_metrics(&batch);
+        third.sessions[0].extend(batch.sessions.into_iter().next().unwrap());
+        third.warnings.extend(batch.warnings);
+        third.completed = batch.completed;
+        third.done = batch.done;
+    }
+
+    assert_eq!(third.sessions[0].len(), 1, "changed file should reparse");
+    assert_eq!(third.skipped, 0);
+    assert!(third.bytes_read > 0);
+    assert!(!third.file_stamps[0].is_empty());
 }

@@ -79,11 +79,12 @@ const NAV_SELECTORS: [&str; 12] = [
     "settings-nav-10",
     "settings-nav-11",
 ];
-const DEFAULT_CHANNEL_SELECTORS: [&str; 4] = [
+const DEFAULT_CHANNEL_SELECTORS: [&str; Provider::ALL.len()] = [
     "default-channel-0",
     "default-channel-1",
     "default-channel-2",
     "default-channel-3",
+    "default-channel-4",
 ];
 
 fn click(cx: &mut VisualTestContext, selector: &'static str) {
@@ -337,6 +338,7 @@ fn settings_redesign_legacy_naming_route_and_migrated_search_reveal_real_targets
                     title: "legacy naming model link".into(),
                     description: String::new(),
                     engine: None,
+                    target: None,
                 },
                 window,
                 cx,
@@ -555,6 +557,30 @@ fn settings_redesign_resize_and_categories_preserve_engines_and_pending_draft_en
             );
         });
         assert!(cx.debug_bounds("settings-search-result-0").is_some());
+        assert_eq!(business_state(&app, cx), before);
+    }
+
+    // Browsing a different engine must carry across management pages while
+    // preserving saved defaults, the active session, and the unsent draft.
+    select_page(&app, cx, 3);
+    click(cx, "settings-engine-2");
+    let mut browsed = before.clone();
+    browsed["management_engine"] = serde_json::to_value(Provider::OpenCode).unwrap();
+    for page in [8, 10, 4, 9] {
+        select_page(&app, cx, page);
+        app.read_with(cx, |app, _| {
+            assert_eq!(app.connection_settings.engine, Provider::OpenCode);
+            assert_eq!(app.extensions_ui.engine, Provider::OpenCode);
+        });
+        assert_eq!(business_state(&app, cx), browsed);
+    }
+    click(cx, "extensions-engine-1");
+    for page in [4, 3, 8, 10] {
+        select_page(&app, cx, page);
+        app.read_with(cx, |app, _| {
+            assert_eq!(app.connection_settings.engine, Provider::Codex);
+            assert_eq!(app.extensions_ui.engine, Provider::Codex);
+        });
         assert_eq!(business_state(&app, cx), before);
     }
 }

@@ -146,6 +146,12 @@ pub(super) fn is_tool_command(item: &ChatItem) -> bool {
         })
 }
 
+pub(super) fn tool_waiting_for_approval(item: &ChatItem) -> bool {
+    item.approval
+        .as_ref()
+        .is_some_and(|approval| approval.status == crate::message_status::ApprovalStatus::Waiting)
+}
+
 pub(super) fn tool_running(item: &ChatItem) -> bool {
     let status = item.status.trim();
     matches!(status, "运行中" | "输出中")
@@ -356,7 +362,7 @@ pub(super) struct EditLine {
     pub(super) text: String,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum EditFileStatus {
     Modified,
     Added,
@@ -366,6 +372,7 @@ pub(super) enum EditFileStatus {
 #[derive(Clone)]
 pub(super) struct EditFileDiff {
     pub(super) path: String,
+    pub(super) status: EditFileStatus,
     pub(super) note: String,
     /// A unified patch built from the parsed lines, ready for `DiffFile::parse`.
     pub(super) patch: String,
@@ -452,6 +459,7 @@ impl EditFileDiff {
         };
         Self {
             path,
+            status,
             note,
             patch,
             added,
@@ -617,7 +625,7 @@ pub(super) fn codex_change_note(kind: &serde_json::Value) -> String {
     }
 }
 
-pub(super) fn codex_edit_diffs(input: &str, detail: &str) -> Option<Vec<EditFileDiff>> {
+fn codex_edit_diffs(input: &str, detail: &str, preview_files: usize) -> Option<Vec<EditFileDiff>> {
     // `item/started` can carry an empty changes array before the patch is
     // applied; prefer whichever payload actually has changes.
     let changes = |text: &str| {
@@ -636,7 +644,7 @@ pub(super) fn codex_edit_diffs(input: &str, detail: &str) -> Option<Vec<EditFile
                 .get("diff")
                 .and_then(|value| value.as_str())
                 .unwrap_or(""),
-            index < 8,
+            index < preview_files,
         );
         if lines.is_empty()
             && let Some(content) = change.get("content").and_then(|value| value.as_str())
@@ -731,14 +739,21 @@ pub(super) fn claude_edit_diffs(title: &str, input: &str) -> Option<Vec<EditFile
 }
 
 pub(super) fn edit_tool_diffs(item: &ChatItem) -> Option<Vec<EditFileDiff>> {
-    if let Some(diffs) = opencode_edit_diffs(&item.detail) {
+    edit_tool_diffs_with_limit(item, 8)
+}
+
+pub(super) fn edit_tool_diffs_with_limit(
+    item: &ChatItem,
+    preview_files: usize,
+) -> Option<Vec<EditFileDiff>> {
+    if let Some(diffs) = opencode_edit_diffs(&item.detail, preview_files) {
         return Some(diffs);
     }
     if is_file_change_title(item.text.trim())
         || has_codex_file_changes(&item.input)
         || has_codex_file_changes(&item.detail)
     {
-        return codex_edit_diffs(&item.input, &item.detail);
+        return codex_edit_diffs(&item.input, &item.detail, preview_files);
     }
     match item.text.trim() {
         "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => {
@@ -748,7 +763,7 @@ pub(super) fn edit_tool_diffs(item: &ChatItem) -> Option<Vec<EditFileDiff>> {
     }
 }
 
-fn opencode_edit_diffs(detail: &str) -> Option<Vec<EditFileDiff>> {
+fn opencode_edit_diffs(detail: &str, preview_files: usize) -> Option<Vec<EditFileDiff>> {
     let value: serde_json::Value = serde_json::from_str(detail).ok()?;
     if value["acpKind"] != "edit" {
         return None;
@@ -769,7 +784,7 @@ fn opencode_edit_diffs(detail: &str) -> Option<Vec<EditFileDiff>> {
                 EditFileStatus::Modified
             };
             let mut lines = PreviewLines::default();
-            if index >= 8 {
+            if index >= preview_files {
                 lines.bytes = MAX_EDIT_DIFF_BYTES;
             }
             lines.push(EditLineKind::Hunk, "@@ OpenCode @@");
@@ -817,14 +832,28 @@ pub(super) fn edit_diff_content(
     if files.is_empty() {
         return tool_content(&tool_id, item, scroll, typography);
     }
+    (
+        edit_files_content(detail_key, files, typography, diffs, cx),
+        copy_text,
+    )
+}
+
+/// Render every recorded edit in order, including repeated paths in an edit run.
+pub(super) fn edit_files_content(
+    detail_key: &(u64, String),
+    files: &[EditFileDiff],
+    typography: &ChatTypography,
+    diffs: &mut DiffCache,
+    cx: &mut Context<ConduitApp>,
+) -> AnyElement {
     let mut patch = String::new();
     let mut headers = HashMap::new();
-    for file in files.iter().take(8) {
+    for file in files {
         patch.push_str(&file.patch);
-        headers.insert(
-            SharedString::from(file.path.clone()),
-            (SharedString::from(file.note.clone()), file.truncated),
-        );
+        let header = headers
+            .entry(SharedString::from(file.path.clone()))
+            .or_insert_with(|| (SharedString::from(file.note.clone()), false));
+        header.1 |= file.truncated;
     }
     let Some(state) = diffs.state(detail_key, &patch, cx) else {
         let fallback = div()
@@ -837,7 +866,7 @@ pub(super) fn edit_diff_content(
             .text_size(px(typography.code_size))
             .child(patch)
             .into_any_element();
-        return (fallback, copy_text);
+        return fallback;
     };
     let rows = patch.lines().count() + files.len();
     let height = edit_diff_height(rows, cx);
@@ -876,7 +905,7 @@ pub(super) fn edit_diff_content(
                 })
                 .into_any_element()
         });
-    let viewport = div()
+    div()
         .w_full()
         .min_w_0()
         .flex_shrink_0()
@@ -891,8 +920,7 @@ pub(super) fn edit_diff_content(
                 .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
                 .child(diff),
         )
-        .into_any_element();
-    (viewport, copy_text)
+        .into_any_element()
 }
 
 fn edit_diff_height(rows: usize, cx: &App) -> f32 {

@@ -1,0 +1,4 @@
+*, *::before, *::after { box-sizing: border-box; }
+img, svg { vertical-align: middle; }
+img { max-width: 100%; }
+svg { flex-shrink: 0; }

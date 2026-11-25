@@ -17,6 +17,7 @@ use crate::{
 #[derive(Clone)]
 pub struct SettingGroup {
     style: StyleRefinement,
+    content_style: StyleRefinement,
     footer: Option<Rc<dyn Fn(&mut Window, &mut App) -> AnyElement>>,
     variant: Option<GroupBoxVariant>,
 
@@ -36,6 +37,7 @@ impl SettingGroup {
     pub fn new() -> Self {
         Self {
             style: StyleRefinement::default(),
+            content_style: StyleRefinement::default(),
             footer: None,
             variant: None,
             title: None,
@@ -65,6 +67,12 @@ impl SettingGroup {
     /// around the group.
     pub fn variant(mut self, variant: GroupBoxVariant) -> Self {
         self.variant = Some(variant);
+        self
+    }
+
+    /// Style the shared content surface beneath the group heading.
+    pub fn content_style(mut self, style: &StyleRefinement) -> Self {
+        self.content_style = style.clone();
         self
     }
 
@@ -134,12 +142,10 @@ impl SettingGroup {
                 ))
             })
             .gap_4()
+            .content_style(self.content_style)
             .children(self.items.iter().enumerate().filter_map(|(item_ix, item)| {
                 if item.is_match(&query, cx) {
-                    Some(
-                        item.clone()
-                            .render_item(&options.with_item_ix(item_ix), window, cx),
-                    )
+                    Some(item.clone().render_item(&options.with_item_ix(item_ix), window, cx))
                 } else {
                     None
                 }

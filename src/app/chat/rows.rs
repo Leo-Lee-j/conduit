@@ -11,12 +11,15 @@ pub(in crate::app) struct Group {
     pub running: bool,
     pub replied: bool,
     pub expanded: bool,
+    /// Edit runs stay in one display row even while their diff is expanded.
+    pub edits: bool,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 struct Shape {
     empty: bool,
     activity: bool,
+    edit: bool,
     running: bool,
     failed: bool,
     user: bool,
@@ -64,6 +67,20 @@ impl Rows {
     pub fn group(&self, message: usize) -> Option<Group> {
         self.row(message).and_then(|row| self.rows[row].group)
     }
+    /// First display row of the user turn containing `message`, or of the last
+    /// turn when `message` is `None`. Groups, reply availability and footers
+    /// never cross a user message, so layout changes inside a turn cannot
+    /// reach rows before it. Falls back to row 0 when no user message exists.
+    pub fn turn_start_row(&self, message: Option<usize>) -> usize {
+        let end = message.map_or(self.entries.len(), |message| {
+            (message + 1).min(self.entries.len())
+        });
+        self.entries[..end]
+            .iter()
+            .rposition(|entry| entry.shape.user)
+            .and_then(|user| self.row(user))
+            .unwrap_or(0)
+    }
     pub fn refresh(
         &mut self,
         session: Option<&SessionRecord>,
@@ -98,11 +115,12 @@ impl Rows {
         self.entries.truncate(session.messages.len());
         for (index, item) in session.messages.iter().enumerate() {
             let identity = item.identity();
-            if self
-                .entries
-                .get(index)
-                .is_some_and(|entry| entry.identity.ptr_eq(&identity))
-            {
+            let recovered_error =
+                item.kind == ItemKind::Error && crate::failure::recovered(&session.messages, index);
+            if self.entries.get(index).is_some_and(|entry| {
+                entry.identity.ptr_eq(&identity)
+                    && (item.kind != ItemKind::Error || entry.shape.empty == recovered_error)
+            }) {
                 continue;
             }
             self.invalidate();
@@ -111,10 +129,16 @@ impl Rows {
                 self.classifications += 1;
             }
             let shape = Shape {
-                empty: is_empty_chat_placeholder(item)
+                empty: !super::should_render_message_item(item, session.provider)
                     || (item.kind == ItemKind::Notice
-                        && item.key.starts_with("session-notice:codex:mcp:")),
+                        && item.key.starts_with("session-notice:codex:mcp:"))
+                    || recovered_error,
                 activity: is_groupable_activity(item),
+                edit: item.kind == ItemKind::Tool
+                    && is_tool_edit(item)
+                    && item.approval.as_ref().is_none_or(|approval| {
+                        approval.status == crate::message_status::ApprovalStatus::Allowed
+                    }),
                 running: tool_running(item),
                 failed: matches!(item.kind, ItemKind::Tool | ItemKind::Reasoning)
                     && tool_failed(item),
@@ -164,6 +188,33 @@ impl Rows {
             let shape = self.entries[index].shape;
             if shape.empty {
                 index += 1;
+                continue;
+            }
+            if shape.edit {
+                let start = index;
+                let mut group = Group {
+                    start,
+                    edits: true,
+                    ..Default::default()
+                };
+                while index < self.entries.len() {
+                    let shape = self.entries[index].shape;
+                    if !shape.edit && !shape.empty {
+                        break;
+                    }
+                    if shape.edit {
+                        group.count += 1;
+                        group.failures += usize::from(shape.failed);
+                        group.running |= shape.running;
+                        group.end = index + 1;
+                    }
+                    index += 1;
+                }
+                self.rows.push(Row {
+                    message: start,
+                    key: session.messages[start].key.clone(),
+                    group: Some(group),
+                });
                 continue;
             }
             if !shape.activity {
@@ -325,6 +376,140 @@ mod tests {
     #[cfg(feature = "ui-tests")]
     use super::ChatItem;
 
+    fn edit(index: usize, title: &str) -> super::ChatItem {
+        serde_json::from_value(serde_json::json!({
+            "key": format!("edit-{index}"), "kind": "Tool", "text": title,
+            "input": serde_json::json!({
+                "file_path": format!("src/file-{}.rs", index % 2),
+                "old_string": format!("before-{index}"), "new_string": format!("after-{index}")
+            }).to_string(), "status": "completed"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn consecutive_edits_share_one_row_across_streaming_and_history_reload() {
+        let mut session = crate::app::tests::session();
+        session.messages = (0..16).map(|index| edit(index, "Edit")).collect();
+        session.messages.insert(
+            3,
+            serde_json::from_value(serde_json::json!({
+                "key": "placeholder", "kind": "Assistant", "text": ""
+            }))
+            .unwrap(),
+        );
+        let mut rows = super::Rows::default();
+        rows.refresh(Some(&session), &Default::default());
+        assert_eq!(rows.rows.len(), 1);
+        let group = rows.group(16).unwrap();
+        assert!(group.edits);
+        assert_eq!((group.start, group.end, group.count), (0, 17, 16));
+        assert_eq!(rows.row(16), Some(0));
+
+        let classifications = rows.classifications;
+        let revision = rows.revision.get();
+        rows.refresh(Some(&session), &Default::default());
+        assert_eq!(rows.classifications, classifications);
+        assert_eq!(rows.revision.get(), revision);
+
+        let mut next = edit(16, "Write");
+        next.status = "running".into();
+        session.messages.push(next);
+        rows.refresh(Some(&session), &Default::default());
+        assert_eq!(rows.rows.len(), 1);
+        assert_eq!(rows.group(17).unwrap().count, 17);
+        assert!(rows.group(0).unwrap().running);
+        session.messages[17].status = "completed".into();
+        rows.refresh(Some(&session), &Default::default());
+        assert!(!rows.group(0).unwrap().running);
+
+        let saved = serde_json::to_string(&session).unwrap();
+        session = serde_json::from_str(&saved).unwrap();
+        rows.refresh(Some(&session), &Default::default());
+        assert_eq!(rows.rows.len(), 1);
+        assert_eq!(rows.group(17).unwrap().count, 17);
+        assert_eq!(session.messages.len(), 18);
+    }
+
+    #[test]
+    fn edit_runs_stop_at_visible_messages_other_tools_and_approval_requests() {
+        use crate::message_status::ApprovalStatus;
+        let mut session = crate::app::tests::session();
+        for (kind, text) in [
+            ("Assistant", "Review this"),
+            ("Reasoning", "Check this"),
+            ("User", "Next turn"),
+            ("Tool", "Read"),
+        ] {
+            session.messages = vec![
+                edit(0, "Edit"),
+                edit(1, "Write"),
+                serde_json::from_value(serde_json::json!({
+                    "key": "boundary", "kind": kind, "text": text
+                }))
+                .unwrap(),
+                edit(2, "Edit"),
+                edit(3, "MultiEdit"),
+            ];
+            let mut rows = super::Rows::default();
+            rows.refresh(Some(&session), &Default::default());
+            assert_eq!(rows.rows.len(), 3, "{kind}");
+            assert_eq!(rows.group(0).unwrap().end, 2);
+            assert_eq!(rows.group(4).unwrap().start, 3);
+        }
+        session.messages = vec![edit(0, "Edit"), edit(1, "Write"), edit(2, "Edit")];
+        session.messages[1].approval = Some(
+            serde_json::from_value(serde_json::json!({
+                "request": "edit-1", "status": ""
+            }))
+            .unwrap(),
+        );
+        for status in [
+            ApprovalStatus::Waiting,
+            ApprovalStatus::Denied,
+            ApprovalStatus::Interrupted,
+        ] {
+            session.messages[1].approval.as_mut().unwrap().status = status;
+            let mut rows = super::Rows::default();
+            rows.refresh(Some(&session), &Default::default());
+            assert_eq!(rows.rows.len(), 3);
+            assert!(rows.group(1).is_none());
+        }
+        session.messages[1].approval.as_mut().unwrap().status = ApprovalStatus::Allowed;
+        let mut rows = super::Rows::default();
+        rows.refresh(Some(&session), &Default::default());
+        assert_eq!(rows.rows.len(), 1);
+        assert_eq!(rows.group(0).unwrap().count, 3);
+    }
+
+    #[test]
+    fn recovered_error_cards_disappear_when_the_same_turn_resumes() {
+        let mut session = crate::app::tests::session();
+        session.messages = serde_json::from_value(serde_json::json!([
+            {"key":"user", "kind":"User", "text":"hello"},
+            {"key":"error", "kind":"Error", "text":"Connection interrupted", "detail":"original diagnostic"}
+        ])).unwrap();
+        let mut rows = super::Rows::default();
+        rows.refresh(Some(&session), &Default::default());
+        assert_eq!(
+            rows.rows.iter().map(|row| row.message).collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+
+        session.messages.push(
+            serde_json::from_value(serde_json::json!({
+                "key":"reply", "kind":"Assistant", "text":"The connection is back"
+            }))
+            .unwrap(),
+        );
+        rows.refresh(Some(&session), &Default::default());
+        assert_eq!(
+            rows.rows.iter().map(|row| row.message).collect::<Vec<_>>(),
+            vec![0, 2]
+        );
+        assert_eq!(session.messages[1].detail, "original diagnostic");
+    }
+
     #[test]
     fn restored_mcp_notices_have_no_rows_and_preserve_message_indices() {
         let mut session = crate::app::tests::session();
@@ -382,6 +567,51 @@ mod tests {
         assert_eq!(
             rows.rows.iter().map(|row| row.message).collect::<Vec<_>>(),
             vec![1, 2, 4]
+        );
+    }
+
+    #[test]
+    fn reasoning_heading_rows_follow_streamed_body_and_final_snapshot() {
+        use crate::app::Provider;
+        let mut session = crate::app::tests::session();
+        session.provider = Provider::Codex;
+        session.messages = serde_json::from_value(serde_json::json!([
+            {"key":"stream", "kind":"Reasoning", "text":"**", "reasoning_summary":true, "status":"running"},
+            {"key":"legacy", "kind":"Reasoning", "text":"**Inspect files**\n\n**Check tests**\n**Finish**", "status":"completed"},
+            {"key":"published", "kind":"Reasoning", "text":"**Published content**", "reasoning_summary":false, "status":"completed"},
+            {"key":"reply", "kind":"Assistant", "text":"Answer"}
+        ])).unwrap();
+        let mut rows = super::Rows::default();
+        let visible =
+            |rows: &super::Rows| rows.rows.iter().map(|row| row.message).collect::<Vec<_>>();
+        rows.refresh(Some(&session), &Default::default());
+        assert_eq!(visible(&rows), [2, 3]);
+        session.messages[0]
+            .text
+            .push_str("Inspect files**\n\n**Check tests**");
+        rows.refresh(Some(&session), &Default::default());
+        assert_eq!(visible(&rows), [2, 3]);
+
+        let revision = rows.mapping_revision;
+        session.messages[0].text.push_str("\n\nRead.");
+        rows.refresh(Some(&session), &Default::default());
+        assert_eq!(visible(&rows), [0, 2, 3]);
+        assert_ne!(rows.mapping_revision, revision);
+
+        // The authoritative completion can shrink back to headings. No stale
+        // visible row should survive either that snapshot or a history reload.
+        session.messages[0].text = "**Inspect files**\n\n**Check tests**".into();
+        session.messages[0].status = "completed".into();
+        rows.refresh(Some(&session), &Default::default());
+        assert_eq!(visible(&rows), [2, 3]);
+        let saved = serde_json::to_string(&session.messages).unwrap();
+        session.messages = serde_json::from_str(&saved).unwrap();
+        rows.refresh(Some(&session), &Default::default());
+        assert_eq!(visible(&rows), [2, 3]);
+        assert_eq!(
+            session.messages.len(),
+            4,
+            "display filtering must preserve history"
         );
     }
 

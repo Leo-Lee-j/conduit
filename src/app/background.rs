@@ -1,5 +1,6 @@
 //! Retained wallpaper layer and explicitly opened, bounded Wallhaven browser.
 
+use super::settings::{BACKGROUND_GROUP, SettingsRoute};
 use super::*;
 use crate::wallpaper::{self, Category, HistoryEntry, Query, Ratio, Resolution, Sort, TopRange};
 use gpui_kit::component::switch::Switch;
@@ -362,8 +363,11 @@ impl ConduitApp {
     pub(super) fn release_hidden_background_browser(&mut self, cx: &mut Context<Self>) {
         if self.background.browser.is_some()
             && (!self.settings_ui.open
-                || self.settings_ui.page != 1
-                || self.settings_ui.group.is_some_and(|group| group != 5)
+                || self.settings_ui.page != SettingsRoute::Appearance.index()
+                || self
+                    .settings_ui
+                    .group
+                    .is_some_and(|group| group != BACKGROUND_GROUP)
                 || !self.settings_ui.search.read(cx).value().is_empty())
         {
             self.close_background_browser(cx);

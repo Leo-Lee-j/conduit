@@ -1,6 +1,7 @@
 //! Cli settings.
 
 use super::*;
+use gpui_kit::component::switch::Switch;
 
 const LATEST_FEEDBACK_DURATION: std::time::Duration = std::time::Duration::from_secs(2);
 
@@ -124,7 +125,7 @@ impl ConduitApp {
             self.store.cli = previous;
             self.diagnostics.insert(
                 provider,
-                self.message.clone().unwrap_or_else(|| {
+                self.persistence.error.clone().unwrap_or_else(|| {
                     conduit::i18n::text_static("settings.cli.configuration_save_failed").into()
                 }),
             );
@@ -508,19 +509,16 @@ impl ConduitApp {
             let help = view.clone();
             v_flex()
                 .w_full()
-                .gap_4()
-                .p_4()
-                .rounded_lg()
-                .border_1()
-                .border_color(rgb(palette().border))
-                .bg(rgb(palette().surface))
+                .gap_2()
                 .child(
                     h_flex()
+                        .debug_selector(|| "engine-detail-heading".into())
                         .w_full()
-                        .gap_3()
+                        .gap_2()
+                        .flex_wrap()
                         .child(
                             div()
-                                .size(px(40.))
+                                .size(px(32.))
                                 .flex_shrink_0()
                                 .rounded_lg()
                                 .bg(rgb(palette().surface_strong))
@@ -530,13 +528,13 @@ impl ConduitApp {
                                 .child(provider_icon(provider)),
                         )
                         .child(
-                            v_flex()
-                                .flex_1()
+                            h_flex()
                                 .min_w_0()
-                                .gap_1()
+                                .gap_2()
+                                .flex_wrap()
                                 .child(
                                     div()
-                                        .text_size(ui_text_size(16.))
+                                        .text_size(ui_text_size(14.))
                                         .font_semibold()
                                         .child(provider.label()),
                                 )
@@ -561,28 +559,37 @@ impl ConduitApp {
                                 ),
                         )
                         .child(
-                            Button::new(("engine-enabled", index))
-                                .debug_selector(move || format!("engine-enabled-{index}"))
-                                .small()
-                                .outline()
-                                .label(if enabled {
-                                    conduit::i18n::text_static("settings.cli.enabled_disable")
-                                } else {
-                                    conduit::i18n::text_static("settings.cli.disabled_enable")
-                                })
+                            div().debug_selector(move || format!("engine-enabled-{index}"))
+                            .child(Switch::new(("engine-enabled", index))
+                                .checked(enabled)
+                                .label(conduit::i18n::text_static("settings.cli.enable_engine"))
+                                .accessibility_label(format!(
+                                    "{} · {}",
+                                    provider.label(),
+                                    conduit::i18n::text_static("settings.cli.enable_engine")
+                                ))
                                 .disabled(disabled)
-                                .on_click(move |_, _, cx| {
+                                .on_click(move |value, _, cx| {
                                     toggle.update(cx, |app, cx| {
-                                        app.set_engine_enabled(provider, !enabled, cx)
+                                        app.set_engine_enabled(provider, *value, cx)
                                     })
-                                }),
+                                })),
                         ),
                 )
+                .when(!available, |body| {
+                    body.child(
+                        h_flex().w_full().gap_3().flex_wrap()
+                            .child(Button::new(("engine-setup", index)).primary().small()
+                                .label(conduit::i18n::text_static("settings.cli.installation_and_sign_in_instructions"))
+                                .on_click(move |_, _, cx| cx.open_url(descriptor.guide)))
+                            .child(settings_description(conduit::i18n::text_static("settings.cli.setup_hint"))),
+                    )
+                })
                 .child(
                     v_flex()
                         .w_full()
                         .gap_2()
-                        .pt_3()
+                        .pt_2()
                         .border_t_1()
                         .border_color(rgb(palette().border))
                         .child(
@@ -713,13 +720,14 @@ impl ConduitApp {
                                 ),
                         ),
                 )
-                .child(
+                .child(settings_accordion(
+                    "settings-path-help",
+                    conduit::i18n::text_static("settings.cli.advanced_configuration"),
+                    expanded,
                     v_flex()
                         .w_full()
                         .gap_2()
-                        .pt_3()
-                        .border_t_1()
-                        .border_color(rgb(palette().border))
+                        .pt_2()
                         .child(
                             div()
                                 .text_size(ui_text_size(12.))
@@ -790,38 +798,20 @@ impl ConduitApp {
                                         ))
                                         .on_click(move |_, _, cx| cx.open_url(descriptor.guide)),
                                 ),
-                        ),
-                )
-                .child(
-                    Button::new("settings-path-help")
-                        .small()
-                        .ghost()
-                        .justify_start()
-                        .icon(if expanded {
-                            FullIconName::ChevronUp
-                        } else {
-                            FullIconName::ChevronDown
+                        )
+                        .child(div()
+                        .text_size(ui_text_size(12.))
+                        .text_color(rgb(palette().muted))
+                        .child(conduit::i18n::text_static(
+                            "settings.cli.lookup_order_environment_variable_app_specified_path",
+                        ))),
+                    move |open, _, cx| {
+                        help.update(cx, |app, cx| {
+                            app.connection_settings.path_help = open;
+                            cx.notify();
                         })
-                        .label(conduit::i18n::text_static(
-                            "settings.cli.path_lookup_and_when_changes_apply",
-                        ))
-                        .on_click(move |_, _, cx| {
-                            help.update(cx, |app, cx| {
-                                app.connection_settings.path_help = !expanded;
-                                cx.notify();
-                            })
-                        }),
-                )
-                .when(expanded, |card| {
-                    card.child(
-                        div()
-                            .text_size(ui_text_size(12.))
-                            .text_color(rgb(palette().muted))
-                            .child(conduit::i18n::text_static(
-                                "settings.cli.lookup_order_environment_variable_app_specified_path",
-                            )),
-                    )
-                })
+                    },
+                ))
         });
         SettingGroup::new()
             .variant(GroupBoxVariant::Normal)

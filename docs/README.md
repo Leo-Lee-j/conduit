@@ -26,12 +26,14 @@
 | [内容分栏与文件预览](design/content-panes-and-live-preview.md) | 两组路由、全区/并排、文件刷新、已实现的变化提示与可选回放，以及真实 CLI 增量的待验证范围 |
 | [??????????????](design/subagent-conversations.md) | ?? Codex ????????????????????????????????????? |
 | [手机远程控制设计](design/mobile-remote-control.md) | Web 试用版能力、完整目标与尚待实现的配置和授权管理 |
-| [桌面宠物设计](design/desktop-pet.md) | 可启停的内置宠物、直连模型 API、悬浮交互与隐私边界 |
+| [桌面宠物设计](design/desktop-pet.md) | 像素角色、任务状态、离散动画、悬浮交互与隐私边界 |
 | [Web 远控试用](design/mobile-remote-preview.md) | 桌面开启、浏览器配对与手机连接 |
 | [应用背景图](background-images.md) | Wallhaven 免 Key 接入、渲染分层、缓存预算与性能验收 |
 | [会话与存储](sessions.md) | 并发、发送确认、正文按需加载、历史导入及恢复 |
 | [CLI 适配器](cli-adapters.md) | 接入契约、进程管理、OpenCode 特有行为 |
+| [Gemini CLI](gemini.md) | 原生认证、模型选择、权限策略与接入限制 |
 | [Chat 命令](chat-commands.md) | slash 面板、已接入来源、发现与执行约束 |
+| [模型思考能力](model-reasoning.md) | 型号与档位清单、匹配优先级、引擎限制与维护方式 |
 | [测试与验收](testing.md) | 测试选择、隔离环境、人工验收和结果记录 |
 | [性能与指标](performance.md) | 有界工作、缓存、用量语义与测量边界 |
 | [发布与更新](releasing.md) | 签名密钥、CI、安装包、更新与故障恢复 |

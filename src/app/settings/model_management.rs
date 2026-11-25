@@ -8,10 +8,14 @@ struct ModelEditor {
     original: Option<String>,
     fields: [Entity<InputState>; 4],
     error: Option<String>,
+    saving: bool,
 }
 
 impl ModelEditor {
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.saving {
+            return;
+        }
         let values = self
             .fields
             .each_ref()
@@ -39,44 +43,89 @@ impl ModelEditor {
             note: values[2].clone(),
             context_window,
         };
-        let result = self.app.update(cx, |app, cx| -> Result<(), String> {
-            if !app.writable || app.closing {
-                return Err(conduit::i18n::text_static(
-                    "settings.model_management.unable_to_save_settings_right_now",
-                )
-                .into());
+        let previous = self.app.read(cx).native_model_preferences(self.engine);
+        let result = self.app.update(
+            cx,
+            |app, cx| -> Result<crate::persistence::SaveReceipt, String> {
+                if !app.writable || app.closing || app.connection_settings.saving {
+                    return Err(conduit::i18n::text_static(
+                        "settings.model_management.unable_to_save_settings_right_now",
+                    )
+                    .into());
+                }
+
+                if let Err(error) = app.store.cli.models_mut(self.engine).save(
+                    self.engine,
+                    self.original.as_deref(),
+                    model,
+                ) {
+                    *app.store.cli.models_mut(self.engine) = previous.clone();
+                    return Err(error.to_string());
+                }
+                let receipt = match app.persist_confirmed() {
+                    Ok(receipt) => receipt,
+                    Err(error) => {
+                        *app.store.cli.models_mut(self.engine) = previous.clone();
+                        app.dirty = true;
+                        return Err(error);
+                    }
+                };
+                app.connection_settings.saving = true;
+                cx.notify();
+                Ok(receipt)
+            },
+        );
+        let receipt = match result {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                self.error = Some(error);
+                cx.notify();
+                return;
             }
-            let previous = app.store.cli.clone();
-            if let Err(error) = app.store.cli.models_mut(self.engine).save(
-                self.engine,
-                self.original.as_deref(),
-                model,
-            ) {
-                app.store.cli = previous;
-                return Err(error.to_string());
-            }
-            if !app.persist() {
-                app.store.cli = previous;
-                return Err(conduit::i18n::text_static(
-                    "settings.model_management.failed_to_save_model_check_the_data",
-                )
-                .into());
-            }
-            cx.emit(crate::providers::ProviderCatalogChanged);
-            cx.notify();
-            Ok(())
-        });
-        match result {
-            Ok(()) => window.close_dialog(cx),
-            Err(error) => self.error = Some(error),
-        }
+        };
+        self.saving = true;
+        self.error = None;
+        let app = self.app.clone();
+        let engine = self.engine;
+        cx.spawn_in(window, async move |this, cx| {
+            let result = receipt.wait(cx.background_executor()).await;
+            let failed = result.is_err();
+            let _ = cx.update(|_, cx| {
+                app.update(cx, |app, cx| {
+                    app.connection_settings.saving = false;
+                    if failed {
+                        *app.store.cli.models_mut(engine) = previous;
+                        app.dirty = true;
+                    }
+                    cx.emit(crate::providers::ProviderCatalogChanged);
+                    cx.notify();
+                })
+            });
+            let _ = this.update_in(cx, |editor, window, cx| {
+                editor.saving = false;
+                match result {
+                    Ok(()) => {
+                        window.close_dialog(cx);
+                    }
+                    Err(error) => {
+                        editor.error = Some(error);
+                        editor.fields[0].read(cx).focus_handle(cx).focus(window, cx);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
         cx.notify();
     }
 }
 
 impl Render for ModelEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let disabled = !self.app.read(cx).writable || self.app.read(cx).closing;
+        let disabled = !self.app.read(cx).writable
+            || self.app.read(cx).closing
+            || self.saving
+            || self.app.read(cx).connection_settings.saving;
         let mut body = v_flex()
             .id("model-editor-body")
             .w_full()
@@ -120,6 +169,7 @@ impl Render for ModelEditor {
                     Button::new("model-editor-cancel")
                         .label(conduit::i18n::text_static("git_branches.cancel"))
                         .ghost()
+                        .disabled(self.saving)
                         .on_click(|_, window, cx| window.close_dialog(cx)),
                 )
                 .child(
@@ -129,6 +179,7 @@ impl Render for ModelEditor {
                             "settings.model_management.save_model",
                         ))
                         .primary()
+                        .loading(self.saving)
                         .disabled(disabled)
                         .on_click(cx.listener(|this, _, window, cx| this.save(window, cx))),
                 ),
@@ -189,7 +240,7 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.writable || self.closing {
+        if !self.writable || self.closing || self.connection_settings.saving {
             return;
         }
         let app = cx.entity();
@@ -209,13 +260,19 @@ impl ConduitApp {
             engine,
             original: model.map(|m| m.id),
             error: None,
+            saving: false,
             fields: std::array::from_fn(|index| {
                 cx.new(|cx| InputState::new(window, cx).default_value(values[index].clone()))
             }),
         });
-        window.open_dialog(cx, move |dialog, window, _| {
+        window.open_dialog(cx, move |dialog, window, cx| {
             let editor = editor.clone();
+            let dismiss = editor.clone();
+            let saving = editor.read(cx).saving;
             dialog
+                .keyboard(!saving)
+                .close_button(!saving)
+                .on_cancel(move |_, _, cx| !dismiss.read(cx).saving)
                 .title(conduit::i18n::text_static(
                     "settings.model_management.manage_cli_models",
                 ))
@@ -232,7 +289,7 @@ impl ConduitApp {
         change: impl FnOnce(&mut ModelPreferences),
         cx: &mut Context<Self>,
     ) {
-        if !self.writable || self.closing {
+        if !self.writable || self.closing || self.connection_settings.saving {
             return;
         }
         let previous = self.store.cli.clone();
@@ -258,12 +315,12 @@ impl ConduitApp {
             .filter(|d| d.channel == ModelChannel::Cli)
             .and_then(|d| d.model.clone());
         let native_default = self.engine_catalog(engine).and_then(|c| c.current.clone());
-        let disabled = !self.writable || self.closing;
+        let disabled = !self.writable || self.closing || self.connection_settings.saving;
         let search = self.connection_settings.model_search.clone();
         let limit = self.connection_settings.model_limit;
         SettingField::render(move |_, _, cx| {
             let query = search.read(cx).value().to_lowercase();
-            let matches = rows
+            let mut matches = rows
                 .iter()
                 .filter(|model| {
                     let text =
@@ -271,6 +328,7 @@ impl ConduitApp {
                     query.split_whitespace().all(|word| text.contains(word))
                 })
                 .collect::<Vec<_>>();
+            matches.sort_by_key(|model| model.id.to_lowercase() != query.trim());
             let add = view.clone();
             let mut list = v_flex().w_full().gap_2().child(
                 h_flex()
@@ -422,24 +480,15 @@ impl ConduitApp {
                                             "settings.models.use_for_new_sessions",
                                         ))
                                         .disabled(disabled || current)
-                                        .on_click(move |_, _, cx| {
+                                        .on_click(move |_, window, cx| {
                                             use_view.update(cx, |app, cx| {
-                                                if !app.writable || app.closing {
-                                                    return;
-                                                }
-                                                let previous = app.store.session_defaults.clone();
-                                                app.store.session_defaults.insert(
+                                                app.set_service_default(
                                                     engine,
-                                                    crate::store::SessionDefaults {
-                                                        channel: ModelChannel::Cli,
-                                                        model: Some(use_id.clone()),
-                                                    },
+                                                    ModelChannel::Cli,
+                                                    Some(use_id.clone()),
+                                                    window,
+                                                    cx,
                                                 );
-                                                if !app.persist() {
-                                                    app.store.session_defaults = previous;
-                                                }
-                                                cx.emit(crate::providers::ProviderCatalogChanged);
-                                                cx.notify();
                                             })
                                         }),
                                 )
@@ -579,6 +628,7 @@ mod tests {
                 engine: Provider::Codex,
                 original: None,
                 error: None,
+                saving: false,
                 fields: std::array::from_fn(|_| cx.new(|cx| InputState::new(window, cx))),
             });
             *output.borrow_mut() = Some((app, editor.clone()));
@@ -613,6 +663,8 @@ mod tests {
                 editor.save(window, cx);
             })
         });
+        cx.update(|_, cx| app.update(cx, |app, _| app.persistence.flush()));
+        cx.run_until_parked();
         cx.update(|_, cx| {
             app.update(cx, |app, cx| {
                 app.persistence.flush();

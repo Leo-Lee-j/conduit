@@ -49,9 +49,42 @@ function Invoke-TestInstaller([string]$Path) {
 }
 
 try {
+    # The production launcher uses application diagnostics and the Windows API.
+    # Resolve and build its real dependencies before compiling fixture versions.
+    Push-Location $taskRoot
+    try {
+        $taskMetadataJson = & cargo metadata --locked --format-version 1
+        if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve launcher dependencies.' }
+        $taskMetadata = $taskMetadataJson | ConvertFrom-Json
+        $taskRootPackage = $taskMetadata.resolve.root
+        $taskRootNode = $taskMetadata.resolve.nodes | Where-Object { $_.id -eq $taskRootPackage }
+        $taskWindowsPackage = ($taskRootNode.deps | Where-Object { $_.name -eq 'windows_sys' }).pkg
+        $taskBuildOutput = & cargo build --locked --lib --message-format=json
+        if ($LASTEXITCODE -ne 0) { throw 'Cannot build launcher dependencies.' }
+        $taskMessages = @($taskBuildOutput | ForEach-Object { $_ | ConvertFrom-Json })
+        $taskArtifacts = @($taskMessages | Where-Object { $_.reason -eq 'compiler-artifact' })
+        $taskConduitLib = @($taskArtifacts | Where-Object { $_.package_id -eq $taskRootPackage -and $_.target.name -eq 'conduit' } |
+            ForEach-Object { $_.filenames } | Where-Object { $_.EndsWith('.rlib') })
+        # Cargo may also emit a host/build-dependency copy with fewer features.
+        $taskWindowsLib = @($taskArtifacts | Where-Object {
+            $_.package_id -eq $taskWindowsPackage -and $_.features -contains 'Win32_UI_WindowsAndMessaging'
+        } |
+            ForEach-Object { $_.filenames } | Where-Object { $_.EndsWith('.rlib') })
+        if ($taskConduitLib.Count -ne 1 -or $taskWindowsLib.Count -ne 1) {
+            throw 'Cannot identify the launcher dependency artifacts.'
+        }
+        $taskDependencyDir = Split-Path -Parent $taskWindowsLib[0]
+        $taskSearchArgs = @('-L', "dependency=$taskDependencyDir")
+        foreach ($taskLinkPath in @($taskMessages | Where-Object { $_.reason -eq 'build-script-executed' } |
+            ForEach-Object { $_.linked_paths } | Sort-Object -Unique)) {
+            $taskSearchArgs += @('-L', $taskLinkPath)
+        }
+    } finally {
+        Pop-Location
+    }
     $taskPackages = @{}
     foreach ($taskVersion in @('0.1.0', '0.2.0', '0.3.0')) {
-        # Tiny inert payloads keep this check independent of a Rust build.
+        # Tiny inert payloads keep the check independent of the full GUI build.
         $taskPayload = Join-Path $taskTestRoot "payload-$taskVersion.exe"
         $taskPayloadScript = Join-Path $taskTestRoot "payload-$taskVersion.nsi"
         $taskIconLine = if ($taskVersion -eq '0.2.0') { 'Icon "' + $taskIcon + '"' } else { '' }
@@ -68,7 +101,9 @@ SectionEnd
         if ($LASTEXITCODE -ne 0) { throw 'Cannot compile test payload.' }
         $taskLauncher = Join-Path $taskTestRoot "launcher-$taskVersion.exe"
         $env:CARGO_PKG_VERSION = $taskVersion
-        & rustc --edition 2024 -C debug-assertions=no (Join-Path $taskRoot 'src/bin/conduit-launcher.rs') -o $taskLauncher
+        & rustc --edition 2024 -C debug-assertions=no `
+            --extern "conduit=$($taskConduitLib[0])" --extern "windows_sys=$($taskWindowsLib[0])" `
+            @taskSearchArgs (Join-Path $taskRoot 'src/bin/conduit-launcher.rs') -o $taskLauncher
         if ($LASTEXITCODE -ne 0) { throw 'Cannot compile test launcher.' }
         # Exercise migration from the old layout as well as version-to-version upgrades.
         $taskVersionScript = $taskScript

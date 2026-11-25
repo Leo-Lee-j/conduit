@@ -1,7 +1,7 @@
 //! Transcript rows, message actions, and turn statistics.
 
 use super::*;
-use std::{borrow::Cow, rc::Rc};
+use std::borrow::Cow;
 
 pub(super) fn activates_link(event: &ClickEvent) -> bool {
     match event {
@@ -20,17 +20,28 @@ fn reveal_message_action(button: Button, group: SharedString) -> Button {
         .focus_visible(|style| style.opacity(1.))
 }
 
+mod edit_group;
 #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
 pub(in crate::app) mod profiling;
+mod reference;
 pub(super) mod rows;
 mod turn_diff;
+pub(in crate::app) use reference::ReferenceChatView;
 
 #[cfg(all(test, feature = "ui-tests"))]
 mod reasoning_tests;
 
+// Keep transcript rows, composer content, and prompt surfaces on one spacing scale.
+pub(super) const CHAT_CONTENT_GUTTER: f32 = 24.;
+pub(super) const CHAT_CONTENT_MAX_WIDTH: f32 = 840.;
+pub(super) const CHAT_CARD_INSET_X: f32 = 12.;
+pub(super) const CHAT_CARD_INSET_Y: f32 = 8.;
+pub(super) const CHAT_BLOCK_GAP: f32 = 12.;
+
 const ACTIVITY_ROW_HEIGHT: f32 = 28.;
-const ACTIVITY_ROW_INSET: f32 = 12.;
+const ACTIVITY_ROW_INSET: f32 = 0.;
 const ACTIVITY_MARKER_SIZE: f32 = 14.;
+const ACTIVITY_MARKER_SLOT_SIZE: f32 = 18.;
 const ACTIVITY_LABEL_GAP: f32 = 8.;
 const MESSAGE_CARD_BORDER: f32 = 1.;
 
@@ -43,7 +54,7 @@ fn activity_container(
     let wrapper = v_flex().relative().w_full().min_w_0().pb(px(2.));
     let wrapper = if let Some((start, end)) = group {
         let guide_width = 1.;
-        let guide_left = ACTIVITY_ROW_INSET + (ACTIVITY_MARKER_SIZE - guide_width) / 2.;
+        let guide_left = ACTIVITY_ROW_INSET + (ACTIVITY_MARKER_SLOT_SIZE - guide_width) / 2.;
         let marker_top = (ACTIVITY_ROW_HEIGHT - ACTIVITY_MARKER_SIZE) / 2.;
         let marker_bottom = marker_top + ACTIVITY_MARKER_SIZE;
         // Each virtualized message has its own border. Bridge those borders
@@ -124,8 +135,34 @@ pub(super) fn message_markdown(item: &ChatItem, provider: Provider) -> Cow<'_, s
     }
 }
 
-pub(super) fn should_render_message_item(item: &ChatItem, _provider: Provider) -> bool {
-    !is_empty_chat_placeholder(item)
+pub(super) fn should_render_message_item(item: &ChatItem, provider: Provider) -> bool {
+    if is_empty_chat_placeholder(item) {
+        return false;
+    }
+    if item.kind != ItemKind::Reasoning
+        || provider != Provider::Codex
+        || item.reasoning_summary == Some(false)
+    {
+        return true;
+    }
+    // Codex summaries (including legacy records without a source marker) can
+    // consist entirely of headings. Wait for prose before allocating a row;
+    // do not use length or the summary marker itself to discard readable text.
+    let mut lines = item.text.lines().peekable();
+    while let Some(line) = lines.next() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let pending = tool_running(item) && lines.peek().is_none() && !item.text.ends_with('\n');
+        if pending && matches!(line, "*" | "**") {
+            continue;
+        }
+        let (heading, _) = reasoning_parts(line);
+        if heading.is_none() || (!line.trim_end().ends_with("**") && !pending) {
+            return true;
+        }
+    }
+    false
 }
 
 fn reasoning_body(item: &ChatItem, provider: Provider) -> &str {
@@ -313,7 +350,7 @@ impl ConduitApp {
         .detach();
     }
 
-    /// Live engine activity above the composer. Turn steps and file churn live
+    /// Live engine activity above the composer. Turn steps live
     /// in [`Self::turn_stats_tags`], pinned to the composer's top-right corner.
     pub(super) fn turn_activity_strip(&self, session_id: u64) -> Option<AnyElement> {
         let session = self.session(session_id)?;
@@ -331,7 +368,10 @@ impl ConduitApp {
                     .map_or_else(|| model.to_string(), |catalog| catalog.label(model))
             })
             .unwrap_or_else(|| conduit::i18n::text_static("chat.cli_default_model").into());
-        let effort = if matches!(session.provider, Provider::OpenCode | Provider::Qoder) {
+        let effort = if matches!(
+            session.provider,
+            Provider::OpenCode | Provider::Qoder | Provider::Gemini
+        ) {
             run.acp_variant
                 .clone()
                 .unwrap_or_else(|| conduit::i18n::text_static("chat.default").into())
@@ -402,15 +442,19 @@ impl ConduitApp {
         )
     }
 
-    /// Step and file-churn tags for the latest turn, docked above the
-    /// composer's top-right corner. Clicking them opens the per-step and
-    /// per-file details above the tags; clicking outside closes the panel.
+    /// Step progress for the latest turn, docked above the composer's top-right
+    /// corner. Clicking opens the steps; clicking outside closes the panel.
     pub(super) fn turn_stats_tags(
         &mut self,
         session_id: u64,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let session = self.session(session_id)?;
+        let saved_plan = session
+            .task_list
+            .as_ref()
+            .and_then(|list| list.visible(session))
+            .map(<[_]>::to_vec);
         let start = session
             .messages
             .iter()
@@ -421,16 +465,9 @@ impl ConduitApp {
             .filter(|m| m.kind == ItemKind::Tool)
             .cloned()
             .collect();
-        let (stats, historical_plan) = self.tool_analysis.turn(session_id, &items, cx);
-        let session = self.session(session_id)?;
-        let plan = self
-            .session_control
-            .plans
-            .get(&session_id)
-            .cloned()
-            .filter(|steps| !steps.is_empty())
-            .unwrap_or(historical_plan);
-        if plan.is_empty() && stats.files.is_empty() {
+        let (_, historical_plan) = self.tool_analysis.turn(session_id, &items, cx);
+        let plan = saved_plan.unwrap_or(historical_plan);
+        if plan.is_empty() {
             return None;
         }
         let live = self.session_control.runs.contains_key(&session_id);
@@ -439,14 +476,9 @@ impl ConduitApp {
             .filter(|step| step.status == PlanStatus::Completed)
             .count();
         let total = plan.len();
-        let root = self
-            .store
-            .workspaces
-            .iter()
-            .find(|workspace| workspace.sessions.iter().any(|item| item.id == session_id))
-            .map(|workspace| workspace.path.to_string_lossy().into_owned());
         let mut tags = h_flex()
             .id("turn-stats")
+            .test_support()
             .debug_selector(|| "turn-stats".into())
             .items_center()
             .gap(px(6.));
@@ -479,34 +511,6 @@ impl ConduitApp {
                         )),
                 );
         }
-        if !stats.files.is_empty() {
-            tags = tags.child(
-                stat_tag()
-                    .child(
-                        Icon::new(IconName::File)
-                            .size(px(11.))
-                            .text_color(rgb(palette().faint)),
-                    )
-                    .child(
-                        div()
-                            .text_color(rgb(palette().muted))
-                            .child(conduit::i18n::format(
-                                "chat.files",
-                                &[("arg0", format!("{}", stats.files.len()))],
-                            )),
-                    )
-                    .child(
-                        div()
-                            .text_color(rgb(palette().diff_add_text))
-                            .child(format!("+{}", stats.added)),
-                    )
-                    .child(
-                        div()
-                            .text_color(rgb(palette().diff_remove_text))
-                            .child(format!("-{}", stats.removed)),
-                    ),
-            );
-        }
         let trigger = Button::new(SharedString::from(format!(
             "turn-stats-trigger-{session_id}"
         )))
@@ -515,48 +519,16 @@ impl ConduitApp {
         .px(px(0.))
         .rounded(px(8.))
         .cursor_pointer()
-        .accessibility_label(conduit::i18n::text_static(
-            "chat.view_steps_and_file_changes",
-        ))
+        .accessibility_label(conduit::i18n::text_static("chat.view_steps"))
         .child(tags);
         let panel_plan = plan;
-        let panel_stats = stats;
-        let app = cx.weak_entity();
-        let turn_key = session
-            .messages
-            .iter()
-            .rfind(|item| item.kind == ItemKind::User)
-            .map(|item| item.key.clone());
         Some(
             Popover::new(SharedString::from(format!("turn-stats-{session_id}")))
                 .anchor(Anchor::BottomRight)
                 .offset(px(8.))
                 .appearance(false)
                 .trigger(trigger)
-                .content(move |_, window, cx| {
-                    let app = app.clone();
-                    let turn_key = turn_key.clone();
-                    let popover = cx.entity().downgrade();
-                    turn_stats_details(
-                        &panel_plan,
-                        &panel_stats,
-                        root.as_deref(),
-                        live,
-                        window,
-                        move |path, window, cx| {
-                            let _ = popover.update(cx, |popover, cx| popover.dismiss(window, cx));
-                            let _ = app.update(cx, |app, cx| {
-                                app.open_turn_diff(
-                                    session_id,
-                                    turn_key.as_deref(),
-                                    path,
-                                    window,
-                                    cx,
-                                );
-                            });
-                        },
-                    )
-                })
+                .content(move |_, window, _| turn_stats_details(&panel_plan, live, window))
                 .into_any_element(),
         )
     }
@@ -576,19 +548,11 @@ fn stat_tag() -> Div {
         .line_height(px(15.))
 }
 
-/// Steps and per-file churn of the latest turn, shown in a popover above the
-/// stats tags above the composer.
-fn turn_stats_details(
-    plan: &[PlanStep],
-    stats: &TurnFileStats,
-    root: Option<&str>,
-    live: bool,
-    window: &Window,
-    open_diff: impl Fn(&str, &mut Window, &mut App) + 'static,
-) -> AnyElement {
-    let open_diff = Rc::new(open_diff);
+/// Steps of the latest turn, shown in a popover above the composer.
+fn turn_stats_details(plan: &[PlanStep], live: bool, window: &Window) -> AnyElement {
     let mut rows = v_flex()
         .id("turn-stats-details")
+        .test_support()
         .debug_selector(|| "turn-stats-details".into())
         .w(px(
             (f32::from(window.viewport_size().width) - 32.).clamp(200., 380.)
@@ -605,7 +569,18 @@ fn turn_stats_details(
         .border_color(rgb(palette().border))
         .bg(rgb(palette().surface))
         .shadow_sm();
-    for step in plan {
+    for (index, step) in plan.iter().enumerate() {
+        let metadata = task_metadata(step, plan);
+        let details = [
+            step.label(),
+            step.description.clone(),
+            step.active_form.clone(),
+            metadata.clone(),
+        ]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
         let icon = match step.status {
             PlanStatus::Completed => Icon::new(IconName::CircleCheck)
                 .size(px(13.))
@@ -626,113 +601,70 @@ fn turn_stats_details(
         };
         rows = rows.child(
             h_flex()
+                .id(SharedString::from(format!("task-row-{index}")))
+                .test_support()
+                .debug_selector(move || format!("task-row-{index}"))
+                .role(gpui_kit::Role::Group)
+                .aria_label(format!("{} {}", step.label(), metadata).trim().to_owned())
+                .tooltip(move |window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(details.clone()).build(window, cx)
+                })
                 .w_full()
                 .min_w_0()
-                .items_center()
+                .items_start()
                 .gap_2()
                 .child(icon)
                 .child(
-                    div()
+                    v_flex()
                         .flex_1()
                         .min_w_0()
-                        .truncate()
+                        .whitespace_normal()
                         .text_size(px(12.))
                         .text_color(rgb(match step.status {
                             PlanStatus::Completed => palette().faint,
                             PlanStatus::InProgress => palette().text,
                             PlanStatus::Pending => palette().muted,
                         }))
-                        .child(step.text.clone()),
-                ),
-        );
-    }
-    if !plan.is_empty() && !stats.files.is_empty() {
-        rows = rows.child(div().w_full().h(px(1.)).my_1().bg(rgb(palette().border)));
-    }
-    if !stats.files.is_empty() {
-        rows = rows.child(
-            h_flex()
-                .px_2()
-                .pb_1()
-                .items_center()
-                .justify_between()
-                .text_size(px(11.))
-                .text_color(rgb(palette().faint))
-                .child(conduit::i18n::format(
-                    "chat.file_changes_in_this_turn",
-                    &[("arg0", format!("{}", stats.files.len()))],
-                ))
-                .child(conduit::i18n::text_static("chat.click_to_view_diff")),
-        );
-    }
-    for (index, (path, stat)) in stats.files.iter().enumerate() {
-        let path = path.clone();
-        let display_path = workspace_relative_path(&path, root);
-        let open_diff = open_diff.clone();
-        rows = rows.child(
-            Button::new(("turn-stats-file", index))
-                .debug_selector(move || format!("turn-stats-file-{index}"))
-                .ghost()
-                .w_full()
-                .min_w_0()
-                .h(px(34.))
-                .flex_shrink_0()
-                .px_2()
-                .rounded(px(6.))
-                .cursor_pointer()
-                .tooltip(conduit::i18n::format(
-                    "chat.view_changes_in_this_turn",
-                    &[("display_path", display_path.to_string())],
-                ))
-                .accessibility_label(conduit::i18n::format(
-                    "chat.view_this_turn_s_diff_for",
-                    &[("display_path", display_path.to_string())],
-                ))
-                .on_click(move |_, window, cx| open_diff(&path, window, cx))
-                .child(
-                    h_flex()
-                        .w_full()
-                        .min_w_0()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            Icon::new(FullIconName::FileDiff)
-                                .size(px(14.))
-                                .text_color(rgb(palette().faint)),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_left()
-                                .text_size(px(12.))
-                                .text_color(rgb(palette().text))
-                                .child(display_path),
-                        )
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .text_size(px(11.))
-                                .text_color(rgb(palette().diff_add_text))
-                                .child(format!("+{}", stat.added)),
-                        )
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .text_size(px(11.))
-                                .text_color(rgb(palette().diff_remove_text))
-                                .child(format!("-{}", stat.removed)),
-                        )
-                        .child(
-                            Icon::new(IconName::ChevronRight)
-                                .size(px(12.))
-                                .text_color(rgb(palette().faint)),
-                        ),
+                        .child(step.label())
+                        .when(!metadata.is_empty(), |row| {
+                            row.child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(palette().muted))
+                                    .child(metadata),
+                            )
+                        }),
                 ),
         );
     }
     rows.into_any_element()
+}
+
+pub(in crate::app) fn task_metadata(step: &PlanStep, plan: &[PlanStep]) -> String {
+    let mut details = Vec::new();
+    if !step.owner.is_empty() {
+        details.push(conduit::i18n::format(
+            "tasks.owner",
+            &[("owner", step.owner.clone())],
+        ));
+    }
+    let blocked = step
+        .blocked_by
+        .iter()
+        .filter(|id| {
+            plan.iter()
+                .find(|task| task.id == **id)
+                .is_none_or(|task| task.status != PlanStatus::Completed)
+        })
+        .map(|id| format!("#{id}"))
+        .collect::<Vec<_>>();
+    if step.status != PlanStatus::Completed && !blocked.is_empty() {
+        details.push(conduit::i18n::format(
+            "tasks.blocked_by",
+            &[("tasks", blocked.join(", "))],
+        ));
+    }
+    details.join(" · ")
 }
 
 impl ConduitApp {
@@ -769,7 +701,9 @@ impl ConduitApp {
         expanded: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let group = self.chat_rows.group(start).unwrap_or_default();
+        let group = self
+            .session_message_group(session_id, start, cx)
+            .unwrap_or_default();
         let count = group.count;
         let failures = group.failures;
         let running = group.running;
@@ -802,8 +736,8 @@ impl ConduitApp {
         .ghost()
         .debug_selector(move || format!("tool-group-header-{session_id}-{start}"))
         .w_full()
-        .h(px(28.))
-        .px(px(0.))
+        .h(px(ACTIVITY_ROW_HEIGHT))
+        .px(px(ACTIVITY_ROW_INSET))
         .rounded(px(6.))
         .cursor_pointer()
         .focus_ring(true)
@@ -824,19 +758,20 @@ impl ConduitApp {
             generation.1 = Instant::now();
             this.tool_group_expansion
                 .insert((session_id, toggle_key.clone()), !expanded);
-            this.sync_chat_rows();
-            this.remeasure_message(start);
+            if this.selected_session == Some(session_id) {
+                this.sync_chat_rows();
+                this.remeasure_message(start);
+            }
             cx.notify();
         }))
         .child(
             h_flex()
                 .w_full()
                 .items_center()
-                .gap_2()
+                .gap(px(ACTIVITY_LABEL_GAP))
                 .child(
                     h_flex()
-                        .w(px(18.))
-                        .h(px(18.))
+                        .size(px(ACTIVITY_MARKER_SLOT_SIZE))
                         .flex_shrink_0()
                         .items_center()
                         .justify_center()
@@ -880,18 +815,24 @@ impl ConduitApp {
             .get(&(session_id, group_key.clone()))
             .copied()
             .filter(|(_, started)| started.elapsed() < Duration::from_millis(140));
-        let row = div().w_full().px_6().pb_3().child(
-            div()
-                .id(SharedString::from(format!(
-                    "tool-group-row-{session_id}-{start}"
-                )))
-                .w_full()
-                .min_w_0()
-                .when(!self.store.ui.full_width_content, |row| {
-                    row.max_w(px(840.)).mx_auto()
-                })
-                .child(self.tool_group_header(session_id, start, end, group_key, false, cx)),
-        );
+        let row = div()
+            .w_full()
+            .px(px(CHAT_CONTENT_GUTTER))
+            .pb(px(CHAT_BLOCK_GAP))
+            .child(
+                div()
+                    .id(SharedString::from(format!(
+                        "tool-group-row-{session_id}-{start}"
+                    )))
+                    .w_full()
+                    .min_w_0()
+                    .when(!self.store.ui.full_width_content, |row| {
+                        row.max_w(px(CHAT_CONTENT_MAX_WIDTH)).mx_auto()
+                    })
+                    .border(px(MESSAGE_CARD_BORDER))
+                    .border_color(transparent_black())
+                    .child(self.tool_group_header(session_id, start, end, group_key, false, cx)),
+            );
         if let Some((generation, _)) = motion_generation {
             row.with_animation(
                 SharedString::from(format!(
@@ -950,7 +891,7 @@ impl ConduitApp {
         .debug_selector(move || format!("activity-{session_id}-{index}"))
         .w_full()
         .h(px(32.))
-        .px_3()
+        .px(px(ACTIVITY_ROW_INSET))
         .focus_ring(has_body)
         .when(has_body, |button| button.cursor_pointer())
         .accessibility_label(if has_body {
@@ -971,11 +912,7 @@ impl ConduitApp {
                 return;
             }
             this.reasoning_expansion.insert(key.clone(), !expanded);
-            if this.selected_session == Some(session_id) {
-                this.remeasure_message(index);
-            } else {
-                this.remeasure_subagent_message(session_id, index);
-            }
+            this.remeasure_session_message(session_id, index, cx);
             cx.notify();
         }))
         .child(
@@ -983,11 +920,18 @@ impl ConduitApp {
                 .w_full()
                 .min_w_0()
                 .items_center()
-                .gap_2()
+                .gap(px(ACTIVITY_LABEL_GAP))
                 .child(
-                    Icon::new(FullIconName::Lightbulb)
-                        .size(px(15.))
-                        .text_color(rgb(palette().highlight_text)),
+                    h_flex()
+                        .size(px(ACTIVITY_MARKER_SLOT_SIZE))
+                        .flex_shrink_0()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            Icon::new(FullIconName::Lightbulb)
+                                .size(px(15.))
+                                .text_color(rgb(palette().highlight_text)),
+                        ),
                 )
                 .child(
                     div()
@@ -1055,13 +999,6 @@ impl ConduitApp {
             .debug_selector(move || format!("reasoning-quote-{session_id}-{index}"))
             .w_full()
             .min_w_0()
-            .when(has_body, |content| {
-                content
-                    .border_l_2()
-                    .border_color(rgb(palette().border))
-                    .rounded(px(6.))
-                    .bg(rgb(palette().surface))
-            })
             .child(self.reasoning_header(session_id, index, item, provider, cx));
         if expanded && has_body {
             content = content.child(
@@ -1070,7 +1007,12 @@ impl ConduitApp {
                     .w_full()
                     .min_w_0()
                     .flex_shrink_0()
+                    .border_l_2()
+                    .border_color(rgb(palette().border))
+                    .rounded(px(6.))
+                    .bg(rgb(palette().surface))
                     .px_3()
+                    .pt_3()
                     .pb_3()
                     .text_color(rgb(palette().muted))
                     .child(
@@ -1108,8 +1050,9 @@ impl ConduitApp {
     ) -> AnyElement {
         let detail_key = (session_id, item.key.clone());
         let expanded = self.expanded_tools.contains(&detail_key);
-        let running = tool_running(item);
-        let failed = !running && tool_failed(item);
+        let waiting = tool_waiting_for_approval(item);
+        let running = !waiting && tool_running(item);
+        let failed = !waiting && !running && tool_failed(item);
         let category = tool_category(item);
         let summary = tool_summary(item);
         let show_summary = !summary.is_empty();
@@ -1135,9 +1078,7 @@ impl ConduitApp {
             category
         ))
         .on_click(cx.listener(move |this, _, _, cx| {
-            if this.selected_session == Some(session_id) {
-                this.remeasure_message(index);
-            }
+            this.remeasure_session_message(session_id, index, cx);
             if !this.expanded_tools.remove(&toggle_key) {
                 this.expanded_tools.insert(toggle_key.clone());
             }
@@ -1152,7 +1093,8 @@ impl ConduitApp {
                 .child(
                     h_flex()
                         .debug_selector(move || format!("activity-marker-{session_id}-{index}"))
-                        .size(px(ACTIVITY_MARKER_SIZE))
+                        .w(px(ACTIVITY_MARKER_SLOT_SIZE))
+                        .h(px(ACTIVITY_MARKER_SIZE))
                         .flex_shrink_0()
                         .items_center()
                         .justify_center()
@@ -1259,37 +1201,12 @@ impl ConduitApp {
     ) {
         let started = Instant::now();
         let index = self.chat_rows.message(row);
-        // Keep the Markdown state in the row's namespace even when it is only
-        // measured as overdraw. Scroll layout can then wait for the parser
-        // instead of treating a long reply's empty first frame as its height.
-        let markdown = self
-            .selected_session
-            .and_then(|id| self.session(id))
-            .and_then(|session| {
-                let item = session.messages.get(index)?;
-                (should_render_message_item(item, session.provider)
-                    && (item.kind == ItemKind::Assistant
-                        || (item.kind == ItemKind::Reasoning
-                            && self.reasoning_expanded(session.id, item)
-                            && !reasoning_body(item, session.provider).trim().is_empty())))
-                .then(|| {
-                    let text = message_markdown(item, session.provider);
-                    let state = window.use_keyed_state(
-                        SharedString::from(format!("chat-markdown-{}-{}", session.id, item.key)),
-                        cx,
-                        |_, cx| {
-                            gpui_kit::base::text::TextViewState::markdown(text.as_ref(), cx).motion(
-                                gpui_kit::base::TextViewMotion::default()
-                                    .with_stream_fade(Duration::from_millis(180))
-                                    .with_stream_fade_stagger(Duration::from_millis(8)),
-                            )
-                        },
-                    );
-                    state.update(cx, |state, cx| state.set_text(text.as_ref(), cx));
-                    state
-                })
-            });
-        let element = self.render_message_content(index, markdown.as_ref(), cx);
+        let (element, markdown) = self.selected_session.map_or_else(
+            || (div().into_any_element(), None),
+            |session| {
+                self.render_session_message(session, index, self.chat_rows.group(index), window, cx)
+            },
+        );
         #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
         profiling::record("row_build", started.elapsed());
         if self.store.ui.performance_monitor {
@@ -1300,9 +1217,53 @@ impl ConduitApp {
         (element, markdown)
     }
 
+    pub(in crate::app) fn render_session_message(
+        &mut self,
+        session_id: u64,
+        index: usize,
+        group: Option<rows::Group>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (
+        AnyElement,
+        Option<Entity<gpui_kit::base::text::TextViewState>>,
+    ) {
+        // Keep the Markdown state in the row's namespace even when it is only
+        // measured as overdraw. Scroll layout can then wait for the parser
+        // instead of treating a long reply's empty first frame as its height.
+        let markdown = self.session(session_id).and_then(|session| {
+            let item = session.messages.get(index)?;
+            (should_render_message_item(item, session.provider)
+                && (item.kind == ItemKind::Assistant
+                    || (item.kind == ItemKind::Reasoning
+                        && self.reasoning_expanded(session.id, item)
+                        && !reasoning_body(item, session.provider).trim().is_empty())))
+            .then(|| {
+                let text = message_markdown(item, session.provider);
+                let state = window.use_keyed_state(
+                    SharedString::from(format!("chat-markdown-{}-{}", session.id, item.key)),
+                    cx,
+                    |_, cx| {
+                        gpui_kit::base::text::TextViewState::markdown(text.as_ref(), cx).motion(
+                            gpui_kit::base::TextViewMotion::default()
+                                .with_stream_fade(Duration::from_millis(180))
+                                .with_stream_fade_stagger(Duration::from_millis(8)),
+                        )
+                    },
+                );
+                state.update(cx, |state, cx| state.set_text(text.as_ref(), cx));
+                state
+            })
+        });
+        let element = self.render_message_content(session_id, index, group, markdown.as_ref(), cx);
+        (element, markdown)
+    }
+
     fn render_message_content(
         &mut self,
+        session_id: u64,
         index: usize,
+        group: Option<rows::Group>,
         markdown: Option<&Entity<gpui_kit::base::text::TextViewState>>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -1311,13 +1272,19 @@ impl ConduitApp {
             .workspaces
             .iter()
             .flat_map(|w| &w.sessions)
-            .find(|session| Some(session.id) == self.selected_session)
+            .find(|session| session.id == session_id)
         else {
             return div().into_any_element();
         };
         let Some(item) = session.messages.get(index) else {
             return div().into_any_element();
         };
+        if item.kind == ItemKind::Error && crate::failure::recovered(&session.messages, index) {
+            return div()
+                .debug_selector(move || format!("recovered-error-{index}"))
+                .h(px(0.))
+                .into_any_element();
+        }
         if !should_render_message_item(item, session.provider) {
             return div()
                 .debug_selector(move || format!("empty-message-{index}"))
@@ -1326,7 +1293,8 @@ impl ConduitApp {
         }
         let session_id = session.id;
         let provider = session.provider;
-        let group = self.chat_rows.group(index);
+        let edit_group = group.filter(|group| group.edits && group.count > 1);
+        let group = group.filter(|group| !group.edits);
         let tool_group = group.map(|group| (group.start, group.end));
         let tool_group_expanded = group.is_some_and(|group| group.expanded);
         if let Some((start, end)) = tool_group
@@ -1345,7 +1313,9 @@ impl ConduitApp {
         }
         let typography = self.chat_typography();
         let timestamp = message_timestamp(item.created_at.max(session.created_at));
-        let regenerable = item.kind == ItemKind::Assistant
+        let composer_binding = self.chat_composer_binding(session_id);
+        let regenerable = composer_binding.is_some()
+            && item.kind == ItemKind::Assistant
             && self.writable
             && !self.closing
             && !self.session_control.runs.contains_key(&session_id)
@@ -1468,8 +1438,8 @@ impl ConduitApp {
                             .min_w_0()
                             .gap_2()
                             .rounded(px(8.))
-                            .px_4()
-                            .py_3()
+                            .px(px(CHAT_CARD_INSET_X))
+                            .py(px(CHAT_CARD_INSET_Y))
                             // A restrained prompt surface distinguishes the user
                             // without turning each turn into a separate card.
                             .bg(rgb(palette().surface_hover))
@@ -1616,9 +1586,16 @@ impl ConduitApp {
                         )
                         .map(|button| reveal_message_action(button, message_group.clone()))
                         .debug_selector(move || format!("reply-retry-button-{index}"))
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| this.regenerate(index, window, cx),
-                        )),
+                        .on_click(cx.listener({
+                            let binding = composer_binding.clone();
+                            move |this, _, window, cx| {
+                                if let Some(binding) = &binding {
+                                    this.with_composer(binding.clone(), cx, |this, cx| {
+                                        this.regenerate(index, window, cx)
+                                    });
+                                }
+                            }
+                        })),
                     );
                 }
                 let model_meta = h_flex()
@@ -1748,7 +1725,7 @@ impl ConduitApp {
                                 .w_full()
                                 .min_w_0()
                                 .pl(px(ACTIVITY_ROW_INSET
-                                    + ACTIVITY_MARKER_SIZE
+                                    + ACTIVITY_MARKER_SLOT_SIZE
                                     + ACTIVITY_LABEL_GAP))
                                 .child(panel),
                         )
@@ -1757,6 +1734,18 @@ impl ConduitApp {
                     };
                 }
                 activity_container(content.into_any_element(), tool_group, session_id, index)
+            }
+            ItemKind::Tool if edit_group.is_some() => {
+                let group = edit_group.unwrap();
+                edit_group::card(
+                    session_id,
+                    group,
+                    &session.messages[group.start..group.end],
+                    &self.expanded_tools,
+                    &typography,
+                    (&mut self.tool_diffs, &mut self.tool_analysis),
+                    cx,
+                )
             }
             ItemKind::Tool => {
                 let detail_key = (session_id, item.key.clone());
@@ -1791,12 +1780,10 @@ impl ConduitApp {
                 } else {
                     Vec::new()
                 };
-                let title = if question_history {
-                    conduit::i18n::text_static("user_input.question_history").to_string()
-                } else if edit {
+                let title = if edit {
                     conduit::i18n::text_static("chat.edit_file").to_string()
                 } else {
-                    item.text.clone()
+                    first_line(&item.text)
                 };
                 let header = Button::new(SharedString::from(format!("{tool_id}-toggle")))
                     .ghost()
@@ -1852,15 +1839,20 @@ impl ConduitApp {
                                     .min_w_0()
                                     .items_center()
                                     .gap_2()
-                                    .child(
-                                        div()
-                                            .min_w_0()
-                                            .flex_shrink_1()
-                                            .text_left()
-                                            .text_size(px(13.))
-                                            .truncate()
-                                            .child(title),
-                                    )
+                                    .when(!question_history, |row| {
+                                        row.child(
+                                            div()
+                                                .min_w_0()
+                                                .flex_1()
+                                                .debug_selector(move || {
+                                                    format!("tool-title-{session_id}-{index}")
+                                                })
+                                                .text_left()
+                                                .text_size(px(13.))
+                                                .truncate()
+                                                .child(title),
+                                        )
+                                    })
                                     .children(edit_paths.iter().take(2).map(|path| {
                                         let name = Path::new(path)
                                             .file_name()
@@ -1889,13 +1881,66 @@ impl ConduitApp {
                                         )
                                     }),
                             )
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .text_size(px(11.))
-                                    .text_color(rgb(palette().faint))
-                                    .child(item.status.label().to_string()),
-                            )
+                            .when(!tool_waiting_for_approval(item), |header| {
+                                header.child(
+                                    div()
+                                        .debug_selector(move || {
+                                            format!("tool-status-{session_id}-{index}")
+                                        })
+                                        .flex_shrink_0()
+                                        .text_size(px(11.))
+                                        .text_color(rgb(palette().faint))
+                                        .child(item.status.label().to_string()),
+                                )
+                            })
+                            .when(question_history, |header| {
+                                let dock_key = item.key.clone();
+                                header
+                                    .child(
+                                        Button::new(SharedString::from(format!("{tool_id}-dock")))
+                                            .ghost()
+                                            .small()
+                                            .compact()
+                                            .icon(IconName::PanelRight)
+                                            .tooltip(conduit::i18n::text_static(
+                                                "tools.view_tool_details_on_the_right",
+                                            ))
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                cx.stop_propagation();
+                                                this.open_tool_details(
+                                                    session_id, &dock_key, window, cx,
+                                                );
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new(SharedString::from(format!("{tool_id}-copy")))
+                                            .ghost()
+                                            .small()
+                                            .compact()
+                                            .icon(IconName::Copy)
+                                            .tooltip(conduit::i18n::text_static(
+                                                "tools.copy_input_and_output",
+                                            ))
+                                            .cursor_pointer()
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                cx.stop_propagation();
+                                                if let Some(approval) = this
+                                                    .session(session_id)
+                                                    .and_then(|session| session.messages.get(index))
+                                                    .and_then(super::user_input::history)
+                                                {
+                                                    cx.write_to_clipboard(
+                                                        ClipboardItem::new_string(
+                                                            super::user_input::history_text(
+                                                                approval,
+                                                            ),
+                                                        ),
+                                                    );
+                                                }
+                                            })),
+                                    )
+                            })
                             .child(
                                 Icon::new(if expanded {
                                     IconName::ChevronDown
@@ -1910,7 +1955,7 @@ impl ConduitApp {
                     .on_click(cx.listener({
                         let detail_key = detail_key.clone();
                         move |this, _, _, cx| {
-                            this.remeasure_message(index);
+                            this.remeasure_session_message(session_id, index, cx);
                             if question_history {
                                 this.question_expansion
                                     .insert(detail_key.clone(), !expanded);
@@ -1930,20 +1975,25 @@ impl ConduitApp {
                     .bg(rgb(palette().surface))
                     .child(header);
                 if expanded {
-                    let tool_scroll = self
-                        .tool_scrolls
-                        .entry((session_id, item.key.clone()))
-                        .or_default()
-                        .clone();
-                    card = card.child(tool_detail_panel(
-                        &detail_key,
-                        item,
-                        &tool_scroll,
-                        &typography,
-                        &mut self.tool_diffs,
-                        &mut self.tool_analysis,
-                        cx,
-                    ));
+                    let content = if let Some(approval) = super::user_input::history(item) {
+                        super::user_input::history_content(&tool_id, approval)
+                    } else {
+                        let tool_scroll = self
+                            .tool_scrolls
+                            .entry(detail_key.clone())
+                            .or_default()
+                            .clone();
+                        tool_detail_panel(
+                            &detail_key,
+                            item,
+                            &tool_scroll,
+                            &typography,
+                            &mut self.tool_diffs,
+                            &mut self.tool_analysis,
+                            cx,
+                        )
+                    };
+                    card = card.child(content);
                 }
                 card.into_any_element()
             }
@@ -1964,15 +2014,7 @@ impl ConduitApp {
                     .runs
                     .get(&session_id)
                     .is_some_and(|run| item.key.starts_with(&format!("{}-", run.prefix)));
-                let recovered = session.messages[index + 1..]
-                    .iter()
-                    .take_while(|item| item.kind != ItemKind::User)
-                    .any(|item| {
-                        matches!(
-                            item.kind,
-                            ItemKind::Assistant | ItemKind::Reasoning | ItemKind::Tool
-                        ) && !item.text.trim().is_empty()
-                    });
+                let recovered = crate::failure::recovered(&session.messages, index);
                 let retry_activity = (active && !recovered)
                     .then(|| crate::failure::retry_activity(&raw_error))
                     .flatten();
@@ -2001,7 +2043,8 @@ impl ConduitApp {
                 let copy_text = raw_error.clone();
                 let copy_id = SharedString::from(format!("error-copy-{}-{}", session_id, item.key));
                 let copied = self.copied_action.as_ref() == Some(&copy_id);
-                let can_retry = self.writable
+                let can_retry = composer_binding.is_some()
+                    && self.writable
                     && !self.closing
                     && !self.session_busy(session_id)
                     && super::runtime::error_retry_prompt(session, index).is_some();
@@ -2037,9 +2080,16 @@ impl ConduitApp {
                         .compact()
                         .cursor_pointer()
                         .child(conduit::i18n::text_static("chat.retry"))
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| this.retry_error(index, window, cx),
-                        )),
+                        .on_click(cx.listener({
+                            let binding = composer_binding.clone();
+                            move |this, _, window, cx| {
+                                if let Some(binding) = &binding {
+                                    this.with_composer(binding.clone(), cx, |this, cx| {
+                                        this.retry_error(index, window, cx)
+                                    });
+                                }
+                            }
+                        })),
                     );
                 }
                 v_flex()
@@ -2135,7 +2185,7 @@ impl ConduitApp {
                                     if !this.expanded_errors.insert(error_key.clone()) {
                                         this.expanded_errors.remove(&error_key);
                                     }
-                                    this.scroll.remeasure();
+                                    this.remeasure_session_message(session_id, index, cx);
                                     cx.notify();
                                 },
                             )),
@@ -2196,7 +2246,7 @@ impl ConduitApp {
         let row = div()
             .debug_selector(move || format!("message-row-{index}"))
             .w_full()
-            .px_6()
+            .px(px(CHAT_CONTENT_GUTTER))
             .when(compact_activity, |row| {
                 row.pb(if tool_group.is_some_and(|(_, end)| index + 1 < end) {
                     px(0.)
@@ -2204,7 +2254,7 @@ impl ConduitApp {
                     px(10.)
                 })
             })
-            .when(!compact_activity, |row| row.pb_3())
+            .when(!compact_activity, |row| row.pb(px(CHAT_BLOCK_GAP)))
             .child(
                 div()
                     .id(SharedString::from(format!(
@@ -2214,7 +2264,7 @@ impl ConduitApp {
                     .w_full()
                     .min_w_0()
                     .when(!self.store.ui.full_width_content, |card| {
-                        card.max_w(px(840.)).mx_auto()
+                        card.max_w(px(CHAT_CONTENT_MAX_WIDTH)).mx_auto()
                     })
                     .rounded(px(12.))
                     .border(px(MESSAGE_CARD_BORDER))

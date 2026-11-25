@@ -53,9 +53,74 @@ pub(crate) struct Batch {
     pub completed: usize,
     pub total: usize,
     pub done: bool,
+    /// Per workspace: history files fully read in this batch, with the stamp they were read at.
+    pub file_stamps: Vec<HashMap<PathBuf, crate::domain::HistoryFileStamp>>,
+    /// Files skipped because every matching workspace already imported their current stamp.
+    pub skipped: usize,
     pub bytes_read: u64,
     pub verified_bytes: u64,
     pub cache_hits: usize,
+    pub claude_parse_bytes: u64,
+    pub codex_parse_bytes: u64,
+    pub codex_probe_bytes: u64,
+    pub opencode_bytes: u64,
+    pub claude_verified_bytes: u64,
+    pub codex_verified_bytes: u64,
+    pub claude_cache_hits: usize,
+    pub codex_cache_hits: usize,
+}
+
+impl Batch {
+    pub(super) fn add_parse_bytes(&mut self, provider: Provider, bytes: u64) {
+        self.bytes_read += bytes;
+        match provider {
+            Provider::Claude => self.claude_parse_bytes += bytes,
+            Provider::Codex => self.codex_parse_bytes += bytes,
+            _ => {}
+        }
+    }
+
+    pub(super) fn add_verified_bytes(&mut self, provider: Provider, bytes: u64) {
+        self.verified_bytes += bytes;
+        match provider {
+            Provider::Claude => self.claude_verified_bytes += bytes,
+            Provider::Codex => self.codex_verified_bytes += bytes,
+            _ => {}
+        }
+    }
+
+    pub(super) fn add_codex_probe_bytes(&mut self, bytes: u64) {
+        self.bytes_read += bytes;
+        self.codex_probe_bytes += bytes;
+    }
+
+    pub(super) fn add_opencode_bytes(&mut self, bytes: u64) {
+        self.bytes_read += bytes;
+        self.opencode_bytes += bytes;
+    }
+
+    pub(super) fn add_cache_hit(&mut self, provider: Provider) {
+        self.cache_hits += 1;
+        match provider {
+            Provider::Claude => self.claude_cache_hits += 1,
+            Provider::Codex => self.codex_cache_hits += 1,
+            _ => {}
+        }
+    }
+
+    pub(super) fn merge_read_metrics(&mut self, other: &Self) {
+        self.bytes_read += other.bytes_read;
+        self.verified_bytes += other.verified_bytes;
+        self.cache_hits += other.cache_hits;
+        self.claude_parse_bytes += other.claude_parse_bytes;
+        self.codex_parse_bytes += other.codex_parse_bytes;
+        self.codex_probe_bytes += other.codex_probe_bytes;
+        self.opencode_bytes += other.opencode_bytes;
+        self.claude_verified_bytes += other.claude_verified_bytes;
+        self.codex_verified_bytes += other.codex_verified_bytes;
+        self.claude_cache_hits += other.claude_cache_hits;
+        self.codex_cache_hits += other.codex_cache_hits;
+    }
 }
 
 struct Lines {
@@ -151,7 +216,8 @@ enum Pending {
 enum Loaded {
     Pending,
     Changed,
-    Complete(Option<(Vec<String>, ImportedSession)>),
+    /// The stamp is the one the content was validated against, not the queued one.
+    Complete(Stamp, Option<Box<(Vec<String>, ImportedSession)>>),
 }
 
 pub(super) fn batch_exhausted(batch: &Batch, started: std::time::Instant) -> bool {
@@ -166,12 +232,19 @@ pub(crate) struct Scanner {
     warnings: Vec<String>,
     total: usize,
     completed: usize,
+    skipped: usize,
     pending: Option<Pending>,
     subagent_statuses: HashMap<String, Vec<crate::subagents::Agent>>,
     opencode: Option<super::opencode::Scanner>,
 }
 impl Scanner {
-    pub(crate) fn new(workspaces: Vec<PathBuf>, cancel: &AtomicBool) -> Self {
+    /// `stamps` is parallel to `workspaces`: the history files each workspace has
+    /// already imported, keyed by path, with the stamp they were imported at.
+    pub(crate) fn new(
+        workspaces: Vec<PathBuf>,
+        stamps: Vec<HashMap<PathBuf, crate::domain::HistoryFileStamp>>,
+        cancel: &AtomicBool,
+    ) -> Self {
         let home = home();
         let opencode_path = std::env::var_os("XDG_DATA_HOME")
             .map(PathBuf::from)
@@ -180,6 +253,7 @@ impl Scanner {
         Self::open(
             home.as_deref(),
             workspaces,
+            stamps,
             &crate::store::Store::path().with_file_name("history-index-v1.sqlite3"),
             opencode_path.as_deref(),
             cancel,
@@ -188,10 +262,22 @@ impl Scanner {
     pub(super) fn open(
         home: Option<&Path>,
         workspaces: Vec<PathBuf>,
+        stamps: Vec<HashMap<PathBuf, crate::domain::HistoryFileStamp>>,
         index_path: &Path,
         opencode_path: Option<&Path>,
         cancel: &AtomicBool,
     ) -> Self {
+        let mut known: Vec<HashMap<PathBuf, Stamp>> = stamps
+            .into_iter()
+            .map(|stamps| {
+                stamps
+                    .into_iter()
+                    .map(|(path, stamp)| (path, stamp.into()))
+                    .collect()
+            })
+            .collect();
+        known.resize_with(workspaces.len(), HashMap::new);
+        let mut skipped = 0;
         let mut warnings = Vec::new();
         let index = match Index::open(index_path) {
             Ok(index) => Some(index),
@@ -251,9 +337,24 @@ impl Scanner {
                         if let Some(meta) = &indexed
                             && meta.stamp == stamp
                             && !meta.cwds.is_empty()
-                            && !matches_workspace(&meta.cwds, &workspaces)
                         {
-                            continue;
+                            // Files for other workspaces never need reading. A file whose
+                            // current stamp every matching workspace already imported is
+                            // skipped too: imports merge per session, so its sessions stay.
+                            let mut matching = workspaces
+                                .iter()
+                                .zip(&known)
+                                .filter(|(workspace, _)| {
+                                    meta.cwds.iter().any(|cwd| same_dir(cwd, workspace))
+                                })
+                                .peekable();
+                            if matching.peek().is_none() {
+                                continue;
+                            }
+                            if matching.all(|(_, known)| known.get(&path) == Some(&stamp)) {
+                                skipped += 1;
+                                continue;
+                            }
                         }
                         candidates.push(Candidate {
                             path,
@@ -295,6 +396,7 @@ impl Scanner {
             warnings,
             total,
             completed: 0,
+            skipped,
             pending: None,
             subagent_statuses: HashMap::new(),
             opencode,
@@ -307,9 +409,19 @@ impl Scanner {
             completed: self.completed,
             total: self.total,
             done: false,
+            file_stamps: vec![HashMap::new(); self.workspaces.len()],
+            skipped: self.skipped,
             bytes_read: 0,
             verified_bytes: 0,
             cache_hits: 0,
+            claude_parse_bytes: 0,
+            codex_parse_bytes: 0,
+            codex_probe_bytes: 0,
+            opencode_bytes: 0,
+            claude_verified_bytes: 0,
+            codex_verified_bytes: 0,
+            claude_cache_hits: 0,
+            codex_cache_hits: 0,
         };
         let started = std::time::Instant::now();
         let mut files = 0;
@@ -335,7 +447,8 @@ impl Scanner {
                         ));
                     }
                 }
-                Ok(Loaded::Complete(Some((cwds, mut session)))) => {
+                Ok(Loaded::Complete(stamp, Some(imported))) => {
+                    let (cwds, mut session) = *imported;
                     if session.is_subagent {
                         for agent in &session.subagents {
                             self.subagent_statuses
@@ -346,13 +459,19 @@ impl Scanner {
                     } else if let Some(agents) = self.subagent_statuses.remove(&session.native_id) {
                         super::merge_imported_subagents(&mut session.subagents, agents);
                     }
-                    for (workspace, sessions) in self.workspaces.iter().zip(&mut batch.sessions) {
+                    for ((workspace, sessions), stamps) in self
+                        .workspaces
+                        .iter()
+                        .zip(&mut batch.sessions)
+                        .zip(&mut batch.file_stamps)
+                    {
                         if cwds.iter().any(|cwd| same_dir(cwd, workspace)) {
                             sessions.push(session.clone());
+                            stamps.insert(candidate.path.clone(), stamp.clone().into());
                         }
                     }
                 }
-                Ok(Loaded::Complete(None)) => {}
+                Ok(Loaded::Complete(_, None)) => {}
                 Err(error) => {
                     if batch.warnings.len() < 8 && !cancel.load(Ordering::Acquire) {
                         batch
@@ -433,8 +552,12 @@ impl Scanner {
                         if Stamp::read(path)? != stamp {
                             return Ok(Loaded::Changed);
                         }
-                        batch.cache_hits += 1;
-                        return Ok(Loaded::Complete(parser.finish()));
+                        batch.add_cache_hit(candidate.provider);
+                        // Keep reused entries from being evicted as the oldest.
+                        if let Some(index) = &mut self.index {
+                            let _ = index.touch(path);
+                        }
+                        return Ok(Loaded::Complete(stamp, parser.finish().map(Box::new)));
                     }
                     if metadata.may_append(&stamp) {
                         Pending::Verify {
@@ -459,7 +582,7 @@ impl Scanner {
                     if candidate.provider == Provider::Codex
                         && self.foreign_codex(candidate, &stamp, batch)?
                     {
-                        return Ok(Loaded::Complete(None));
+                        return Ok(Loaded::Complete(stamp, None));
                     }
                     parsing(
                         path,
@@ -503,7 +626,7 @@ impl Scanner {
                     return Ok(Loaded::Changed);
                 }
                 digest.update(&buffer[..read]);
-                batch.verified_bytes += read as u64;
+                batch.add_verified_bytes(candidate.provider, read as u64);
             }
             if Stamp::read(path)? != stamp {
                 return Ok(Loaded::Changed);
@@ -541,7 +664,7 @@ impl Scanner {
                 lines.next()
             }
         }));
-        batch.bytes_read += lines.read - previous_read;
+        batch.add_parse_bytes(candidate.provider, lines.read - previous_read);
         if let Some(error) = lines.error {
             return Err(error);
         }
@@ -561,7 +684,7 @@ impl Scanner {
         }
         let metadata = Metadata::new(
             candidate.provider,
-            stamp,
+            stamp.clone(),
             lines.offset,
             parser.cwds(),
             lines.digest.finalize().to_vec(),
@@ -576,7 +699,7 @@ impl Scanner {
                 &[("error", error.to_string())],
             ));
         }
-        Ok(Loaded::Complete(parser.finish()))
+        Ok(Loaded::Complete(stamp, parser.finish().map(Box::new)))
     }
 
     fn foreign_codex(
@@ -592,7 +715,7 @@ impl Scanner {
             .take(64 * 1024)
             .read_to_end(&mut prefix)
             .map_err(|error| error.to_string())?;
-        batch.bytes_read += prefix.len() as u64;
+        batch.add_codex_probe_bytes(prefix.len() as u64);
         let cwd = String::from_utf8_lossy(&prefix)
             .lines()
             .filter_map(|line| serde_json::from_str::<Value>(line).ok())
@@ -660,19 +783,20 @@ fn matches_workspace(cwds: &[String], workspaces: &[PathBuf]) -> bool {
 }
 
 pub(crate) fn run(workspaces: &[PathBuf], cancel: &AtomicBool) -> Batch {
-    let mut scanner = Scanner::new(workspaces.to_vec(), cancel);
+    let mut scanner = Scanner::new(workspaces.to_vec(), Vec::new(), cancel);
     let mut result = scanner.next(cancel);
     while !result.done {
         let next = scanner.next(cancel);
+        result.merge_read_metrics(&next);
         for (sessions, incoming) in result.sessions.iter_mut().zip(next.sessions) {
             sessions.extend(incoming);
+        }
+        for (stamps, incoming) in result.file_stamps.iter_mut().zip(next.file_stamps) {
+            stamps.extend(incoming);
         }
         result.warnings.extend(next.warnings);
         result.completed = next.completed;
         result.done = next.done;
-        result.bytes_read += next.bytes_read;
-        result.verified_bytes += next.verified_bytes;
-        result.cache_hits += next.cache_hits;
     }
     for sessions in &mut result.sessions {
         sessions.sort_by_key(|session| std::cmp::Reverse(session.created_at));

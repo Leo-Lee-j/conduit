@@ -10,7 +10,7 @@ use std::{
     os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
     path::PathBuf,
     sync::{
-        Arc, Condvar, Mutex,
+        Arc, Condvar, Mutex, PoisonError,
         atomic::{AtomicBool, AtomicU32, Ordering},
     },
     thread,
@@ -94,7 +94,7 @@ impl InputQueue {
         }
     }
     fn push(&self, bytes: Vec<u8>, response: bool) -> Result<(), String> {
-        let mut q = self.pending.lock().unwrap();
+        let mut q = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
         if q.closed {
             return Err(conduit::i18n::text_static(
                 "terminal.runtime.terminal_stopped_accepting_input",
@@ -134,11 +134,11 @@ impl InputQueue {
         }
     }
     fn fail(&self, error: String) {
-        *self.fault.lock().unwrap() = Some(error);
+        *self.fault.lock().unwrap_or_else(PoisonError::into_inner) = Some(error);
         self.wake.signal();
     }
     fn close(&self) {
-        let mut q = self.pending.lock().unwrap();
+        let mut q = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
         q.closed = true;
         q.items.clear();
         q.bytes = 0;
@@ -205,7 +205,10 @@ impl Runtime {
         }
     }
     pub fn state(&self) -> RunState {
-        self.state.lock().unwrap().clone()
+        self.state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
     pub fn active(&self) -> bool {
         self.state().active()
@@ -290,7 +293,7 @@ struct Worker {
 }
 impl Worker {
     fn state(&self, value: RunState) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if *state != value {
             *state = value;
             self.dirty.store(true, Ordering::Release);
@@ -337,7 +340,7 @@ impl Worker {
                             if !parsing {
                                 continue;
                             }
-                            let mut screen = screen.lock().unwrap();
+                            let mut screen = screen.lock().unwrap_or_else(PoisonError::into_inner);
                             let parsed =
                                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                     screen.advance(&bytes[..count])
@@ -374,7 +377,10 @@ impl Worker {
                     }
                 }
                 if parsing {
-                    screen.lock().unwrap().stop_sync();
+                    screen
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .stop_sync();
                 }
                 dirty.store(true, Ordering::Release);
                 wake.signal();
@@ -394,9 +400,9 @@ impl Worker {
         let input = self.input.clone();
         let writer = thread::spawn(move || {
             loop {
-                let mut q = input.pending.lock().unwrap();
+                let mut q = input.pending.lock().unwrap_or_else(PoisonError::into_inner);
                 while q.items.is_empty() && !q.closed {
-                    q = input.ready.wait(q).unwrap();
+                    q = input.ready.wait(q).unwrap_or_else(PoisonError::into_inner);
                 }
                 if q.closed {
                     break;
@@ -404,7 +410,7 @@ impl Worker {
                 let (bytes, response) = q.items.pop_front().unwrap();
                 drop(q);
                 let result = pipe.write_all(&bytes);
-                let mut q = input.pending.lock().unwrap();
+                let mut q = input.pending.lock().unwrap_or_else(PoisonError::into_inner);
                 if !q.closed {
                     if response {
                         q.responses -= bytes.len();
@@ -433,7 +439,13 @@ impl Worker {
             if self.stop.load(Ordering::Acquire) {
                 break (1, None);
             }
-            if let Some(error) = self.input.fault.lock().unwrap().take() {
+            if let Some(error) = self
+                .input
+                .fault
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take()
+            {
                 break (1, Some(error));
             }
             match pty.exit_code() {
@@ -461,12 +473,15 @@ impl Worker {
                     break (1, Some(error.to_string()));
                 }
                 last_resize = Instant::now();
-                self.screen.lock().unwrap().resize(cols, rows);
+                self.screen
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .resize(cols, rows);
                 self.geometry.store(desired, Ordering::Release);
                 self.dirty.store(true, Ordering::Release);
             }
             let timeout = {
-                let mut screen = self.screen.lock().unwrap();
+                let mut screen = self.screen.lock().unwrap_or_else(PoisonError::into_inner);
                 match screen.parser.sync_timeout().sync_timeout() {
                     Some(deadline) if deadline <= Instant::now() => {
                         screen.stop_sync();
@@ -601,7 +616,14 @@ mod tests {
         screen.advance(b"\x1b[?1049l").unwrap();
         assert!(screen.snapshot().text().contains("红色"));
         screen.advance(b"\x1b[6n").unwrap();
-        assert!(!input.pending.lock().unwrap().items.is_empty());
+        assert!(
+            !input
+                .pending
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .items
+                .is_empty()
+        );
     }
     #[test]
     fn parser_rejects_unbounded_control_and_combining_payloads() {
@@ -657,7 +679,14 @@ mod tests {
         assert!(queue.push(vec![0; MAX_INPUT], false).is_ok());
         assert!(queue.push(vec![1], false).is_err());
         assert!(queue.push(vec![1; 128], true).is_ok());
-        assert_eq!(queue.pending.lock().unwrap().bytes, QUEUE_BYTES);
+        assert_eq!(
+            queue
+                .pending
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .bytes,
+            QUEUE_BYTES
+        );
         queue.close();
         assert!(queue.push(vec![1], false).is_err());
     }

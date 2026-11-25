@@ -8,7 +8,7 @@ use gpui::{
 };
 use smallvec::SmallVec;
 
-use crate::StyledExt as _;
+use crate::{StyledExt as _, a11y_disabled::A11yDisabledExt as _};
 
 type ChangeHandler = Rc<dyn Fn(bool, &ClickEvent, &mut Window, &mut App)>;
 
@@ -348,6 +348,7 @@ impl RenderOnce for AccordionTrigger {
         self.base
             .role(Role::Button)
             .aria_expanded(self.open)
+            .when(!self.disabled, |trigger| trigger.tab_index(0))
             .when_some(
                 (!self.disabled).then_some(self.on_change).flatten(),
                 move |this, on_change| {
@@ -356,6 +357,7 @@ impl RenderOnce for AccordionTrigger {
             )
             .children(self.children)
             .refine_style(&self.style)
+            .a11y_disabled(self.disabled)
     }
 }
 

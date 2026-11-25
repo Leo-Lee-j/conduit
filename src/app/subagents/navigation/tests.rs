@@ -45,6 +45,64 @@ fn install(app: &mut ConduitApp, key: &TaskKey, text: &str) -> u64 {
 }
 
 #[gpui_kit::test]
+fn child_reasoning_summary_paragraphs_and_published_bodies_render(cx: &mut TestAppContext) {
+    let (app, cx, _) = crate::app::queue::tests::fixture(cx, "child-reasoning-visibility");
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(900.)));
+    let id = cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.startup = None;
+            app.writable = false;
+            app.store.ui.collapse_reasoning = false;
+            let key = prepare(app, window, cx);
+            let id = install(app, &key, "Answer");
+            app.session_mut(id).unwrap().messages = serde_json::from_value(json!([
+                {"key":"summary", "kind":"Reasoning", "text":"**Inspect files**\n\nRead the relevant code.\n\n**Check tests**\n\nVerify the result.", "reasoning_summary":true, "status":"completed"},
+                {"key":"legacy", "kind":"Reasoning", "text":"**Inspect files**\n\nLegacy summary body.", "status":"completed"},
+                {"key":"body", "kind":"Reasoning", "text":"Published thinking body.", "reasoning_summary":false, "status":"completed"},
+                {"key":"reply", "kind":"Assistant", "text":"Answer"},
+                {"key":"heading", "kind":"Reasoning", "text":"**Inspect files**", "reasoning_summary":true, "status":"completed"},
+                {"key":"headings", "kind":"Reasoning", "text":"**Inspect files**\n\n**Check tests**", "status":"completed"}
+            ])).unwrap();
+            cx.notify();
+            id
+        })
+    });
+    for _ in 0..2 {
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.simulate_next_frame(cx);
+            let _ = window.draw(cx);
+        });
+    }
+    assert!(cx.debug_bounds("subagent-page").is_some());
+    for index in 0..3 {
+        assert!(
+            cx.debug_bounds(format!("activity-{id}-{index}").leak())
+                .is_some()
+        );
+        assert!(
+            cx.debug_bounds(format!("reasoning-body-{id}-{index}").leak())
+                .is_some()
+        );
+    }
+    for index in 4..6 {
+        assert!(
+            cx.debug_bounds(format!("activity-{id}-{index}").leak())
+                .is_none()
+        );
+        assert!(
+            cx.debug_bounds(format!("reasoning-body-{id}-{index}").leak())
+                .is_none()
+        );
+    }
+    cx.update(|_, cx| {
+        let session = app.read(cx).session(id).unwrap();
+        assert_eq!(session.messages.len(), 6);
+        assert_eq!(session.messages[3].text, "Answer");
+    });
+}
+
+#[gpui_kit::test]
 fn child_history_live_merge_is_idempotent_and_keeps_parent_untouched(cx: &mut TestAppContext) {
     let (app, cx, _) = crate::app::queue::tests::fixture(cx, "child-history-merge");
     cx.update(|window, cx| {

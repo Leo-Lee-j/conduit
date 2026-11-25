@@ -1,5 +1,7 @@
 //! Session inspector. Consumption comes from deduplicated turn observations;
 //! current context always remains a separate provider snapshot.
+mod files;
+
 use super::right::{RightBody, RightView};
 use super::*;
 use crate::app::state::{PlanStatus, plan_from_messages};
@@ -15,11 +17,13 @@ use std::{cell::RefCell, rc::Rc};
 
 #[derive(Default)]
 pub(super) struct Sections {
-    tokens: bool,
+    files_expanded: bool,
+    files: files::Cache,
     tools: bool,
     timing: bool,
     scroll: ScrollHandle,
     tool_stats: RefCell<Option<(ToolStatsKey, Rc<ToolStats>)>>,
+    api_emoji: RefCell<Option<ApiQualityEmoji>>,
 }
 
 #[derive(PartialEq, Eq)]
@@ -79,12 +83,13 @@ impl Sections {
 struct Consumption {
     input: Option<u64>,
     cached: Option<u64>,
+    cache_write: Option<u64>,
     output: Option<u64>,
     elapsed_ms: u64,
     turns: usize,
     incomplete: bool,
-    cache_hit_input: u64,
-    cache_hit_cached: u64,
+    cache_hit_input: u128,
+    cache_hit_cached: u128,
 }
 impl Consumption {
     fn add(&mut self, turn: &Observation) {
@@ -95,15 +100,20 @@ impl Consumption {
         }
         add_known(&mut self.input, turn.input);
         add_known(&mut self.cached, turn.cached);
+        add_known(&mut self.cache_write, turn.cache_write);
         add_known(&mut self.output, turn.output);
         self.elapsed_ms = self.elapsed_ms.saturating_add(turn.elapsed_ms);
         self.turns += 1;
-        self.incomplete |= turn.incomplete || turn.input.is_none() || turn.output.is_none();
+        self.incomplete |= turn.incomplete
+            || turn.input.is_none()
+            || turn.output.is_none()
+            || turn.cached.is_none()
+            || turn.cache_write.is_none();
         if let (Some(input), Some(cached)) = (turn.input, turn.cached)
             && cached <= input
         {
-            self.cache_hit_input = self.cache_hit_input.saturating_add(input);
-            self.cache_hit_cached = self.cache_hit_cached.saturating_add(cached);
+            self.cache_hit_input += u128::from(input);
+            self.cache_hit_cached += u128::from(cached);
         }
     }
     fn cache_hit(self) -> Option<f64> {
@@ -139,6 +149,24 @@ fn consumption<'a>(
     (total, latest.cloned())
 }
 
+fn history_consumption(usage: crate::domain::Usage) -> Consumption {
+    let input = usage.input_tokens_known.then_some(usage.input_tokens);
+    let cached = usage
+        .cached_input_tokens_known
+        .then_some(usage.cached_input_tokens);
+    let cache_hit = input.zip(cached).filter(|(input, cached)| cached <= input);
+    Consumption {
+        input,
+        cached,
+        cache_write: usage.cache_write_input_tokens,
+        output: usage.output_tokens_known.then_some(usage.output_tokens),
+        incomplete: input.is_none() || !usage.output_tokens_known,
+        cache_hit_input: cache_hit.map_or(0, |(input, _)| u128::from(input)),
+        cache_hit_cached: cache_hit.map_or(0, |(_, cached)| u128::from(cached)),
+        ..Default::default()
+    }
+}
+
 fn text(key: &'static str) -> &'static str {
     conduit::i18n::text_static(key)
 }
@@ -162,7 +190,81 @@ fn duration(value: Option<u64>) -> String {
         None => "—".into(),
     }
 }
-const API_QUALITY_WINDOW: usize = 10;
+const API_QUALITY_WINDOW: usize = 5;
+const API_QUALITY_BAR_HEIGHT: f32 = 34.;
+const API_QUALITY_EMOJI_DURATION: Duration = Duration::from_millis(300);
+
+struct ApiQualityEmoji {
+    current: &'static str,
+    previous: &'static str,
+    changed_at: Instant,
+    revision: u64,
+}
+
+fn api_quality_emoji(status: ApiQualityLevel, state: &Sections, cx: &App) -> AnyElement {
+    let emoji = status.emoji();
+    let now = Instant::now();
+    let mut stored = state.api_emoji.borrow_mut();
+    let animation = stored.get_or_insert(ApiQualityEmoji {
+        current: emoji,
+        previous: emoji,
+        changed_at: now,
+        revision: 0,
+    });
+    if animation.current != emoji {
+        animation.previous = animation.current;
+        animation.current = emoji;
+        animation.changed_at = now;
+        animation.revision += 1;
+    }
+    let slot = div()
+        .id("session-data-api-quality-emoji")
+        .test_support()
+        .relative()
+        .size(px(24.))
+        .flex_shrink_0();
+    let glyph = |emoji, scale, offset, opacity| {
+        div()
+            .absolute()
+            .size_full()
+            .left_0()
+            .top(px(offset))
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_size(ui_text_size(18. * scale))
+            .line_height(relative(1.))
+            .opacity(opacity)
+            .child(emoji)
+    };
+    if cx.reduce_motion()
+        || animation.previous == emoji
+        || now.duration_since(animation.changed_at) >= API_QUALITY_EMOJI_DURATION
+    {
+        return slot.child(glyph(emoji, 1., 0., 1.)).into_any_element();
+    }
+    let previous = animation.previous;
+    slot.with_animation(
+        ("session-data-api-quality-emoji-change", animation.revision),
+        Animation::new(API_QUALITY_EMOJI_DURATION),
+        move |slot, progress| {
+            let exit = (progress / 0.4).min(1.);
+            let enter = ((progress - 0.25) / 0.75).clamp(0., 1.);
+            // A small overshoot gives the incoming face a soft, single bounce.
+            let pop = 1. + 3.4 * (enter - 1.).powi(3) + 2.4 * (enter - 1.).powi(2);
+            slot.when(exit < 1., |slot| {
+                slot.child(glyph(previous, 1. - 0.2 * exit, -4. * exit, 1. - exit))
+            })
+            .child(glyph(
+                emoji,
+                0.7 + 0.3 * pop,
+                4. * (1. - pop),
+                (enter * 4.).min(1.),
+            ))
+        },
+    )
+    .into_any_element()
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ApiQualityLevel {
@@ -203,35 +305,28 @@ impl ApiQualityLevel {
             Self::Failed => "session_data.api_quality_failed",
         })
     }
-
-    fn color(self) -> u32 {
-        match self {
-            Self::Preparing | Self::Waiting | Self::Unknown => palette().muted,
-            Self::Responding | Self::Smooth | Self::Good => palette().activity_completed,
-            Self::Slow => palette().warning_text,
-            Self::Unstable | Self::Failed => palette().error_text,
-        }
-    }
 }
 
-fn api_quality<'a>(records: impl Iterator<Item = &'a Observation>) -> ApiQualityLevel {
+fn api_quality_samples<'a>(records: impl Iterator<Item = &'a Observation>) -> Vec<&'a Observation> {
     let mut samples = records
-        .filter(|record| {
-            record
-                .api_request_outcome
-                .is_some_and(|outcome| outcome != ApiRequestOutcome::Cancelled)
+        .filter(|record| match record.api_request_outcome {
+            Some(ApiRequestOutcome::Cancelled) => false,
+            Some(_) => true,
+            // Live responses already have a measured latency, but no final outcome yet.
+            None => record.api_first_response_ms.is_some(),
         })
         .collect::<Vec<_>>();
     samples.sort_by_key(|record| record.finished_at);
-    let recent = samples
-        .into_iter()
-        .rev()
-        .take(API_QUALITY_WINDOW)
-        .collect::<Vec<_>>();
+    samples.drain(..samples.len().saturating_sub(API_QUALITY_WINDOW));
+    samples
+}
+
+fn api_quality<'a>(records: impl Iterator<Item = &'a Observation>) -> ApiQualityLevel {
+    let recent = api_quality_samples(records);
     if recent.is_empty() {
         return ApiQualityLevel::Unknown;
     }
-    if recent[0].api_request_outcome == Some(ApiRequestOutcome::Failed) {
+    if recent.last().unwrap().api_request_outcome == Some(ApiRequestOutcome::Failed) {
         return ApiQualityLevel::Failed;
     }
     if recent
@@ -242,7 +337,6 @@ fn api_quality<'a>(records: impl Iterator<Item = &'a Observation>) -> ApiQuality
     }
     let mut latencies = recent
         .iter()
-        .filter(|record| record.api_request_outcome == Some(ApiRequestOutcome::Succeeded))
         .filter_map(|record| record.api_first_response_ms)
         .collect::<Vec<_>>();
     latencies.sort_unstable();
@@ -257,19 +351,160 @@ fn api_quality<'a>(records: impl Iterator<Item = &'a Observation>) -> ApiQuality
     }
 }
 
+// Normalize first response latency to quality: <= 2s is best, >= 20s is worst.
+// Missing measurements stay unknown; failed requests always have zero quality.
+fn api_quality_score(record: &Observation) -> Option<f32> {
+    match record.api_request_outcome {
+        Some(ApiRequestOutcome::Failed) => Some(0.),
+        Some(ApiRequestOutcome::Succeeded) | None => record
+            .api_first_response_ms
+            .map(|ms| 1. - (ms.saturating_sub(2_000).min(18_000) as f32 / 18_000.)),
+        _ => None,
+    }
+}
+
+fn api_quality_bar_color(score: Option<f32>) -> u32 {
+    let colors = palette();
+    let Some(score) = score else {
+        return colors.muted;
+    };
+    let (from, to, weight) = if score >= 0.5 {
+        (
+            colors.warning_text,
+            colors.activity_completed,
+            (score - 0.5) * 2.,
+        )
+    } else {
+        (colors.error_text, colors.warning_text, score * 2.)
+    };
+    [16, 8, 0].into_iter().fold(0, |color, shift| {
+        let a = ((from >> shift) & 0xff) as f32;
+        let b = ((to >> shift) & 0xff) as f32;
+        color | (((a + (b - a) * weight).round() as u32) << shift)
+    })
+}
+
+fn api_quality_chart(samples: &[&Observation], status: ApiQualityLevel) -> impl IntoElement {
+    let mut chart = h_flex()
+        .id("session-data-api-quality-chart")
+        .test_support()
+        .role(Role::Group)
+        .aria_label(text("session_data.api_quality_note"))
+        .flex_shrink_0()
+        .w(px(52.))
+        .h_full()
+        .py(px(4.))
+        .gap(px(3.))
+        .justify_end()
+        .items_end();
+    if samples.is_empty() {
+        return chart
+            .items_center()
+            .justify_center()
+            .aria_label(status.label())
+            .child(caption("—"));
+    }
+    for (index, record) in samples.iter().enumerate() {
+        let score = api_quality_score(record);
+        let quality = api_quality(std::iter::once(*record));
+        let detail = SharedString::from(format!(
+            "{} · {}",
+            quality.label(),
+            conduit::i18n::format(
+                "session_data.api_quality_first_response",
+                &[("duration", duration(record.api_first_response_ms))],
+            ),
+        ));
+        chart = chart.child(
+            div()
+                .id(("session-data-api-quality-sample", index))
+                .test_support()
+                .role(Role::Group)
+                .aria_label(detail.clone())
+                .w(px(8.))
+                .h_full()
+                .flex_shrink_0()
+                .flex()
+                .items_end()
+                .tooltip(move |window, cx| tooltip(detail.clone()).build(window, cx))
+                .child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "session-data-api-quality-bar-{index}"
+                        )))
+                        .test_support()
+                        .w_full()
+                        .h(px(4. + score.unwrap_or(0.) * (API_QUALITY_BAR_HEIGHT - 4.)))
+                        .rounded(px(2.))
+                        .bg(rgb(api_quality_bar_color(score))),
+                ),
+        );
+    }
+    chart
+}
+
+fn tooltip(note: SharedString) -> Tooltip {
+    Tooltip::element(move |window, _| {
+        div()
+            .max_w(px(300.).min((window.viewport_size().width - px(48.)).max(px(0.))))
+            .whitespace_normal()
+            .child(note.clone())
+    })
+}
+
 fn caption(value: impl Into<SharedString>) -> Div {
     div()
         .text_size(ui_text_size(11.))
         .text_color(rgb(palette().muted))
         .child(value.into())
 }
+fn heading(label: &'static str, note: Option<SharedString>) -> Div {
+    h_flex()
+        .min_w_0()
+        .items_center()
+        .gap_1()
+        .text_size(ui_text_size(11.))
+        .text_color(rgb(palette().muted))
+        .child(div().min_w_0().truncate().child(text(label)))
+        .when_some(note, |heading, note| {
+            heading.child(
+                div()
+                    .id(SharedString::from(format!("session-data-hint-{label}")))
+                    .test_support()
+                    .tab_index(0)
+                    .role(Role::Group)
+                    .aria_label(note.clone())
+                    .size(px(18.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.))
+                    .cursor_default()
+                    .focus_visible(|hint| hint.bg(rgb(palette().surface_hover)))
+                    .tooltip(move |window, cx| tooltip(note.clone()).build(window, cx))
+                    .child(
+                        Icon::new(FullIconName::Info)
+                            .size(px(12.))
+                            .text_color(rgb(palette().muted)),
+                    ),
+            )
+        })
+}
 fn metric(label: &'static str, value: String, detail: impl IntoElement) -> Div {
+    let note = match label {
+        "session_data.cache_hit" => Some(text("session_data.cache_hit_note").into()),
+        "session_data.turn_elapsed" | "session_data.latest_elapsed" => {
+            Some(text("session_data.speed_note").into())
+        }
+        _ => None,
+    };
     card()
         .flex_1()
         .min_w_0()
         .gap_1()
         .p_3()
-        .child(caption(text(label)).truncate())
+        .child(heading(label, note))
         .child(
             div()
                 .text_size(ui_text_size(23.))
@@ -279,10 +514,11 @@ fn metric(label: &'static str, value: String, detail: impl IntoElement) -> Div {
         )
         .child(detail)
 }
-fn usage_row(label: &'static str, input: Option<u64>, output: Option<u64>, cx: &App) -> Div {
+fn usage_row(label: &'static str, latest: Option<u64>, total: Option<u64>, cx: &App) -> Div {
     let value = |value| {
         div()
-            .w(px(58.))
+            .w(px(78.))
+            .flex_shrink_0()
             .text_right()
             .text_size(ui_text_size(13.))
             .font_semibold()
@@ -293,8 +529,8 @@ fn usage_row(label: &'static str, input: Option<u64>, output: Option<u64>, cx: &
         .w_full()
         .gap_2()
         .child(caption(text(label)).flex_1())
-        .child(value(input))
-        .child(value(output))
+        .child(value(latest))
+        .child(value(total))
 }
 fn row(label: &'static str, value: impl Into<SharedString>, cx: &App) -> Div {
     h_flex()
@@ -319,6 +555,10 @@ fn section(
     cx: &Context<ConduitApp>,
 ) -> Button {
     let state = state.clone();
+    let note = match label {
+        "session_data.timing" => Some(text("session_data.speed_note").into()),
+        _ => None,
+    };
     Button::new(id)
         .ghost()
         .small()
@@ -338,10 +578,10 @@ fn section(
                         .min_w_0()
                         .gap_1()
                         .child(
-                            div()
+                            heading(label, note)
                                 .text_size(ui_text_size(13.))
                                 .font_semibold()
-                                .child(text(label)),
+                                .text_color(rgb(palette().text)),
                         )
                         .child(caption(summary).truncate()),
                 )
@@ -422,7 +662,7 @@ fn agent_row(agent: &Agent) -> impl IntoElement {
         &agent.activity
     };
     let summary = summary.lines().find(|line| !line.trim().is_empty());
-    let tooltip = SharedString::from(
+    let tooltip_text = SharedString::from(
         [
             agent.name.as_str(),
             agent.id.as_str(),
@@ -470,7 +710,7 @@ fn agent_row(agent: &Agent) -> impl IntoElement {
         .id(identity)
         .test_support()
         .role(Role::Group)
-        .aria_label(tooltip.clone())
+        .aria_label(tooltip_text.clone())
         .w_full()
         .min_w_0()
         .min_h(px(40.))
@@ -480,7 +720,7 @@ fn agent_row(agent: &Agent) -> impl IntoElement {
         .rounded(px(8.))
         .bg(rgb(colors.surface_strong))
         .hover(|row| row.bg(rgb(colors.surface_hover)))
-        .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+        .tooltip(move |window, cx| tooltip(tooltip_text.clone()).build(window, cx))
         .child(
             div()
                 .size(px(24.))
@@ -518,7 +758,7 @@ impl ConduitApp {
             })
             .or_insert_with(|| {
                 cx.new(|_| Sections {
-                    tokens: true,
+                    files_expanded: true,
                     tools: true,
                     timing: true,
                     ..Sections::default()
@@ -528,23 +768,18 @@ impl ConduitApp {
         let Some(session) = self.session(*id) else {
             return RightBody::Loading.into();
         };
+        if session.transcript.loaded {
+            files::refresh(
+                &state,
+                &session.messages,
+                &workspace.path().to_string_lossy(),
+                cx,
+            );
+        }
         let run = self.session_control.runs.get(id);
-        let plan = self
-            .session_control
-            .plans
-            .get(id)
-            .filter(|steps| !steps.is_empty())
-            .cloned()
-            .unwrap_or_else(|| {
-                if run.is_none() && session.transcript.loaded {
-                    plan_from_messages(session)
-                } else {
-                    Vec::new()
-                }
-            });
+        let plan = plan_from_messages(session);
         let expanded = state.read(cx);
         let scroll = expanded.scroll.clone();
-        let show_tokens = expanded.tokens;
         let show_tools = expanded.tools;
         let show_timing = expanded.timing;
         let usage = run.map_or(session.usage, |run| run.usage);
@@ -555,7 +790,11 @@ impl ConduitApp {
             .observations
             .iter()
             .filter(|turn| turn.session == *id && turn.workspace == workspace.path());
-        let (total, latest) = consumption(records.clone(), current.as_ref());
+        let (mut total, latest) = consumption(records.clone(), current.as_ref());
+        let history = (total.turns == 0).then_some(usage.history).flatten();
+        if history.is_some() {
+            total = history_consumption(usage);
+        }
         let model = match run {
             Some(run) => run.model.as_deref(),
             None => session.model.as_deref(),
@@ -565,25 +804,47 @@ impl ConduitApp {
         let variant = run
             .and_then(|run| run.acp_variant.as_deref())
             .or_else(|| session.opencode.effective_variant());
-        let status = if let Some(run) = run {
+        let (status, running) = if let Some(run) = run {
             if run.runtime.is_cancelled() {
-                text("session_data.stopping")
+                (text("session_data.stopping"), false)
             } else if !run.approvals.is_empty() {
-                run.waiting_status()
+                (run.waiting_status(), false)
             } else {
-                text("session_data.running")
+                (text("session_data.running"), true)
             }
         } else if session.interrupted {
-            text("session_data.interrupted")
+            (text("session_data.interrupted"), false)
         } else {
-            text("session_data.idle")
+            (text("session_data.idle"), false)
         };
-        let color = if status == text("session_data.running") {
-            palette().activity_completed
+        let color = if running {
+            if palette().restrained_projects {
+                palette().activity_running
+            } else {
+                palette().activity_completed
+            }
         } else if run.is_some() || session.interrupted {
             palette().warning_text
         } else {
             palette().muted
+        };
+        let status_dot = div()
+            .size(px(6.))
+            .flex_shrink_0()
+            .rounded_full()
+            .bg(rgb(color));
+        let status_dot = if running && !cx.reduce_motion() {
+            status_dot
+                .with_animation(
+                    ("session-data-status-pulse", *id),
+                    Animation::new(Duration::from_millis(1600)).repeat(),
+                    |dot, delta| {
+                        dot.opacity(0.4 + 0.6 * (0.5 + 0.5 * (delta * std::f32::consts::TAU).cos()))
+                    },
+                )
+                .into_any_element()
+        } else {
+            status_dot.into_any_element()
         };
         let mut content = v_flex()
             .w_full()
@@ -611,13 +872,7 @@ impl ConduitApp {
                         h_flex()
                             .min_w_0()
                             .gap_1p5()
-                            .child(
-                                div()
-                                    .size(px(6.))
-                                    .flex_shrink_0()
-                                    .rounded_full()
-                                    .bg(rgb(color)),
-                            )
+                            .child(status_dot)
                             .child(caption(status).text_color(rgb(color)).truncate()),
                     ),
             )
@@ -670,6 +925,7 @@ impl ConduitApp {
                 ],
             )));
         }
+        let context_ratio = usage.context_ratio();
         let mut context = card()
             .id("session-data-context-card")
             .test_support()
@@ -680,19 +936,45 @@ impl ConduitApp {
                 h_flex()
                     .w_full()
                     .justify_between()
-                    .child(caption(text("session_data.context")))
-                    .when(
-                        usage.context_ratio().is_some() && usage.context_window_estimated,
-                        |header| header.child(caption(text("session_data.estimated"))),
-                    ),
+                    .child(heading(
+                        "session_data.context",
+                        (context_ratio.is_some() && usage.context_window_estimated)
+                            .then(|| text("session_data.estimated").into()),
+                    ))
+                    .when_some(context_ratio, |header, _| {
+                        header.child(
+                            h_flex()
+                                .gap_2()
+                                .child(caption(text("session_data.tokens_unit"))),
+                        )
+                    }),
             );
-        if let Some(ratio) = usage.context_ratio() {
-            let color = if ratio >= 0.9 {
+        if let Some(ratio) = context_ratio {
+            let colors = palette();
+            let warning_threshold = if colors.restrained_projects {
+                0.8
+            } else {
+                0.75
+            };
+            let critical = if colors.restrained_projects {
+                ratio > 0.95
+            } else {
+                ratio >= 0.9
+            };
+            let color = if critical {
                 palette().error_text
-            } else if ratio >= 0.75 {
+            } else if ratio >= warning_threshold {
                 palette().warning_text
+            } else if colors.restrained_projects {
+                colors.activity_running
             } else {
                 palette().highlight_text
+            };
+            let bar_color = if colors.restrained_projects && !critical && ratio >= warning_threshold
+            {
+                colors.context_warning_fill
+            } else {
+                color
             };
             context = context
                 .child(
@@ -718,27 +1000,21 @@ impl ConduitApp {
                                 )),
                         )
                         .child(
-                            v_flex()
-                                .items_end()
-                                .gap_0()
-                                .child(
-                                    div()
-                                        .text_size(ui_text_size(13.))
-                                        .font_semibold()
-                                        .font_family(Theme::global(cx).mono_font_family.clone())
-                                        .child(format!(
-                                            "{} / {}",
-                                            tokens(usage.context_tokens),
-                                            tokens(Some(usage.context_window))
-                                        )),
-                                )
-                                .child(caption(text("session_data.tokens_unit"))),
+                            div()
+                                .text_size(ui_text_size(13.))
+                                .font_semibold()
+                                .font_family(Theme::global(cx).mono_font_family.clone())
+                                .child(format!(
+                                    "{} / {}",
+                                    tokens(usage.context_tokens),
+                                    tokens(Some(usage.context_window))
+                                )),
                         ),
                 )
                 .child(
                     progress::Progress::new("session-context-progress")
                         .value((ratio * 100.).clamp(0., 100.) as f32)
-                        .color(rgb(color))
+                        .color(rgb(bar_color))
                         .with_size(px(9.))
                         .w_full()
                         .accessibility_label(conduit::i18n::format(
@@ -762,12 +1038,17 @@ impl ConduitApp {
                                 ),
                             )],
                         )))
-                        .when(ratio >= 0.9, |row| {
+                        .when(critical, |row| {
                             row.child(
                                 caption(text("session_data.context_high")).text_color(rgb(color)),
                             )
                         }),
                 );
+        } else if let Some(used) = usage.context_tokens {
+            context = context.child(caption(conduit::i18n::format(
+                "session_data.context_limit_unknown",
+                &[("tokens", tokens(Some(used)))],
+            )));
         } else {
             context = context.child(
                 Empty::new().p_0().py_2().header(
@@ -792,10 +1073,17 @@ impl ConduitApp {
             );
         }
         content = content.child(context);
-        let request_quality = if let Some(run) = run.filter(|run| {
+        let active_request = run.filter(|run| {
             matches!(run.intent, crate::commands::RequestIntent::Message)
                 && !run.runtime.is_cancelled()
-        }) {
+        });
+        let current_request = current.as_ref().filter(|_| active_request.is_some());
+        let quality_samples = api_quality_samples(
+            records
+                .filter(|record| current_request.is_none_or(|current| current.key != record.key))
+                .chain(current_request),
+        );
+        let request_quality = if let Some(run) = active_request {
             if run.api_request_started.is_none() {
                 ApiQualityLevel::Preparing
             } else if run.api_first_response_ms.is_none() {
@@ -804,7 +1092,7 @@ impl ConduitApp {
                 ApiQualityLevel::Responding
             }
         } else {
-            api_quality(records)
+            api_quality(quality_samples.iter().copied())
         };
         let turn = latest.as_ref();
         let cache_hit = total.cache_hit();
@@ -818,7 +1106,7 @@ impl ConduitApp {
                 })
                 .flatten()
         });
-        if total.turns == 0 {
+        if total.turns == 0 && history.is_none() {
             content = content.child(
                 card()
                     .id("session-data-empty-state")
@@ -892,7 +1180,20 @@ impl ConduitApp {
                         .truncate(),
                     )),
             );
-            let mut summary = card()
+            let mut usage_note = format!(
+                "{}\n{}",
+                text("session_data.cache_subset"),
+                text(if history.is_some() {
+                    "session_data.history_usage_note"
+                } else {
+                    "session_data.recorded_note"
+                }),
+            );
+            if total.incomplete {
+                usage_note.push('\n');
+                usage_note.push_str(text("session_data.partial_note"));
+            }
+            let summary = card()
                 .id("session-data-usage-summary")
                 .test_support()
                 .debug_selector(|| "session-data-usage-summary".into())
@@ -903,33 +1204,58 @@ impl ConduitApp {
                         .w_full()
                         .justify_between()
                         .gap_2()
-                        .child(caption(text("session_data.usage")).flex_1())
-                        .child(caption(text("session_data.input")).w(px(58.)).text_right())
-                        .child(caption(text("session_data.output")).w(px(58.)).text_right()),
+                        .child(heading("session_data.usage", Some(usage_note.into())).flex_1())
+                        .child(
+                            caption(text(if history.is_some() {
+                                "session_data.latest_request"
+                            } else if run.is_some() {
+                                "session_data.current_turn"
+                            } else {
+                                "session_data.latest_turn"
+                            }))
+                            .w(px(78.))
+                            .flex_shrink_0()
+                            .text_right(),
+                        )
+                        .child(
+                            caption(text(if history.is_some() {
+                                "session_data.history_total"
+                            } else {
+                                "session_data.recorded_total"
+                            }))
+                            .w(px(78.))
+                            .flex_shrink_0()
+                            .text_right(),
+                        ),
                 )
                 .child(usage_row(
-                    if run.is_some() {
-                        "session_data.current_turn"
-                    } else {
-                        "session_data.latest_turn"
-                    },
-                    turn.and_then(|turn| turn.input),
-                    turn.and_then(|turn| turn.output),
+                    "session_data.input",
+                    history.map_or_else(|| turn.and_then(|turn| turn.input), |usage| usage.input),
+                    total.input,
+                    cx,
+                ))
+                .child(usage_row(
+                    "session_data.output",
+                    history.map_or_else(|| turn.and_then(|turn| turn.output), |usage| usage.output),
+                    total.output,
                     cx,
                 ))
                 .child(divider())
                 .child(usage_row(
-                    "session_data.recorded_total",
-                    total.input,
-                    total.output,
+                    "session_data.cache_read",
+                    history.map_or_else(|| turn.and_then(|turn| turn.cached), |usage| usage.cached),
+                    total.cached,
+                    cx,
+                ))
+                .child(usage_row(
+                    "session_data.cache_write",
+                    history.map_or_else(
+                        || turn.and_then(|turn| turn.cache_write),
+                        |usage| usage.cache_write,
+                    ),
+                    total.cache_write,
                     cx,
                 ));
-            if total.incomplete {
-                summary = summary.child(
-                    caption(text("session_data.partial_note"))
-                        .text_color(rgb(palette().warning_text)),
-                );
-            }
             content = content.child(summary);
         }
 
@@ -945,58 +1271,29 @@ impl ConduitApp {
                     request_quality.label(),
                 ))
                 .px_3()
-                .py_2()
-                .tooltip(|window, cx| {
-                    Tooltip::new(text("session_data.api_quality_note")).build(window, cx)
-                })
+                .h(px(44.))
                 .child(
                     h_flex()
                         .w_full()
+                        .h_full()
                         .items_center()
                         .gap_2()
                         .child(
-                            div()
-                                .flex_shrink_0()
-                                .text_size(ui_text_size(18.))
-                                .child(request_quality.emoji()),
+                            h_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .py_2()
+                                .gap_2()
+                                .child(api_quality_emoji(request_quality, state.read(cx), cx))
+                                .child(heading(
+                                    "session_data.api_quality",
+                                    Some(text("session_data.api_quality_note").into()),
+                                )),
                         )
-                        .child(caption(text("session_data.api_quality")).flex_1())
-                        .child(
-                            div()
-                                .text_size(ui_text_size(12.))
-                                .font_semibold()
-                                .text_color(rgb(request_quality.color()))
-                                .child(request_quality.label()),
-                        ),
+                        .child(api_quality_chart(&quality_samples, request_quality)),
                 ),
         );
-        let token_summary = conduit::i18n::format(
-            "session_data.cache_read_summary",
-            &[("count", tokens(total.cached))],
-        );
-        let mut details = card().child(section(
-            "session-data-token-toggle",
-            "session_data.token_details",
-            token_summary,
-            show_tokens,
-            &state,
-            |state| state.tokens = !state.tokens,
-            cx,
-        ));
-        if show_tokens {
-            details = details.child(
-                disclosure_details()
-                    .id("session-data-token-details")
-                    .test_support()
-                    .debug_selector(|| "session-data-token-details".into())
-                    .child(row("session_data.input", tokens(total.input), cx))
-                    .child(row("session_data.cache_read", tokens(total.cached), cx))
-                    .child(row("session_data.output", tokens(total.output), cx))
-                    .child(caption(text("session_data.cache_subset")))
-                    .child(caption(text("session_data.recorded_note"))),
-            );
-        }
-
+        content = content.child(files::render(*id, session.transcript.loaded, &state, cx));
         let stats = session.transcript.loaded.then(|| {
             expanded.tools(
                 ToolStatsKey {
@@ -1025,7 +1322,7 @@ impl ConduitApp {
         } else {
             text("session_data.loading_history").into()
         };
-        let mut tools = details.child(divider()).child(section(
+        let mut tools = card().child(section(
             "session-data-tool-toggle",
             "session_data.tools_tasks",
             tool_summary,
@@ -1035,7 +1332,10 @@ impl ConduitApp {
             cx,
         ));
         if show_tools {
-            let mut tool_details = disclosure_details();
+            let mut tool_details = disclosure_details()
+                .id("session-data-tool-details")
+                .test_support()
+                .debug_selector(|| "session-data-tool-details".into());
             if let Some(stats) = &stats {
                 let mut categories: Vec<_> = stats.categories.iter().collect();
                 categories.sort_by_key(|(_, (count, _))| std::cmp::Reverse(*count));
@@ -1136,7 +1436,8 @@ impl ConduitApp {
                         )
                         .child(caption(format!("{completed}/{}", plan.len()))),
                 );
-            for step in &plan {
+            for (index, step) in plan.iter().enumerate() {
+                let metadata = crate::app::chat::task_metadata(step, &plan);
                 let (icon, color, status) = match step.status {
                     PlanStatus::Completed => (
                         FullIconName::CircleCheck,
@@ -1156,6 +1457,10 @@ impl ConduitApp {
                 };
                 plan_list = plan_list.child(
                     h_flex()
+                        .id(SharedString::from(format!("session-data-task-{index}")))
+                        .test_support()
+                        .role(Role::Group)
+                        .aria_label(format!("{} {}", step.label(), metadata).trim().to_owned())
                         .w_full()
                         .min_w_0()
                         .items_start()
@@ -1166,13 +1471,21 @@ impl ConduitApp {
                                 .flex_1()
                                 .min_w_0()
                                 .text_size(ui_text_size(12.))
-                                .truncate()
+                                .whitespace_normal()
                                 .text_color(rgb(if step.status == PlanStatus::Completed {
                                     palette().muted
                                 } else {
                                     palette().text
                                 }))
-                                .child(step.text.clone()),
+                                .child(step.label())
+                                .when(!metadata.is_empty(), |row| {
+                                    row.child(
+                                        div()
+                                            .text_size(ui_text_size(11.))
+                                            .text_color(rgb(palette().muted))
+                                            .child(metadata),
+                                    )
+                                }),
                         )
                         .child(caption(status).flex_shrink_0()),
                 );
@@ -1207,8 +1520,7 @@ impl ConduitApp {
                             .average_output_speed()
                             .map_or_else(|| "—".into(), |value| format!("{value} tok/s")),
                         cx,
-                    ))
-                    .child(caption(text("session_data.speed_note"))),
+                    )),
             );
         }
         if !plan.is_empty()
@@ -1254,7 +1566,10 @@ impl ConduitApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{ApiQualityLevel, ApiRequestOutcome, Observation, api_quality, consumption};
+    use super::{
+        ApiQualityLevel, ApiRequestOutcome, Observation, api_quality, api_quality_samples,
+        api_quality_score, consumption,
+    };
     use crate::domain::Provider;
     use std::path::PathBuf;
     fn turn(
@@ -1274,6 +1589,7 @@ mod tests {
             finished_at: 1,
             input,
             cached,
+            cache_write: None,
             output,
             elapsed_ms: 1000,
             incomplete: false,
@@ -1315,9 +1631,9 @@ mod tests {
     }
 
     #[test]
-    fn api_quality_ignores_cancelled_requests_and_uses_only_the_latest_ten() {
+    fn api_quality_ignores_cancelled_requests_and_uses_only_the_latest_five() {
         let mut records = vec![api_turn("old-failure", ApiRequestOutcome::Failed, None)];
-        records.extend((0..10).map(|index| {
+        records.extend((0..5).map(|index| {
             api_turn(
                 &format!("success-{index}"),
                 ApiRequestOutcome::Succeeded,
@@ -1327,6 +1643,82 @@ mod tests {
         records.push(api_turn("cancelled", ApiRequestOutcome::Cancelled, None));
         let quality = api_quality(records.iter());
         assert_eq!(quality, ApiQualityLevel::Smooth);
+    }
+
+    #[test]
+    fn api_quality_history_orders_completed_samples_and_preserves_individual_quality() {
+        let mut records = (0..7)
+            .map(|index| {
+                let mut record = api_turn(
+                    &format!("request-{index}"),
+                    ApiRequestOutcome::Succeeded,
+                    Some(index * 4_000),
+                );
+                record.finished_at = index;
+                record
+            })
+            .collect::<Vec<_>>();
+        records[4].api_request_outcome = Some(ApiRequestOutcome::Failed);
+        let mut cancelled = api_turn("cancelled", ApiRequestOutcome::Cancelled, None);
+        cancelled.finished_at = 10;
+        records.push(cancelled);
+        records.push(turn("unmeasured", None, None, None));
+        records.reverse();
+        let samples = api_quality_samples(records.iter());
+        assert_eq!(
+            samples
+                .iter()
+                .map(|sample| sample.key.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "request-2",
+                "request-3",
+                "request-4",
+                "request-5",
+                "request-6"
+            ],
+        );
+        assert!(api_quality_score(samples[0]) > api_quality_score(samples[1]));
+        assert_eq!(api_quality_score(samples[2]), Some(0.));
+        assert_eq!(api_quality_score(samples[4]), Some(0.));
+        assert_eq!(
+            api_quality_score(&api_turn("unknown", ApiRequestOutcome::Succeeded, None)),
+            None,
+        );
+        assert!(api_quality_samples(std::iter::empty()).is_empty());
+    }
+
+    #[test]
+    fn api_quality_includes_measured_live_responses_without_fabricating_an_outcome() {
+        let mut live = turn("live", None, None, None);
+        assert!(api_quality_samples(std::iter::once(&live)).is_empty());
+        live.api_first_response_ms = Some(1_000);
+        live.finished_at = 10;
+        assert_eq!(api_quality(std::iter::once(&live)), ApiQualityLevel::Smooth);
+        assert_eq!(api_quality_score(&live), Some(1.));
+        assert_eq!(live.api_request_outcome, None);
+
+        let completed = (0..5)
+            .map(|index| {
+                let mut record = api_turn(
+                    &format!("completed-{index}"),
+                    ApiRequestOutcome::Succeeded,
+                    Some(3_000),
+                );
+                record.finished_at = index;
+                record
+            })
+            .collect::<Vec<_>>();
+        let samples = api_quality_samples(completed.iter().chain(std::iter::once(&live)));
+        assert_eq!(samples.len(), 5);
+        assert_eq!(samples[0].key, "completed-1");
+        assert_eq!(samples[4].key, "live");
+
+        live.api_request_outcome = Some(ApiRequestOutcome::Failed);
+        assert_eq!(api_quality(std::iter::once(&live)), ApiQualityLevel::Failed);
+        assert_eq!(api_quality_score(&live), Some(0.));
+        live.api_request_outcome = Some(ApiRequestOutcome::Cancelled);
+        assert!(api_quality_samples(std::iter::once(&live)).is_empty());
     }
 
     #[test]
@@ -1373,6 +1765,43 @@ mod tests {
         assert_eq!(total.input, Some(200));
         assert_eq!(total.cached, Some(280));
         assert_eq!(total.cache_hit(), Some(80.));
+    }
+
+    #[test]
+    fn cache_writes_replace_live_snapshots_and_preserve_unknowns() {
+        let mut old = turn("old", Some(100), Some(80), Some(20));
+        old.cache_write = Some(10);
+        let mut recorded_live = turn("live", Some(100), Some(80), Some(20));
+        recorded_live.cache_write = Some(1);
+        let mut current = recorded_live.clone();
+        current.cache_write = Some(20);
+        let (total, latest) = consumption([old, recorded_live].iter(), Some(&current));
+        assert_eq!(total.cache_write, Some(30));
+        assert_eq!(latest.unwrap().cache_write, Some(20));
+        assert_eq!(total.cache_hit(), Some(80.));
+        current.cache_write = None;
+        assert_eq!(
+            consumption(std::iter::empty(), Some(&current))
+                .0
+                .cache_write,
+            None
+        );
+        current.cache_write = Some(0);
+        assert_eq!(
+            consumption(std::iter::empty(), Some(&current))
+                .0
+                .cache_write,
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn cache_hit_does_not_saturate_its_weighted_denominator() {
+        let records = [
+            turn("cached", Some(u64::MAX), Some(u64::MAX), Some(0)),
+            turn("uncached", Some(u64::MAX), Some(0), Some(0)),
+        ];
+        assert_eq!(consumption(records.iter(), None).0.cache_hit(), Some(50.));
     }
 
     #[test]

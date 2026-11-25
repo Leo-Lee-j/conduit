@@ -206,7 +206,7 @@ impl MermaidPreview {
             self.result = Some(Err(error));
             return;
         }
-        if let Some(result) = CACHE.lock().unwrap().get(&key) {
+        if let Some(result) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
             self.result = Some(result);
             return;
         }
@@ -220,12 +220,16 @@ impl MermaidPreview {
                     if cancelled.load(Ordering::Acquire) {
                         return Err(conduit::i18n::text_static("events.cancelled").into());
                     }
-                    if let Some(result) = CACHE.lock().unwrap().get(&key) {
+                    if let Some(result) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).get(&key)
+                    {
                         return result;
                     }
                     let result = render_native(&key.source, key.dark);
                     if !cancelled.load(Ordering::Acquire) {
-                        CACHE.lock().unwrap().insert(key, result.clone());
+                        CACHE
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .insert(key, result.clone());
                     }
                     result
                 })

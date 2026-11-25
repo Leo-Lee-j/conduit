@@ -13,7 +13,10 @@ Push-Location (Join-Path $PSScriptRoot '..')
 try {
     Invoke-Check python @('scripts/check-gpui-vendor.py')
     Invoke-Check python @('scripts/check-i18n.py')
+    Invoke-Check python @('scripts/test-release-notes.py')
     Invoke-Check cargo @('fmt', '--all', '--check')
+    Invoke-Check cargo @('clippy', '--locked', '-p', 'pet-core', '--all-targets', '--', '-D', 'warnings')
+    Invoke-Check cargo @('test', '--locked', '-p', 'pet-core')
     Invoke-Check cargo @('clippy', '--locked', '--all-targets', '--features', 'ui-tests', '--', '-D', 'warnings')
     # ui-tests includes the ordinary tests, so run the combined suite once.
     Invoke-Check cargo @('test', '--locked', '--features', 'ui-tests', '--', '--test-threads=1')

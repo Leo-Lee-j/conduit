@@ -78,50 +78,54 @@ impl ConduitApp {
         available_width: f32,
         view: Entity<Self>,
         cx: &App,
-    ) -> AnyElement {
+    ) -> SettingsContent {
         let index = usize::from(self.extensions_ui.mcp);
         let discover = self.extensions_ui.discovery[index].discover;
         let installed_view = view.clone();
         let discover_view = view.clone();
-        v_flex()
-            .size_full()
-            .min_h_0()
+        let tabs = h_flex()
+            .debug_selector(|| "extension-mode-tabs".into())
+            .gap_1()
+            .flex_shrink_0()
             .child(
-                h_flex()
-                    .px_3()
-                    .pt_2()
-                    .gap_2()
-                    .flex_shrink_0()
-                    .child(
-                        Button::new("extensions-installed-tab")
-                            .label(text("installed"))
-                            .selected(!discover)
-                            .on_click(move |_, _, cx| {
-                                installed_view.update(cx, |app, cx| {
-                                    app.extensions_ui.discovery[index].discover = false;
-                                    app.extensions_ui.discovery[index].cancel();
-                                    cx.notify();
-                                });
-                            }),
-                    )
-                    .child(
-                        Button::new("extensions-discover-tab")
-                            .debug_selector(|| "extensions-discover-tab".into())
-                            .label(text("discover"))
-                            .selected(discover)
-                            .on_click(move |_, window, cx| {
-                                discover_view.update(cx, |app, cx| {
-                                    app.show_extension_discovery(index, window, cx)
-                                });
-                            }),
-                    ),
+                Button::new("extensions-installed-tab")
+                    .small()
+                    .ghost()
+                    .label(text("installed"))
+                    .selected(!discover)
+                    .on_click(move |_, _, cx| {
+                        installed_view.update(cx, |app, cx| {
+                            app.extensions_ui.discovery[index].discover = false;
+                            app.extensions_ui.discovery[index].cancel();
+                            cx.notify();
+                        });
+                    }),
             )
-            .child(div().flex_1().min_h_0().w_full().child(if discover {
-                self.extension_catalog_content(index, available_width, view, cx)
-            } else {
-                self.installed_extensions_content(window, available_width, view, cx)
-            }))
-            .into_any_element()
+            .child(
+                Button::new("extensions-discover-tab")
+                    .small()
+                    .ghost()
+                    .debug_selector(|| "extensions-discover-tab".into())
+                    .label(text("discover"))
+                    .selected(discover)
+                    .on_click(move |_, window, cx| {
+                        discover_view.update(cx, |app, cx| {
+                            app.show_extension_discovery(index, window, cx)
+                        });
+                    }),
+            );
+        SettingsContent::new(if discover {
+            self.extension_catalog_content(index, view.clone())
+        } else {
+            self.installed_extensions_content(window, available_width, view.clone(), cx)
+        })
+        .with_toolbar(management_toolbar(
+            self.extensions_ui.engine,
+            true,
+            Some(tabs.into_any_element()),
+            None,
+            view,
+        ))
     }
     fn show_extension_discovery(
         &mut self,
@@ -332,13 +336,7 @@ impl ConduitApp {
         .detach();
         cx.notify();
     }
-    fn extension_catalog_content(
-        &self,
-        index: usize,
-        width: f32,
-        view: Entity<Self>,
-        _cx: &App,
-    ) -> AnyElement {
+    fn extension_catalog_content(&self, index: usize, view: Entity<Self>) -> AnyElement {
         let state = &self.extensions_ui.discovery[index];
         let source_view = view.clone();
         let search_view = view.clone();
@@ -359,237 +357,209 @@ impl ConduitApp {
                     .map(|w| (Some(w.path.clone()), w.name())),
             )
             .collect();
-        let mut body = v_flex()
-            .size_full()
-            .min_h_0()
-            .child(management_toolbar(
-                self.extensions_ui.engine,
-                true,
-                None,
-                width,
-                self.store.ui.ui_font_size,
-                view.clone(),
-            ))
-            .child(
-                v_flex()
-                    .px_3()
-                    .gap_2()
-                    .flex_shrink_0()
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .flex_wrap()
-                            .child(
-                                Button::new("catalog-source")
-                                    .small()
-                                    .outline()
-                                    .label(state.source.label())
-                                    .icon(FullIconName::ChevronDown)
-                                    .dropdown_menu(move |mut menu, _, _| {
-                                        let sources = if index == 1 {
-                                            vec![Source::McpRegistry]
-                                        } else {
-                                            vec![Source::Featured, Source::SkillsSh, Source::Github]
-                                        };
-                                        for source in sources {
-                                            let view = source_view.clone();
-                                            menu = menu.item(
-                                                PopupMenuItem::new(source.label()).on_click(
-                                                    move |_, window, cx| {
-                                                        view.update(cx, |app, cx| {
-                                                            let state = &mut app
-                                                                .extensions_ui
-                                                                .discovery[index];
-                                                            if state.source == source {
-                                                                return;
-                                                            }
-                                                            state.cancel();
-                                                            state.source = source;
-                                                            if let Some(input) =
-                                                                state.input.as_ref()
-                                                            {
-                                                                input.update(cx, |input, cx| {
-                                                                    input.set_value("", window, cx)
-                                                                });
-                                                            }
-                                                            state.query.clear();
-                                                            state.entries.clear();
-                                                            state.installed.clear();
-                                                            state.next = None;
-                                                            state.fetched_at = 0;
-                                                            state.feedback = None;
-                                                            app.query_extension_catalog(
-                                                                index, false, false, cx,
-                                                            );
-                                                        });
-                                                    },
-                                                ),
-                                            );
-                                        }
-                                        menu
-                                    }),
-                            )
-                            .child(
-                                Button::new("catalog-scope")
-                                    .debug_selector(|| "catalog-scope".into())
-                                    .small()
-                                    .outline()
-                                    .max_w(px(280.))
-                                    .accessibility_label(scope.clone())
-                                    .tooltip(scope.clone())
-                                    .child(div().min_w_0().truncate().child(scope))
-                                    .icon(FullIconName::ChevronDown)
-                                    .dropdown_menu(move |mut menu, _, _| {
-                                        for (path, name) in &choices {
-                                            let path = path.clone();
-                                            let view = scope_view.clone();
-                                            menu = menu.item(
-                                                PopupMenuItem::new(name.clone()).on_click(
-                                                    move |_, window, cx| {
-                                                        view.update(cx, |app, cx| {
-                                                            app.extensions_ui.workspace =
-                                                                path.clone();
-                                                            app.ensure_extensions(
-                                                                window, cx, false,
-                                                            );
-                                                            cx.notify();
-                                                        });
-                                                    },
-                                                ),
-                                            );
-                                        }
-                                        menu
-                                    }),
-                            ),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .w_full()
-                            .when_some(state.input.clone(), |row, input| {
-                                row.child(
-                                    div().flex_1().min_w_0().child(
-                                        Input::new(&input)
-                                            .cleanable(true)
-                                            .aria_label(text("search_hint")),
-                                    ),
-                                )
-                            })
-                            .child(
-                                Button::new("catalog-search")
-                                    .label(text("search"))
-                                    .disabled(state.loading || state.preparing)
-                                    .on_click(move |_, _, cx| {
-                                        search_view.update(cx, |app, cx| {
-                                            app.submit_extension_catalog(index, cx)
-                                        });
-                                    }),
-                            )
-                            .child(
-                                Button::new("catalog-refresh")
-                                    .icon(FullIconName::RefreshCw)
-                                    .tooltip(text("refresh"))
-                                    .accessibility_label(text("refresh"))
-                                    .disabled(state.loading || state.preparing)
-                                    .on_click(move |_, _, cx| {
-                                        refresh_view.update(cx, |app, cx| {
-                                            app.query_extension_catalog(index, false, true, cx)
-                                        });
-                                    }),
-                            ),
-                    )
-                    .child(note(text(match state.source {
-                        Source::Github => "github_hint",
-                        Source::SkillsSh => "skills_hint",
-                        Source::McpRegistry => "registry_hint",
-                        Source::Featured => "featured_hint",
-                    })))
-                    .when(
-                        index == 0 && state.source == Source::Github && state.query.is_empty(),
-                        |body| {
-                            let mut repos = h_flex().gap_2().flex_wrap();
-                            for (position, repo) in [
-                                "anthropics/skills",
-                                "vercel-labs/agent-skills",
-                                "obra/superpowers",
-                                "remotion-dev/skills",
-                            ]
-                            .into_iter()
-                            .enumerate()
-                            {
-                                let view = view.clone();
-                                repos = repos.child(
-                                    Button::new(("catalog-browse-repo", position))
-                                        .label(repo)
-                                        .small()
-                                        .outline()
-                                        .disabled(state.preparing || self.closing)
-                                        .on_click(move |_, window, cx| {
-                                            view.update(cx, |app, cx| {
-                                                if let Some(input) = app.extensions_ui.discovery
-                                                    [index]
-                                                    .input
-                                                    .as_ref()
-                                                {
-                                                    input.update(cx, |input, cx| {
-                                                        input.set_value(repo, window, cx)
+        let mut body = v_flex().size_full().min_h_0().child(
+            v_flex()
+                .px(px(settings_content_inset()))
+                .pt_2()
+                .gap_2()
+                .flex_shrink_0()
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .flex_wrap()
+                        .child(
+                            Button::new("catalog-source")
+                                .small()
+                                .outline()
+                                .label(state.source.label())
+                                .icon(FullIconName::ChevronDown)
+                                .dropdown_menu(move |mut menu, _, _| {
+                                    let sources = if index == 1 {
+                                        vec![Source::McpRegistry]
+                                    } else {
+                                        vec![Source::Featured, Source::SkillsSh, Source::Github]
+                                    };
+                                    for source in sources {
+                                        let view = source_view.clone();
+                                        menu =
+                                            menu.item(PopupMenuItem::new(source.label()).on_click(
+                                                move |_, window, cx| {
+                                                    view.update(cx, |app, cx| {
+                                                        let state =
+                                                            &mut app.extensions_ui.discovery[index];
+                                                        if state.source == source {
+                                                            return;
+                                                        }
+                                                        state.cancel();
+                                                        state.source = source;
+                                                        if let Some(input) = state.input.as_ref() {
+                                                            input.update(cx, |input, cx| {
+                                                                input.set_value("", window, cx)
+                                                            });
+                                                        }
+                                                        state.query.clear();
+                                                        state.entries.clear();
+                                                        state.installed.clear();
+                                                        state.next = None;
+                                                        state.fetched_at = 0;
+                                                        state.feedback = None;
+                                                        app.query_extension_catalog(
+                                                            index, false, false, cx,
+                                                        );
                                                     });
-                                                }
-                                                app.submit_extension_catalog(index, cx);
-                                            });
-                                        }),
-                                );
-                            }
-                            body.child(repos)
-                        },
-                    )
-                    .when(state.fetched_at > 0, |body| {
-                        body.child(note(format!(
-                            "{} · {}",
-                            if state.cached {
-                                text("cached")
-                            } else {
-                                text("updated")
-                            },
-                            chrono::DateTime::from_timestamp(state.fetched_at as i64, 0)
-                                .map(|time| time
-                                    .with_timezone(&chrono::Local)
-                                    .format("%Y-%m-%d %H:%M")
-                                    .to_string())
-                                .unwrap_or_default()
-                        )))
-                    })
-                    .when_some(state.feedback.clone(), |body, message| {
-                        body.child(note(message))
-                    })
-                    .when_some(self.extensions_ui.feedback.clone(), |body, message| {
-                        body.child(note(message))
-                    })
-                    .when(state.loading || state.preparing, |body| {
-                        body.child(
-                            h_flex().gap_2().child(note(text("loading"))).child(
-                                Button::new("catalog-cancel")
+                                                },
+                                            ));
+                                    }
+                                    menu
+                                }),
+                        )
+                        .child(
+                            Button::new("catalog-scope")
+                                .debug_selector(|| "catalog-scope".into())
+                                .small()
+                                .outline()
+                                .max_w(px(280.))
+                                .accessibility_label(scope.clone())
+                                .tooltip(scope.clone())
+                                .child(div().min_w_0().truncate().child(scope))
+                                .icon(FullIconName::ChevronDown)
+                                .dropdown_menu(move |mut menu, _, _| {
+                                    for (path, name) in &choices {
+                                        let path = path.clone();
+                                        let view = scope_view.clone();
+                                        menu =
+                                            menu.item(PopupMenuItem::new(name.clone()).on_click(
+                                                move |_, window, cx| {
+                                                    view.update(cx, |app, cx| {
+                                                        app.extensions_ui.workspace = path.clone();
+                                                        app.ensure_extensions(window, cx, false);
+                                                        cx.notify();
+                                                    });
+                                                },
+                                            ));
+                                    }
+                                    menu
+                                }),
+                        ),
+                )
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .w_full()
+                        .when_some(state.input.clone(), |row, input| {
+                            row.child(
+                                div().flex_1().min_w_0().child(
+                                    Input::new(&input)
+                                        .cleanable(true)
+                                        .aria_label(text("search_hint")),
+                                ),
+                            )
+                        })
+                        .child(
+                            Button::new("catalog-search")
+                                .label(text("search"))
+                                .disabled(state.loading || state.preparing)
+                                .on_click(move |_, _, cx| {
+                                    search_view.update(cx, |app, cx| {
+                                        app.submit_extension_catalog(index, cx)
+                                    });
+                                }),
+                        )
+                        .child(
+                            Button::new("catalog-refresh")
+                                .icon(FullIconName::RefreshCw)
+                                .tooltip(text("refresh"))
+                                .accessibility_label(text("refresh"))
+                                .disabled(state.loading || state.preparing)
+                                .on_click(move |_, _, cx| {
+                                    refresh_view.update(cx, |app, cx| {
+                                        app.query_extension_catalog(index, false, true, cx)
+                                    });
+                                }),
+                        ),
+                )
+                .child(note(text(match state.source {
+                    Source::Github => "github_hint",
+                    Source::SkillsSh => "skills_hint",
+                    Source::McpRegistry => "registry_hint",
+                    Source::Featured => "featured_hint",
+                })))
+                .when(
+                    index == 0 && state.source == Source::Github && state.query.is_empty(),
+                    |body| {
+                        let mut repos = h_flex().gap_2().flex_wrap();
+                        for (position, repo) in [
+                            "anthropics/skills",
+                            "vercel-labs/agent-skills",
+                            "obra/superpowers",
+                            "remotion-dev/skills",
+                        ]
+                        .into_iter()
+                        .enumerate()
+                        {
+                            let view = view.clone();
+                            repos = repos.child(
+                                Button::new(("catalog-browse-repo", position))
+                                    .label(repo)
                                     .small()
-                                    .label(text("cancel"))
-                                    .on_click(move |_, _, cx| {
-                                        cancel_view.update(cx, |app, cx| {
-                                            app.extensions_ui.discovery[index].cancel();
-                                            cx.notify();
+                                    .outline()
+                                    .disabled(state.preparing || self.closing)
+                                    .on_click(move |_, window, cx| {
+                                        view.update(cx, |app, cx| {
+                                            if let Some(input) =
+                                                app.extensions_ui.discovery[index].input.as_ref()
+                                            {
+                                                input.update(cx, |input, cx| {
+                                                    input.set_value(repo, window, cx)
+                                                });
+                                            }
+                                            app.submit_extension_catalog(index, cx);
                                         });
                                     }),
-                            ),
-                        )
-                    }),
-            );
-        let mut entries = v_flex()
-            .id("extension-catalog-list")
-            .debug_selector(|| "extension-catalog-list".into())
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .px_3()
-            .py_3()
-            .gap_2();
+                            );
+                        }
+                        body.child(repos)
+                    },
+                )
+                .when(state.fetched_at > 0, |body| {
+                    body.child(note(format!(
+                        "{} · {}",
+                        if state.cached {
+                            text("cached")
+                        } else {
+                            text("updated")
+                        },
+                        chrono::DateTime::from_timestamp(state.fetched_at as i64, 0)
+                            .map(|time| time
+                                .with_timezone(&chrono::Local)
+                                .format("%Y-%m-%d %H:%M")
+                                .to_string())
+                            .unwrap_or_default()
+                    )))
+                })
+                .when_some(state.feedback.clone(), |body, message| {
+                    body.child(note(message))
+                })
+                .when_some(self.extensions_ui.feedback.clone(), |body, message| {
+                    body.child(note(message))
+                })
+                .when(state.loading || state.preparing, |body| {
+                    body.child(
+                        h_flex().gap_2().child(note(text("loading"))).child(
+                            Button::new("catalog-cancel")
+                                .small()
+                                .label(text("cancel"))
+                                .on_click(move |_, _, cx| {
+                                    cancel_view.update(cx, |app, cx| {
+                                        app.extensions_ui.discovery[index].cancel();
+                                        cx.notify();
+                                    });
+                                }),
+                        ),
+                    )
+                }),
+        );
+        let mut entries = settings_scroll_area("extension-catalog-list");
         if state.entries.is_empty() && !state.loading && state.feedback.is_none() {
             entries = entries.child(note(text("empty")));
         }
@@ -605,11 +575,8 @@ impl ConduitApp {
                 && state.installed.contains(&item.id);
             entries = entries.child(
                 v_flex()
-                    .p_3()
+                    .refine_style(&settings_group_style())
                     .gap_2()
-                    .border_1()
-                    .border_color(rgb(palette().border))
-                    .rounded_md()
                     .child(div().font_semibold().child(item.name.clone()))
                     .child(note(item.description.clone()))
                     .child(note(format!("{} · {}", item.version(), item.source_url)))

@@ -14,6 +14,7 @@ use std::{
 mod api;
 pub mod auth;
 pub mod checks;
+pub mod details;
 pub mod forge;
 pub(crate) mod gitlab;
 pub mod list;

@@ -6,7 +6,7 @@ pub(super) fn service_badge(label: &'static str) -> impl IntoElement {
         .px_2()
         .py_0p5()
         .rounded_md()
-        .text_size(ui_text_size(10.))
+        .text_size(ui_text_size(12.))
         .font_medium()
         .text_color(rgb(palette().activity_running))
         .bg(gpui_kit::rgba((palette().activity_running << 8) | 0x16))
@@ -82,7 +82,7 @@ impl ConduitApp {
             .w_full()
             .min_w_0()
             .p_2()
-            .gap_0p5()
+            .gap_1()
             .rounded_lg()
             .border_1()
             .border_color(rgb(palette().border))
@@ -151,13 +151,10 @@ impl ConduitApp {
                         .px_1()
                         .py_2()
                         .rounded_md()
-                        .border_1()
-                        .border_color(gpui_kit::rgba(0))
+                        .border_b_1()
+                        .border_color(settings_group_border())
                         .when(active, |row| {
                             row.bg(gpui_kit::rgba((palette().activity_running << 8) | 0x0c))
-                                .border_color(gpui_kit::rgba(
-                                    (palette().activity_running << 8) | 0x55,
-                                ))
                         })
                         .child(
                             h_flex()
@@ -180,7 +177,7 @@ impl ConduitApp {
                                                         .flex_1()
                                                         .min_w_0()
                                                         .truncate()
-                                                        .text_size(ui_text_size(12.))
+                                                        .text_size(ui_text_size(13.))
                                                         .font_semibold()
                                                         .child(provider.name.clone()),
                                                 )
@@ -200,14 +197,14 @@ impl ConduitApp {
                                                         .flex_1()
                                                         .min_w_0()
                                                         .truncate()
-                                                        .text_size(ui_text_size(10.))
+                                                        .text_size(ui_text_size(12.))
                                                         .text_color(rgb(palette().muted))
                                                         .child(endpoint),
                                                 )
                                                 .child(
                                                     div()
                                                         .flex_shrink_0()
-                                                        .text_size(ui_text_size(10.))
+                                                        .text_size(ui_text_size(12.))
                                                         .text_color(rgb(palette().muted))
                                                         .child(conduit::i18n::format(
                                                             "settings.services.models_count",

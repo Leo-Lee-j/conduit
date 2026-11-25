@@ -242,12 +242,13 @@ fn opencode_new_load_and_resume_apply_model_and_variant_before_prompt() {
         assert!(
             matches!(&chunk.events[0], Event::Delta {key,text} if key == "msg_a" && text == "new text")
         );
-        let done = protocol.accept(json!({"id":writes.last().unwrap()["id"],"result":{"stopReason":"end_turn","usage":{"inputTokens":10,"outputTokens":2,"cachedReadTokens":4,"totalTokens":16}}}));
+        let done = protocol.accept(json!({"id":writes.last().unwrap()["id"],"result":{"stopReason":"end_turn","usage":{"inputTokens":10,"outputTokens":2,"cachedReadTokens":4,"cachedWriteTokens":0,"totalTokens":12}}}));
         assert!(done.done && done.error.is_none());
         assert!(matches!(
             done.events[0],
             Event::Usage(Usage {
-                total_tokens: 16,
+                total_tokens: 12,
+                cache_write_input_tokens: Some(0),
                 ..
             })
         ));
@@ -271,11 +272,13 @@ fn opencode_unsupported_effort_fails_without_prompt_or_silent_fallback() {
 }
 
 #[test]
-fn opencode_automatic_effort_uses_medium_only_when_advertised() {
+fn opencode_follow_default_uses_only_an_advertised_native_default() {
     let _locale = crate::test_support::chinese();
     let (mut protocol, _) = connected(None, true, None);
     for (levels, explicit, expected) in [
-        (vec!["default", "medium", "high"], None, Some("medium")),
+        (vec!["default", "medium", "high"], None, Some("default")),
+        (vec!["low", "high"], None, None),
+        (vec!["low", "high"], Some("default"), None),
         (vec!["default", "high"], None, Some("default")),
         (vec![], None, None),
         (vec!["default", "medium"], Some("default"), Some("default")),
@@ -452,6 +455,12 @@ fn opencode_managed_agents_override_inherited_rules_and_helpers_have_private_sto
         assert_eq!(agent["permission"]["plan_enter"], "deny");
         assert_eq!(agent["permission"]["plan_exit"], "deny");
         assert_eq!(agent["permission"]["doom_loop"], agent["permission"]["*"]);
+        if permission == PermissionLevel::WorkspaceWrite {
+            assert_eq!(agent["permission"]["websearch"], "allow");
+            assert_eq!(agent["permission"]["webfetch"], "allow");
+            assert_eq!(agent["permission"]["edit"], "allow");
+            assert_eq!(agent["permission"]["external_directory"], "deny");
+        }
         assert_eq!(config["mcp"]["native.server"]["enabled"], false);
         assert_eq!(
             protocol.environment()["OPENCODE_ENABLE_QUESTION_TOOL"],

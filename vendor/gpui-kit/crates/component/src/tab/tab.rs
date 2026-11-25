@@ -4,10 +4,10 @@ use crate::animation::{Lerp, ease_in_out_cubic};
 use crate::{ActiveTheme, Icon, IconName, Selectable, Sizable, Size, StyledExt, h_flex};
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    Animation, AnimationExt as _, AnyElement, App, Background, ClickEvent, Edges, ElementId,
-    FillOptions, Hsla, InteractiveElement, IntoElement, ParentElement, PathBuilder, PathStyle,
-    Pixels, Point, RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, canvas,
-    div, point, px, relative,
+    Animation, AnimationExt as _, AnyElement, App, Background, Bounds, ClickEvent, Edges,
+    ElementId, FillOptions, Hsla, InteractiveElement, IntoElement, ParentElement, PathBuilder,
+    PathStyle, Pixels, Point, RenderOnce, SharedString, StatefulInteractiveElement, StrokeOptions,
+    Styled, Window, canvas, div, linear_color_stop, linear_gradient, point, px, relative,
 };
 
 /// Room between two [`TabVariant::Folder`] tabs, holding their separator.
@@ -447,41 +447,10 @@ fn folder_tab_shape(metrics: FolderTabMetrics, bg: Background) -> impl IntoEleme
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
-            let (top, bottom) = (bounds.top(), bounds.bottom());
-            let (left, right) = (bounds.left(), bounds.right());
-            let (tab_left, tab_right) = (left + curve, right - curve);
-            // Like Chrome, keep at least a third of the top flat on narrow tabs.
-            let radius = ((bounds.size.width - curve * 2.) / 3.).clamp(px(0.), curve);
-
-            let mut path =
-                PathBuilder::fill().with_style(PathStyle::Fill(FillOptions::tolerance(0.02)));
-            path.move_to(point(left, bottom));
-            quarter_circle_to(
-                &mut path,
-                point(left, bottom),
-                point(tab_left, bottom),
-                point(tab_left, bottom - curve),
-            );
-            path.line_to(point(tab_left, top + radius));
-            quarter_circle_to(
-                &mut path,
-                point(tab_left, top + radius),
-                point(tab_left, top),
-                point(tab_left + radius, top),
-            );
-            path.line_to(point(tab_right - radius, top));
-            quarter_circle_to(
-                &mut path,
-                point(tab_right - radius, top),
-                point(tab_right, top),
-                point(tab_right, top + radius),
-            );
-            path.line_to(point(tab_right, bottom - curve));
-            quarter_circle_to(
-                &mut path,
-                point(tab_right, bottom - curve),
-                point(tab_right, bottom),
-                point(right, bottom),
+            let mut path = folder_tab_path(
+                bounds,
+                curve,
+                PathBuilder::fill().with_style(PathStyle::Fill(FillOptions::tolerance(0.02))),
             );
             path.close();
             if let Ok(path) = path.build() {
@@ -494,6 +463,111 @@ fn folder_tab_shape(metrics: FolderTabMetrics, bg: Background) -> impl IntoEleme
     .bottom_0()
     .left(-curve)
     .right(-curve)
+}
+
+/// Trace the shared fill/border contour. Leave the bottom open so a colored
+/// border never separates the selected tab from the content below it.
+fn folder_tab_path(bounds: Bounds<Pixels>, curve: Pixels, mut path: PathBuilder) -> PathBuilder {
+    let (top, bottom) = (bounds.top(), bounds.bottom());
+    let (left, right) = (bounds.left(), bounds.right());
+    let (tab_left, tab_right) = (left + curve, right - curve);
+    // Like Chrome, keep at least a third of the top flat on narrow tabs.
+    let radius = ((bounds.size.width - curve * 2.) / 3.).clamp(px(0.), curve);
+
+    path.move_to(point(left, bottom));
+    quarter_circle_to(
+        &mut path,
+        point(left, bottom),
+        point(tab_left, bottom),
+        point(tab_left, bottom - curve),
+    );
+    path.line_to(point(tab_left, top + radius));
+    quarter_circle_to(
+        &mut path,
+        point(tab_left, top + radius),
+        point(tab_left, top),
+        point(tab_left + radius, top),
+    );
+    path.line_to(point(tab_right - radius, top));
+    quarter_circle_to(
+        &mut path,
+        point(tab_right - radius, top),
+        point(tab_right, top),
+        point(tab_right, top + radius),
+    );
+    path.line_to(point(tab_right, bottom - curve));
+    quarter_circle_to(
+        &mut path,
+        point(tab_right, bottom - curve),
+        point(tab_right, bottom),
+        point(right, bottom),
+    );
+    path
+}
+
+fn folder_tab_border(
+    metrics: FolderTabMetrics,
+    color: Hsla,
+    strength: f32,
+    ix: usize,
+) -> impl IntoElement {
+    div()
+        .debug_selector(move || format!("folder-tab-border-{ix}"))
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .left(-metrics.radius)
+        .right(-metrics.radius)
+        .child(
+            canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    let (path, border) =
+                        folder_tab_border_paint(bounds, metrics.radius, color, strength);
+                    if let Ok(path) = path.build() {
+                        window.paint_path(path, border);
+                    }
+                },
+            )
+            .size_full(),
+        )
+}
+
+fn folder_tab_border_paint(
+    bounds: Bounds<Pixels>,
+    curve: Pixels,
+    color: Hsla,
+    strength: f32,
+) -> (PathBuilder, Background) {
+    let path = folder_tab_path(
+        bounds,
+        curve,
+        PathBuilder::default().with_style(PathStyle::Stroke(
+            StrokeOptions::default()
+                .with_line_width(1.5)
+                .with_tolerance(0.02),
+        )),
+    );
+    let border = linear_gradient(
+        180.,
+        linear_color_stop(color.opacity(strength), 0.),
+        // Finish fading before the stroke's lower edge reaches the content.
+        linear_color_stop(color.opacity(0.), 0.95),
+    );
+    (path, border)
+}
+
+/// Exposes the production contour and gradient for headless paint assertions.
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub fn folder_tab_border_geometry(
+    bounds: Bounds<Pixels>,
+    curve: Pixels,
+    color: Hsla,
+    strength: f32,
+) -> anyhow::Result<(gpui::Path<Pixels>, Background)> {
+    let (path, border) = folder_tab_border_paint(bounds, curve, color, strength);
+    Ok((path.build()?, border))
 }
 
 /// Adds a quarter circle from `from` to `to`, whose tangents meet at `corner`.
@@ -544,6 +618,7 @@ pub struct Tab {
     suffix: Option<AnyElement>,
     children: Vec<AnyElement>,
     variant: TabVariant,
+    folder_border_color: Option<Hsla>,
     size: Size,
     pub(super) disabled: bool,
     pub(super) selected: bool,
@@ -612,6 +687,7 @@ impl Default for Tab {
             prefix: None,
             suffix: None,
             variant: TabVariant::default(),
+            folder_border_color: None,
             size: Size::default(),
             max_width: None,
             on_click: None,
@@ -680,6 +756,13 @@ impl Tab {
     /// Use Folder variant.
     pub fn folder(mut self) -> Self {
         self.variant = TabVariant::Folder;
+        self
+    }
+
+    /// Color the folder tab's curved border, fading to transparent toward the
+    /// content. Inactive tabs use a quieter border; other variants ignore it.
+    pub fn folder_border_color(mut self, color: impl Into<Hsla>) -> Self {
+        self.folder_border_color = Some(color.into());
         self
     }
 
@@ -1011,6 +1094,19 @@ impl RenderOnce for Tab {
                             .rounded(metrics.radius)
                             .bg(cx.theme().tokens.secondary),
                     )
+                },
+            )
+            .when_some(
+                self.folder_border_color.filter(|_| folder),
+                |this, color| {
+                    let strength = if self.disabled {
+                        0.3
+                    } else if self.selected {
+                        1.
+                    } else {
+                        0.55
+                    };
+                    this.child(folder_tab_border(metrics, color, strength, self.ix))
                 },
             )
             // In the gap after the tab, on a whole pixel, level with the content.

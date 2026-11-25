@@ -31,6 +31,8 @@ mod claude_subagent_tests;
 #[cfg(test)]
 mod claude_tests;
 #[cfg(test)]
+mod gemini_tests;
+#[cfg(test)]
 mod local_http;
 #[cfg(test)]
 mod opencode_tests;
@@ -92,6 +94,7 @@ pub struct StartRequest {
     pub native_id: Option<String>,
     pub model: Option<String>,
     pub permission: PermissionLevel,
+    pub tool_policy: crate::cli_adapter::ToolPolicy,
     pub effort: crate::providers::ReasoningEffort,
     pub route: crate::providers::RuntimeRoute,
 }
@@ -231,6 +234,7 @@ impl ChatRuntime {
             native_id: None,
             model,
             permission: PermissionLevel::ReadOnly,
+            tool_policy: Default::default(),
             effort: Default::default(),
             route,
             text_only: true,
@@ -256,6 +260,7 @@ impl ChatRuntime {
             native_id,
             model,
             permission,
+            tool_policy: Default::default(),
             effort: Default::default(),
             route: Default::default(),
         })
@@ -278,6 +283,7 @@ impl ChatRuntime {
             native_id,
             model,
             permission,
+            tool_policy,
             effort,
             route,
         } = request;
@@ -288,6 +294,7 @@ impl ChatRuntime {
             native_id,
             model,
             permission,
+            tool_policy,
             effort,
             route,
             text_only: false,
@@ -1334,7 +1341,7 @@ mod tests {
         cleanup_temp_dir(&directory);
     }
     #[test]
-    fn runtime_queues_multiple_approvals_and_answers_each_once() {
+    fn workspace_runtime_rejects_multiple_codex_escalations_without_a_ui_gate() {
         let _locale = crate::test_support::chinese();
         let log =
             std::env::temp_dir().join(format!("conduit-approval-queue-{}.log", std::process::id()));
@@ -1355,26 +1362,13 @@ mod tests {
         .replace("__LOG__", &log.display().to_string());
         let runtime = fixture(&command);
         let deadline = Instant::now() + Duration::from_secs(15);
-        let mut approvals = vec![];
-        while approvals.len() < 2 {
-            assert!(Instant::now() < deadline, "approvals did not queue");
-            if let Ok(Event::Approval(approval)) =
-                runtime.events.recv_timeout(Duration::from_secs(3))
-            {
-                approvals.push(approval);
-            }
-        }
-        assert_ne!(approvals[0].id, approvals[1].id);
-        runtime.decide(approvals[0].id.clone(), true);
-        runtime.decide(approvals[1].id.clone(), false);
-
-        let mut resolved = HashMap::new();
         loop {
-            assert!(Instant::now() < deadline, "approvals were not resolved");
+            assert!(
+                Instant::now() < deadline,
+                "workspace requests were not denied"
+            );
             match runtime.events.recv_timeout(Duration::from_secs(3)) {
-                Ok(Event::ApprovalResolved { id, allow }) => {
-                    resolved.insert(id, allow);
-                }
+                Ok(Event::Approval(_)) => panic!("workspace escalation opened a UI gate"),
                 Ok(Event::Finished { error, cancelled }) => {
                     assert!(!cancelled);
                     assert!(error.is_none(), "{error:?}");
@@ -1384,7 +1378,6 @@ mod tests {
                 Err(error) => panic!("event channel closed: {error}"),
             }
         }
-        assert_eq!(resolved.len(), 2);
         let responses: Vec<Value> = std::fs::read_to_string(&log)
             .unwrap()
             .lines()
@@ -1396,7 +1389,7 @@ mod tests {
                 .find(|value| value["id"] == serde_json::json!(id))
                 .unwrap_or_else(|| panic!("missing response for {id}: {responses:?}"))
         };
-        assert_eq!(response(41)["result"]["decision"], "accept");
+        assert_eq!(response(41)["result"]["decision"], "decline");
         assert_eq!(response(42)["result"]["decision"], "decline");
         std::fs::remove_file(log).unwrap();
     }
@@ -1546,12 +1539,13 @@ mod tests {
             [Console]::WriteLine('{"method":"turn/completed","params":{"turn":{"status":"completed"}}}')
             Start-Sleep -Seconds 5
         "#.replace("__LOG__", &log.display().to_string());
-        let protocol = Protocol::new(
+        let mut protocol = Protocol::new(
             Provider::Codex,
             std::env::temp_dir().to_string_lossy().into_owned(),
             "fixture".into(),
             None,
         );
+        protocol.approval_test = true;
         let executable = PathBuf::from(std::env::var_os("SystemRoot").unwrap())
             .join("System32/WindowsPowerShell/v1.0/powershell.exe");
         let runtime = ChatRuntime::start_command(
@@ -2064,6 +2058,7 @@ mod tests {
             Provider::Codex => std::env::var("CONDUIT_CODEX_TEST_MODEL"),
             Provider::OpenCode => std::env::var("CONDUIT_OPENCODE_TEST_MODEL"),
             Provider::Qoder => std::env::var("CONDUIT_QODER_TEST_MODEL"),
+            Provider::Gemini => std::env::var("CONDUIT_GEMINI_TEST_MODEL"),
         }
         .ok()
         .filter(|value| !value.is_empty());

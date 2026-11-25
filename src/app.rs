@@ -30,6 +30,7 @@ use gpui_kit::{
         Size,
         button::*,
         clipboard::Clipboard,
+        color_picker::{ColorPickerEvent, ColorPickerState},
         diff::{
             Diff, DiffChangeIndicator, DiffFile, DiffHoverHighlight, DiffHunkSeparator, DiffMode,
             DiffState,
@@ -41,7 +42,6 @@ use gpui_kit::{
         scroll::ScrollableElement,
         searchable_list::{SearchableListItem, SearchableVec},
         select::{Select, SelectEvent, SelectState},
-        slider::{Slider, SliderEvent, SliderState},
         spinner::Spinner,
         tab::{Tab, TabBar},
         text::{TextView, TextViewStyle},
@@ -183,6 +183,12 @@ actions!(
     ]
 );
 
+fn workspace_color_rgba(color: gpui_kit::Hsla) -> u32 {
+    let color = color.to_rgb();
+    let channel = |value: f32| (value.clamp(0., 1.) * 255.).round() as u32;
+    (channel(color.r) << 24) | (channel(color.g) << 16) | (channel(color.b) << 8) | channel(color.a)
+}
+
 pub struct ConduitApp {
     store: Store,
     background: background::BackgroundState,
@@ -226,6 +232,8 @@ pub struct ConduitApp {
     /// (0). None means the composer holds typed text, not a recalled prompt.
     prompt_history: Option<usize>,
     composer_files: HashMap<ComposerTarget, ComposerFiles>,
+    composer_scope: Option<composer::ComposerBinding>,
+    composer_editors: HashMap<EntityId, composer::EditorState>,
     file_mentions: mentions::FileMentions,
     chat_commands: commands::ChatCommands,
     queued_messages: HashMap<u64, queue::QueuedMessage>,
@@ -235,7 +243,6 @@ pub struct ConduitApp {
     opencode_catalogs: HashMap<PathBuf, ModelCatalog>,
     opencode_model_probes: HashMap<PathBuf, models::OpenCodeModelsProbe>,
     ccs: CcsCatalog,
-    message: Option<String>,
     git_prompt_input: Entity<TextareaState>,
     /// Font pickers rebuilt from installed families when the app starts.
     ui_font_select: Entity<SelectState<SearchableVec<FontChoice>>>,
@@ -276,6 +283,8 @@ pub struct ConduitApp {
     rename_input: Option<Entity<InputState>>,
     delete_target: Option<u64>,
     remove_workspace_target: Option<usize>,
+    workspace_color_picker: Entity<ColorPickerState>,
+    workspace_color_target: Option<PathBuf>,
     _subscriptions: Vec<Subscription>,
     dirty: bool,
     window_active: bool,
@@ -309,6 +318,8 @@ pub struct ConduitApp {
     expanded_errors: HashSet<(u64, String)>,
     /// Last elapsed-label repaint: every second for turns/recent ages, otherwise every minute.
     last_live_tick: Instant,
+    /// Last automatic sweep of stale empty workspace sessions.
+    last_empty_session_cleanup: Option<Instant>,
     tool_scrolls: HashMap<(u64, String), ScrollHandle>,
     /// Parsed diff viewers for expanded edit cards, keyed like `tool_scrolls`.
     tool_diffs: DiffCache,
@@ -372,7 +383,7 @@ impl ConduitApp {
             KeyBinding::new("escape", DismissChatCommand, Some("ChatCommand > Input")),
         ]);
         terminal::init(cx);
-        let (mut store, message, writable) = match loaded {
+        let (mut store, load_error, writable) = match loaded {
             Ok(store) => (store, None, true),
             Err(error) => (Store::default(), Some(error), false),
         };
@@ -392,6 +403,7 @@ impl ConduitApp {
             &store.ui.dark_theme,
             cx,
         );
+        theme::apply_icon_size(store.ui.icon_size, cx);
         store.ui.light_theme = gpui_kit::component::Theme::global(cx)
             .light_theme
             .name
@@ -533,6 +545,7 @@ impl ConduitApp {
             )
             .searchable(true)
         });
+        let workspace_color_picker = cx.new(|cx| ColorPickerState::new(window, cx));
         let ui_font_subscription =
             cx.subscribe(&ui_font_select, |this, _, event: &SelectEvent<_>, cx| {
                 if !this.writable || this.closing {
@@ -574,6 +587,22 @@ impl ConduitApp {
                 this.persist();
                 cx.notify();
             });
+        let workspace_color_subscription = cx.subscribe(
+            &workspace_color_picker,
+            |this, _, event: &ColorPickerEvent, cx| {
+                if !this.writable || this.closing {
+                    return;
+                }
+                let Some(path) = this.workspace_color_target.clone() else {
+                    return;
+                };
+                let color = match event {
+                    ColorPickerEvent::Change(Some(color)) => Some(workspace_color_rgba(*color)),
+                    ColorPickerEvent::Change(None) => None,
+                };
+                this.set_workspace_color(&path, color, cx);
+            },
+        );
         let next_id = store
             .workspaces
             .iter()
@@ -607,13 +636,7 @@ impl ConduitApp {
             })
             .or(store.ui.last_provider)
             .unwrap_or(Provider::Claude);
-        let input = cx.new(|cx| {
-            TextareaState::new(window, cx)
-                .placeholder(conduit::i18n::text_static(
-                    "localization.describe_a_task_type_to_reference_files",
-                ))
-                .auto_grow(3, 8)
-        });
+        let input = cx.new(|cx| composer::composer_input_state(String::new(), window, cx));
         let input_subscription = cx.subscribe(&input, |_, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 cx.notify();
@@ -644,6 +667,20 @@ impl ConduitApp {
             InputState::new(window, cx)
                 .placeholder(conduit::i18n::text_static("localization.search_settings"))
         });
+        let auto_collapse_inactive_days = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(store.ui.auto_collapse_inactive_days.max(1).to_string())
+                .pattern(regex::Regex::new(r"^[0-9]*$").unwrap())
+                .min(1.)
+                .max(u32::MAX as f64)
+        });
+        let auto_collapse_days_subscription = cx.subscribe_in(
+            &auto_collapse_inactive_days,
+            window,
+            |app, input, event: &InputEvent, window, cx| {
+                app.on_auto_collapse_days_change(input, event, window, cx);
+            },
+        );
         let model_search = cx.new(|cx| {
             InputState::new(window, cx).placeholder(conduit::i18n::text_static(
                 "localization.search_model_names_ids_or_notes",
@@ -656,8 +693,20 @@ impl ConduitApp {
                     cx.notify();
                 }
             });
-        let settings_search_subscription =
-            cx.subscribe(&settings_search, |_, _, _: &InputEvent, cx| cx.notify());
+        let settings_search_subscription = cx.subscribe_in(
+            &settings_search,
+            window,
+            |app, _, event: &InputEvent, window, cx| {
+                if let InputEvent::PressEnter {
+                    secondary: false,
+                    shift: false,
+                } = event
+                {
+                    app.open_first_settings_result(window, cx);
+                }
+                cx.notify();
+            },
+        );
         let skill_search = cx.new(|cx| {
             InputState::new(window, cx).placeholder(conduit::i18n::text_static(
                 "localization.search_names_or_descriptions",
@@ -733,19 +782,13 @@ impl ConduitApp {
                 this.apply_appearance(window, cx);
             }
         });
-        let had_ccs_cache = store.ccs_catalog.is_some();
-        let cached_engines = store.cli_model_catalogs.len();
-        let ccs = store.load_ccs_catalog();
-        let catalogs = Provider::ALL
-            .into_iter()
-            .map(|provider| (provider, store.load_model_catalog(provider)))
-            .collect();
-        let model_cache_changed = had_ccs_cache != store.ccs_catalog.is_some()
-            || cached_engines != store.cli_model_catalogs.len();
+        let ccs = ccs::load();
+        store.sync_ccs_providers(&ccs);
         let scroll = gpui_kit::ListState::new(0, ListAlignment::Bottom, px(240.));
         let app = cx.entity().downgrade();
         let timeline = cx.new(|_| shell::ChatTimeline::new(app.clone(), scroll.clone()));
-        let sidebar_view = cx.new(|cx| sidebar::SidebarView::new(app.clone(), window, cx));
+        let sidebar_view = cx
+            .new(|cx| sidebar::SidebarView::new(app.clone(), &workspace_color_picker, window, cx));
         let file_view =
             cx.new(|cx| files::FileDocumentView::new(app.clone(), files::Pane::Main, cx));
         let reference_file_view =
@@ -767,7 +810,7 @@ impl ConduitApp {
             branch_manager: None,
             branches_open: false,
             updater: update::UpdateUi::default(),
-            notifications: notifications::NotificationUi::new(writable, cx),
+            notifications: notifications::NotificationUi::new(writable, load_error, cx),
             connection_settings: settings::ConnectionsUi::new(new_session_provider, model_search),
             settings_ui: settings::SettingsUi {
                 open: false,
@@ -778,6 +821,7 @@ impl ConduitApp {
                 layout_compact: Default::default(),
                 restore_navigation_focus: Default::default(),
                 search: settings_search,
+                auto_collapse_inactive_days,
                 naming_expanded: false,
                 git_expanded: false,
                 prompt_expanded: false,
@@ -806,16 +850,20 @@ impl ConduitApp {
             workspace_drafts: HashMap::new(),
             prompt_history: None,
             composer_files: HashMap::new(),
+            composer_scope: None,
+            composer_editors: HashMap::new(),
             file_mentions: mentions::FileMentions::default(),
             chat_commands: commands::ChatCommands::default(),
             queued_messages: HashMap::new(),
             probes: HashMap::new(),
             diagnostics: HashMap::new(),
-            catalogs,
+            catalogs: Provider::ALL
+                .into_iter()
+                .map(|provider| (provider, models::load(provider)))
+                .collect(),
             opencode_catalogs: HashMap::new(),
             opencode_model_probes: HashMap::new(),
             ccs,
-            message,
             git_prompt_input,
             ui_font_select,
             chat_font_select,
@@ -844,8 +892,11 @@ impl ConduitApp {
             rename_input: None,
             delete_target: None,
             remove_workspace_target: None,
+            workspace_color_picker,
+            workspace_color_target: None,
             _subscriptions: vec![
                 settings_search_subscription,
+                auto_collapse_days_subscription,
                 skill_search_subscription,
                 model_search_subscription,
                 mcp_search_subscription,
@@ -858,6 +909,7 @@ impl ConduitApp {
                 ui_font_subscription,
                 chat_font_subscription,
                 code_font_subscription,
+                workspace_color_subscription,
                 light_theme_subscription,
                 dark_theme_subscription,
             ],
@@ -884,6 +936,7 @@ impl ConduitApp {
             question_expansion: HashMap::new(),
             expanded_errors: HashSet::new(),
             last_live_tick: Instant::now(),
+            last_empty_session_cleanup: None,
             tool_scrolls: HashMap::new(),
             tool_diffs: DiffCache::default(),
             tool_analysis: Default::default(),
@@ -914,12 +967,11 @@ impl ConduitApp {
         app.sync_plugin_context();
         app.restore_update_drafts(window, cx);
         app.show_installed_changelog(window, cx);
+        app.prune_update_cache(cx);
         if start_in_git {
             app.show_git_navigation(cx);
         }
-        app.cleanup_attachments();
-        // Import metadata has no attachment references; schedule it after startup collection.
-        app.dirty |= writable && model_cache_changed;
+        app.cleanup_attachments(cx);
         app.ensure_selected_transcript(cx);
         app.restore_background(window, cx);
         app
@@ -1011,11 +1063,6 @@ impl ConduitApp {
         self.store.queued_messages = self.queued_messages.clone();
         if !self.persistence.submit(&self.store) {
             self.dirty = true;
-            self.message = self
-                .persistence
-                .error
-                .as_ref()
-                .map(|e| conduit::i18n::format("app.save_failed", &[("e", e.to_string())]));
             return false;
         }
         self.dirty = false;
@@ -1035,23 +1082,9 @@ impl ConduitApp {
     fn poll_persistence(&mut self, cx: &mut Context<Self>) {
         if self.persistence.poll() {
             self.trim_transcripts();
-            if let Some(error) = &self.persistence.error {
+            if self.persistence.error.is_some() {
                 self.dirty = true;
                 self.closing = false;
-                // Pending sends report their own failure against the originating
-                // conversation, preserving another conversation's banner.
-                if self
-                    .session_control
-                    .runs
-                    .values()
-                    .all(|run| run.pending_save.is_none())
-                    && self.session_control.queue_saves.is_empty()
-                {
-                    self.message = Some(conduit::i18n::format(
-                        "notifications.save_failed",
-                        &[("error", error.to_string())],
-                    ));
-                }
             }
             cx.notify();
         }
@@ -1067,7 +1100,7 @@ impl ConduitApp {
             && self.session_control.queue_saves.is_empty()
         {
             self.attachments_cleanup_pending = false;
-            self.cleanup_attachments();
+            self.cleanup_attachments(cx);
         }
     }
 }

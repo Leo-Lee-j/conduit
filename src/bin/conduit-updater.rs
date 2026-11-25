@@ -10,6 +10,7 @@ fn main() {
         })
         .and_then(|path| conduit::update::install::run(std::path::Path::new(&path)));
     if let Err(error) = result {
+        conduit::diagnostics::record_crash("updater", &format!("{error:#}"));
         let text: Vec<u16> = conduit::i18n::format(
             "bin.conduit-updater.conduit_update_incomplete",
             &[("error", format!("{:#}", error))],

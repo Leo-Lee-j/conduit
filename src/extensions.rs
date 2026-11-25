@@ -529,6 +529,11 @@ impl<'a> Scan<'a> {
             .map(project_directories)
             .unwrap_or_default();
         match context.engine {
+            Provider::Gemini => {
+                self.catalog
+                    .errors
+                    .push(conduit::i18n::text("gemini.extensions_native"));
+            }
             Provider::Qoder => {
                 self.catalog
                     .errors
@@ -835,7 +840,7 @@ fn unquote(value: &str) -> String {
 }
 
 /// Strip JSONC comments/trailing commas while leaving strings untouched.
-fn jsonc(text: &str) -> Option<Value> {
+pub(crate) fn jsonc(text: &str) -> Option<Value> {
     let mut chars = text.trim_start_matches('\u{feff}').chars().peekable();
     let mut output = String::new();
     let mut quoted = false;

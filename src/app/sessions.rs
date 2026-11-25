@@ -2,6 +2,24 @@
 
 use super::*;
 
+mod auto_archive;
+
+const EMPTY_SESSION_RETENTION_SECS: u64 = 24 * 60 * 60;
+
+fn eligible_for_empty_session_cleanup(session: &SessionRecord, now: u64) -> bool {
+    session.created_at > 0
+        && now.saturating_sub(session.created_at) >= EMPTY_SESSION_RETENTION_SECS
+        && !session.archived
+        && !session.is_subagent
+        && !session.pinned
+        && session.native_id.is_none()
+        && session.subagents.is_empty()
+        && session.exit_code.is_none()
+        && !session.interrupted
+        && session.usage == crate::domain::Usage::default()
+        && session.message_count() == 0
+}
+
 pub(super) fn single_line_title(title: &str) -> String {
     title.replace(['\r', '\n'], " ")
 }
@@ -57,6 +75,77 @@ pub(super) fn naming_failure_text(error: &str) -> String {
 }
 
 impl ConduitApp {
+    pub(super) fn cleanup_stale_empty_sessions(&mut self, cx: &mut Context<Self>) {
+        self.last_empty_session_cleanup = Some(Instant::now());
+        if !self.writable || self.closing || !self.store.ui.auto_cleanup_empty_sessions {
+            return;
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let candidates: Vec<_> = self
+            .store
+            .workspaces
+            .iter()
+            .flat_map(Workspace::visible_sessions)
+            .filter(|session| eligible_for_empty_session_cleanup(session, now))
+            .map(|session| session.id)
+            .collect();
+
+        let mut deleted = 0;
+        for id in candidates {
+            let protected = self.session_has_unsent_content(id, cx)
+                || self.child_draft_pending(id, cx)
+                || self.queued_messages.contains_key(&id)
+                || self.session_control.runs.contains_key(&id)
+                || self.session_control.queue_saves.contains_key(&id)
+                || self.session_draft_save_pending(id)
+                || self
+                    .store
+                    .usage_ledger
+                    .observations
+                    .iter()
+                    .any(|observation| observation.session == id)
+                || self
+                    .store
+                    .child_commands
+                    .iter()
+                    .any(|command| command.root == id)
+                || self
+                    .store
+                    .child_bindings
+                    .iter()
+                    .any(|(_, binding)| binding.root == id);
+            if !protected {
+                self.delete_session(id, cx);
+                if self.session(id).is_none() {
+                    deleted += 1;
+                }
+            }
+        }
+        if deleted > 0 {
+            let message_key = if deleted == 1 {
+                "notifications.empty_sessions_cleaned_one"
+            } else {
+                "notifications.empty_sessions_cleaned_many"
+            };
+            self.notify_user(
+                Notice::new(
+                    NoticeSource::App,
+                    NoticeLevel::Success,
+                    conduit::i18n::text_static("notifications.empty_sessions_cleaned"),
+                    "",
+                )
+                .localized_message(conduit::i18n::Message::new(
+                    message_key,
+                    &[("count", deleted.to_string())],
+                )),
+                cx,
+            );
+        }
+    }
+
     pub(super) fn session(&self, id: u64) -> Option<&SessionRecord> {
         let (w, s) = self.session_control.locate(&self.store.workspaces, id)?;
         self.store.workspaces.get(w)?.sessions.get(s)
@@ -89,11 +178,11 @@ impl ConduitApp {
             return;
         }
         for (index, workspace) in self.store.workspaces.iter().enumerate() {
-            if let Some(session) = workspace
-                .sessions
-                .iter()
-                .find(|s| !s.archived && !s.is_subagent)
-            {
+            if let Some(session) = workspace.sessions.iter().find(|s| {
+                !s.archived
+                    && !s.is_subagent
+                    && self.document_pane(DocumentTab::Chat(s.id)) == super::files::Pane::Main
+            }) {
                 self.selected_workspace = Some(index);
                 self.selected_session = Some(session.id);
                 self.new_session_provider = session.provider;
@@ -127,7 +216,10 @@ impl ConduitApp {
         while self.open_tabs.iter().filter(|t| t.chat().is_some()).count() > limit {
             if let Some(position) = self.open_tabs.iter().position(|tab| {
                 tab.chat().is_some_and(|other| {
-                    other != id && !self.session_control.runs.contains_key(&other)
+                    other != id
+                        && Some(other) != self.selected_session
+                        && self.document_pane(*tab) == super::files::Pane::Main
+                        && !self.session_control.runs.contains_key(&other)
                 })
             }) {
                 self.open_tabs.remove(position);
@@ -154,9 +246,28 @@ impl ConduitApp {
     }
 
     pub(super) fn toggle_archive(&mut self, id: u64, cx: &mut Context<Self>) {
-        if let Some(session) = self.session_mut(id) {
-            session.archived = !session.archived;
+        if !self.writable || self.closing {
+            return;
         }
+        let Some(archived) = self.session(id).map(|session| !session.archived) else {
+            return;
+        };
+        if let Some(session) = self.session_mut(id) {
+            session.archived = archived;
+        }
+        if archived {
+            self.store.ui.auto_archive.restored_at.remove(&id);
+        } else {
+            self.store
+                .ui
+                .auto_archive
+                .restored_at
+                .insert(id, unix_now());
+        }
+        self.finish_archiving_sessions(cx);
+    }
+
+    fn finish_archiving_sessions(&mut self, cx: &mut Context<Self>) {
         let archived_tabs: Vec<u64> = self
             .open_tabs
             .iter()
@@ -168,6 +279,9 @@ impl ConduitApp {
             .collect();
         self.open_tabs
             .retain(|tab| tab.chat().is_none_or(|id| !archived_tabs.contains(&id)));
+        for id in archived_tabs {
+            self.detach_reference_chat(id, cx);
+        }
         self.select_fallback_session();
         self.persist();
         self.sync_git_workspace(cx);
@@ -253,9 +367,13 @@ impl ConduitApp {
         self.rename_input = None;
         let title = title.trim().to_string();
         if title.is_empty() {
-            self.message =
-                Some(conduit::i18n::text_static("sessions.session_name_cannot_be_empty").into());
-            cx.notify();
+            self.notify_feedback(
+                NoticeSource::Session,
+                NoticeLevel::Warning,
+                conduit::i18n::text_static("sessions.session_name_cannot_be_empty"),
+                self.session_notice_target(id),
+                cx,
+            );
             return;
         }
         self.set_session_title(id, &title);
@@ -409,7 +527,13 @@ impl ConduitApp {
                 .iter()
                 .any(|command| command.root == id)
         {
-            self.message = Some(conduit::i18n::text("subagents.child_draft_pending"));
+            self.notify_feedback(
+                NoticeSource::Session,
+                NoticeLevel::Warning,
+                conduit::i18n::text("subagents.child_draft_pending"),
+                self.session_notice_target(id),
+                cx,
+            );
             self.delete_target = None;
             cx.notify();
             return;
@@ -422,8 +546,13 @@ impl ConduitApp {
             || self.session_control.queue_saves.contains_key(&id)
             || self.session_draft_save_pending(id)
         {
-            self.message =
-                Some(conduit::i18n::text_static("sessions.a_task_is_still_running_in_this").into());
+            self.notify_feedback(
+                NoticeSource::Session,
+                NoticeLevel::Warning,
+                conduit::i18n::text_static("sessions.a_task_is_still_running_in_this"),
+                self.session_notice_target(id),
+                cx,
+            );
             self.delete_target = None;
             cx.notify();
             return;
@@ -435,6 +564,7 @@ impl ConduitApp {
         for workspace in &mut self.store.workspaces {
             workspace.sessions.retain(|session| session.id != id);
         }
+        self.store.ui.auto_archive.restored_at.remove(&id);
         self.session_control.agent_navigation.forget_root(id);
         self.store
             .child_bindings
@@ -442,7 +572,6 @@ impl ConduitApp {
         self.store
             .child_commands
             .retain(|command| command.root != id);
-        self.drafts.remove(&id);
         self.queued_messages.remove(&id);
         self.session_control.unread_completed.remove(&id);
         self.expanded_errors.retain(|(session, _)| *session != id);
@@ -461,6 +590,8 @@ impl ConduitApp {
         self.tool_details.forget_session(id);
         self.tool_diffs.forget_session(id);
         self.remove_tab(id);
+        self.detach_reference_chat(id, cx);
+        self.drafts.remove(&id);
         self.select_fallback_session();
         self.delete_target = None;
         self.persist_and_cleanup_attachments();
@@ -490,51 +621,6 @@ impl ConduitApp {
                 .map_or(self.new_session_provider, |selection| selection.engine)
         };
         self.new_session(index, provider, window, cx);
-    }
-
-    pub(super) fn select_engine(
-        &mut self,
-        provider: Provider,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.writable || self.closing || !self.store.cli.enabled(provider) {
-            return;
-        }
-        if self.new_session_provider != provider {
-            self.pending_model_selection = None;
-            // An unsent conversation already owns its tab, draft and attachments.
-            // Change its route in place while there is no engine context to resume.
-            let target = self.selected_session.filter(|id| {
-                !self.session_busy(*id)
-                    && !self.session_control.queue_saves.contains_key(id)
-                    && !self.session_draft_save_pending(*id)
-                    && self.session(*id).is_some_and(|session| {
-                        session.transcript.loaded
-                            && session.messages.is_empty()
-                            && session.native_id.is_none()
-                            && session.exit_code.is_none()
-                            && !session.interrupted
-                    })
-            });
-            if let Some(id) = target {
-                let selection = self.default_selection(provider);
-                if let Some(session) = self.session_mut(id) {
-                    session.provider = provider;
-                    selection.apply(session);
-                }
-                self.persist();
-            }
-        }
-        self.new_session_provider = provider;
-        self.remember_provider(provider);
-        if provider == Provider::OpenCode {
-            self.ensure_opencode_models(false, cx);
-        }
-        // Conversations with history keep their engine and context. Switching
-        // away from one configures the next new conversation without navigating.
-        let _ = window;
-        cx.notify();
     }
 
     /// Resolve the fallback against the model/channel that generated usage,
@@ -650,20 +736,87 @@ impl ConduitApp {
         });
     }
 
+    pub(super) fn set_workspace_color(
+        &mut self,
+        path: &Path,
+        color: Option<u32>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.writable || self.closing {
+            return;
+        }
+        let changed = match color {
+            Some(color) => {
+                self.store
+                    .ui
+                    .workspace_colors
+                    .insert(path.to_owned(), color)
+                    != Some(color)
+            }
+            None => self.store.ui.workspace_colors.remove(path).is_some(),
+        };
+        if changed {
+            // ColorPicker emits while sliders are dragged. Let the normal one-second
+            // dirty-state save coalesce those updates instead of writing every frame.
+            self.dirty = true;
+            self.sidebar_view.update(cx, |_, cx| cx.notify());
+            cx.notify();
+        }
+    }
+
+    pub(super) fn set_workspace_pinned(
+        &mut self,
+        path: &Path,
+        pinned: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.writable
+            || self.closing
+            || !self
+                .store
+                .workspaces
+                .iter()
+                .any(|workspace| workspace.path == path)
+        {
+            return;
+        }
+        let changed = if pinned {
+            self.store.ui.pinned_workspaces.insert(path.to_owned())
+        } else {
+            self.store.ui.pinned_workspaces.remove(path)
+        };
+        if changed {
+            self.persist();
+            self.refresh_sidebar();
+            self.sidebar_view.update(cx, |_, cx| cx.notify());
+            cx.notify();
+        }
+    }
+
     pub(super) fn remove_workspace(&mut self, index: usize, cx: &mut Context<Self>) {
         self.remove_workspace_target = None;
         if index >= self.store.workspaces.len() {
             return;
         }
         if self.workspace_busy(index) {
-            self.message = Some(
-                conduit::i18n::text_static("sessions.tasks_or_terminals_are_still_running_in")
-                    .into(),
+            self.notify_feedback(
+                NoticeSource::Session,
+                NoticeLevel::Warning,
+                conduit::i18n::text_static("sessions.tasks_or_terminals_are_still_running_in"),
+                Some(NoticeTarget::Workspace(
+                    self.store.workspaces[index].path.clone(),
+                )),
+                cx,
             );
             cx.notify();
             return;
         }
         let removed = self.store.workspaces.remove(index);
+        self.store.ui.workspace_colors.remove(&removed.path);
+        self.store.ui.pinned_workspaces.remove(&removed.path);
+        if self.workspace_color_target.as_ref() == Some(&removed.path) {
+            self.workspace_color_target = None;
+        }
         #[cfg(feature = "remote")]
         if self.remote.applies_to(&removed.path) {
             self.remote.stop();
@@ -712,14 +865,27 @@ impl ConduitApp {
         {
             self.selected_workspace = Some(selected - 1);
         }
+        self.store.history_file_stamps.remove(&removed.path);
         self.persist_and_cleanup_attachments();
         self.sync_git_workspace(cx);
         cx.notify();
     }
 
-    pub(super) fn workspace_menu(&self, index: usize, app: Entity<Self>) -> AnyElement {
+    pub(super) fn workspace_menu(
+        &self,
+        index: usize,
+        app: Entity<Self>,
+        can_edit: bool,
+    ) -> AnyElement {
+        let Some(workspace) = self.store.workspaces.get(index) else {
+            return div().into_any_element();
+        };
+        let path = workspace.path.clone();
         let selected = self.selected_workspace == Some(index);
+        let has_color = self.store.ui.workspace_colors.contains_key(&path);
+        let pinned = self.store.ui.pinned_workspaces.contains(&path);
         let trigger = Button::new(("workspace-menu-trigger", index))
+            .debug_selector(move || format!("workspace-menu-trigger-{index}"))
             .ghost()
             .small()
             .compact()
@@ -739,9 +905,38 @@ impl ConduitApp {
             .trigger(trigger)
             .content(move |_, _, cx| {
                 let popover = cx.entity().downgrade();
+                let pin_app = app.clone();
+                let pin_popover = popover.clone();
+                let pin_path = path.clone();
+                let pin = session_menu_button(
+                    ("workspace-pin", index as u64),
+                    conduit::i18n::text_static(if pinned {
+                        "sidebar.unpin_workspace"
+                    } else {
+                        "sidebar.pin_workspace"
+                    }),
+                    if pinned {
+                        FullIconName::PinOff
+                    } else {
+                        FullIconName::Pin
+                    },
+                )
+                .debug_selector(move || format!("workspace-pin-{index}"))
+                .disabled(!can_edit)
+                .on_click(move |_, window, cx| {
+                    cx.stop_propagation();
+                    pin_app.update(cx, |this, cx| {
+                        this.set_workspace_pinned(&pin_path, !pinned, cx);
+                    });
+                    if let Some(popover) = pin_popover.clone().upgrade() {
+                        popover.update(cx, |popover, cx| popover.dismiss(window, cx));
+                    }
+                });
                 let clear_app = app.clone();
+                let clear_color_app = app.clone();
                 let remove_app = app.clone();
                 let clear_popover = popover.clone();
+                let clear_color_popover = popover.clone();
                 let remove_popover = popover.clone();
                 let clear = session_menu_button(
                     ("workspace-clear-selection", index as u64),
@@ -751,6 +946,25 @@ impl ConduitApp {
                 .on_click(move |_, window, cx| {
                     clear_app.update(cx, |this, cx| this.clear_workspace_selection(window, cx));
                     if let Some(popover) = clear_popover.clone().upgrade() {
+                        popover.update(cx, |popover, cx| popover.dismiss(window, cx));
+                    }
+                });
+                let clear_color_path = path.clone();
+                let clear_color = session_menu_button(
+                    ("workspace-clear-color", index as u64),
+                    conduit::i18n::text_static("sessions.clear_workspace_color"),
+                    IconName::CircleX,
+                )
+                .debug_selector(move || format!("workspace-clear-color-{index}"))
+                .on_click(move |_, window, cx| {
+                    clear_color_app.update(cx, |this, cx| {
+                        this.set_workspace_color(&clear_color_path, None, cx);
+                        if this.workspace_color_target.as_ref() == Some(&clear_color_path) {
+                            this.workspace_color_picker
+                                .update(cx, |picker, cx| picker.clear_value(window, cx));
+                        }
+                    });
+                    if let Some(popover) = clear_color_popover.clone().upgrade() {
                         popover.update(cx, |popover, cx| popover.dismiss(window, cx));
                     }
                 });
@@ -767,9 +981,12 @@ impl ConduitApp {
                         popover.update(cx, |popover, cx| popover.dismiss(window, cx));
                     }
                 });
-                let mut content = v_flex().w(px(170.)).gap(px(1.));
+                let mut content = v_flex().w(px(180.)).gap(px(1.)).child(pin);
                 if selected {
                     content = content.child(clear);
+                }
+                if can_edit && has_color {
+                    content = content.child(clear_color);
                 }
                 content.child(remove)
             })
@@ -794,7 +1011,6 @@ impl ConduitApp {
         self.active_diff = None;
         self.selected_workspace = None;
         self.selected_session = None;
-        self.message = None;
         self.message_focus = None;
         self.pending_message_jump = None;
         self.timeline_session = None;
@@ -835,11 +1051,16 @@ impl ConduitApp {
         cx: &mut Context<Self>,
     ) {
         let session = session.filter(|id| self.session(*id).is_none_or(|s| !s.is_subagent));
+        if activate_chat
+            && let Some(id) = session
+            && self.document_pane(DocumentTab::Chat(id)) == super::files::Pane::Reference
+        {
+            self.select_reference_chat(id, window, cx);
+            return;
+        }
+        let session = session
+            .filter(|id| self.document_pane(DocumentTab::Chat(*id)) == super::files::Pane::Main);
         if session.is_some_and(|id| self.pending_new_session(id)) {
-            self.message = Some(
-                conduit::i18n::text_static("sessions.saving_new_session_please_wait_your_draft")
-                    .into(),
-            );
             cx.notify();
             return;
         }
@@ -886,7 +1107,6 @@ impl ConduitApp {
         }
         self.message_focus = None;
         self.pending_message_jump = None;
-        self.message = None;
         let draft = match session {
             Some(id) => self.drafts.get(&id),
             None => self
@@ -967,12 +1187,15 @@ impl ConduitApp {
                                 this.start_history_import(index, window, cx);
                             }
                             _ => {
-                                this.message = Some(
+                                this.notify_feedback(
+                                    NoticeSource::App,
+                                    NoticeLevel::Warning,
                                     conduit::i18n::text_static(
                                         "sessions.directory_does_not_exist_or_is_inaccessible",
-                                    )
-                                    .into(),
-                                )
+                                    ),
+                                    None,
+                                    cx,
+                                );
                             }
                         }
                         cx.notify();
@@ -982,10 +1205,16 @@ impl ConduitApp {
             Ok(Ok(None)) => {}
             other => {
                 let _ = this.update(cx, |this, cx| {
-                    this.message = Some(conduit::i18n::format(
-                        "sessions.failed_to_open_directory",
-                        &[("other", format!("{:?}", other))],
-                    ));
+                    this.notify_feedback(
+                        NoticeSource::App,
+                        NoticeLevel::Error,
+                        conduit::i18n::format(
+                            "sessions.failed_to_open_directory",
+                            &[("other", format!("{:?}", other))],
+                        ),
+                        None,
+                        cx,
+                    );
                     cx.notify();
                 });
             }
@@ -1053,15 +1282,58 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Parallel to `paths`: files each workspace already imported, so unchanged ones are skipped.
+        let scan_stamps: Vec<_> = paths
+            .iter()
+            .map(|path| {
+                self.store
+                    .history_file_stamps
+                    .get(path)
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .collect();
         cx.spawn_in(window, async move |this, cx| {
+            let started = std::time::Instant::now();
+            let init_started = std::time::Instant::now();
             let scan_paths = paths.clone();
             let ticket = cancel.clone();
             let mut scanner = cx
                 .background_executor()
-                .spawn(async move { crate::history::Scanner::new(scan_paths, &ticket) })
+                .spawn(async move {
+                    crate::history::Scanner::new(scan_paths, scan_stamps, &ticket)
+                })
                 .await;
+            let init_time = init_started.elapsed();
+            let mut scan_time = std::time::Duration::ZERO;
+            let mut prepare_time = std::time::Duration::ZERO;
+            let mut merge_time = std::time::Duration::ZERO;
+            let mut batches = 0usize;
+            let (mut completed, mut total): (usize, usize);
+            let mut cache_hits = 0usize;
+            let mut claude_cache_hits = 0usize;
+            let mut codex_cache_hits = 0usize;
+            let mut bytes_read = 0u64;
+            let mut claude_parse_bytes = 0u64;
+            let mut codex_parse_bytes = 0u64;
+            let mut codex_probe_bytes = 0u64;
+            let mut opencode_bytes = 0u64;
+            let mut verified_bytes = 0u64;
+            let mut claude_verified_bytes = 0u64;
+            let mut codex_verified_bytes = 0u64;
+            let mut emitted_sessions = 0usize;
+            let mut warning_count = 0usize;
+            let mut skipped: usize;
+            // Parallel to `paths`: stamps of files read this run. They are written back
+            // only for workspaces whose every batch merged without losing a record.
+            let mut file_stamps: Vec<
+                std::collections::HashMap<PathBuf, crate::domain::HistoryFileStamp>,
+            > = vec![Default::default(); paths.len()];
+            let mut unsettled = vec![false; paths.len()];
+            let mut finished = false;
             loop {
                 let ticket = cancel.clone();
+                let batch_started = std::time::Instant::now();
                 let (next_scanner, batch) = cx
                     .background_executor()
                     .spawn(async move {
@@ -1069,7 +1341,24 @@ impl ConduitApp {
                         (scanner, batch)
                     })
                     .await;
+                scan_time += batch_started.elapsed();
                 scanner = next_scanner;
+                batches += 1;
+                completed = batch.completed;
+                total = batch.total;
+                cache_hits += batch.cache_hits;
+                claude_cache_hits += batch.claude_cache_hits;
+                codex_cache_hits += batch.codex_cache_hits;
+                bytes_read = bytes_read.saturating_add(batch.bytes_read);
+                claude_parse_bytes = claude_parse_bytes.saturating_add(batch.claude_parse_bytes);
+                codex_parse_bytes = codex_parse_bytes.saturating_add(batch.codex_parse_bytes);
+                codex_probe_bytes = codex_probe_bytes.saturating_add(batch.codex_probe_bytes);
+                opencode_bytes = opencode_bytes.saturating_add(batch.opencode_bytes);
+                verified_bytes = verified_bytes.saturating_add(batch.verified_bytes);
+                claude_verified_bytes = claude_verified_bytes.saturating_add(batch.claude_verified_bytes);
+                codex_verified_bytes = codex_verified_bytes.saturating_add(batch.codex_verified_bytes);
+                emitted_sessions += batch.sessions.iter().map(Vec::len).sum::<usize>();
+                skipped = batch.skipped;
                 let done = batch.done;
                 let Ok(workspaces) = this.update(cx, |this, _| {
                     paths
@@ -1110,11 +1399,16 @@ impl ConduitApp {
                     break;
                 };
                 let incoming = batch.sessions;
+                for (stamps, read) in file_stamps.iter_mut().zip(batch.file_stamps) {
+                    stamps.extend(read);
+                }
                 let ticket = cancel.clone();
-                let (prepared, warnings) = cx
+                let prepare_started = std::time::Instant::now();
+                let (prepared, warnings, failed) = cx
                     .background_executor()
                     .spawn(async move {
                         let mut prepared = Vec::new();
+                        let mut failed = Vec::new();
                         let mut warnings = batch.warnings;
                         let directory = crate::transcript::directory(&Store::path());
                         for (workspace, incoming) in workspaces.into_iter().zip(incoming) {
@@ -1124,29 +1418,48 @@ impl ConduitApp {
                             let (records, errors) =
                                 crate::history::prepare_imported(&workspace, incoming, &directory);
                             prepared.push(records);
+                            failed.push(!errors.is_empty());
                             warnings.extend(errors);
                         }
-                        (prepared, warnings)
+                        (prepared, warnings, failed)
                     })
                     .await;
+                prepare_time += prepare_started.elapsed();
+                warning_count += warnings.len();
+                // A workspace whose records failed to prepare must re-read those files next run.
+                for (unsettled, failed) in unsettled.iter_mut().zip(failed) {
+                    *unsettled |= failed;
+                }
+                let merge_started = std::time::Instant::now();
                 let updated = this.update_in(cx, |this, window, cx| {
                     if cancel.load(std::sync::atomic::Ordering::Acquire) {
                         return false;
                     }
                     if !warnings.is_empty() {
-                        this.message = Some(warnings.join("\n"));
+                        this.notify_feedback(
+                            NoticeSource::Session,
+                            NoticeLevel::Warning,
+                            warnings.join("\n"),
+                            paths.first().filter(|_| paths.len() == 1)
+                                .map(|path| NoticeTarget::Workspace(path.clone())),
+                            cx,
+                        );
                     }
-                    for (path, sessions) in paths.iter().zip(prepared) {
+                    for ((path, sessions), unsettled) in
+                        paths.iter().zip(prepared).zip(unsettled.iter_mut())
+                    {
                         if !this
                             .session_control
                             .scan_cancels
                             .get(path)
                             .is_some_and(|ticket| std::sync::Arc::ptr_eq(ticket, &cancel))
                         {
+                            // A newer scan owns this workspace; it records its own stamps.
+                            *unsettled = true;
                             continue;
                         }
                         if !sessions.is_empty() || done {
-                            this.finish_prepared_history_import(
+                            *unsettled |= this.finish_prepared_history_import(
                                 path,
                                 sessions,
                                 persist && done,
@@ -1157,12 +1470,34 @@ impl ConduitApp {
                         }
                         if done {
                             this.session_control.scan_cancels.remove(path);
-                            this.session_control.scan_progress.remove(path);
                         } else {
                             this.history_loading.insert(path.clone());
-                            this.session_control
-                                .scan_progress
-                                .insert(path.clone(), (batch.completed, batch.total));
+                        }
+                    }
+                    if done {
+                        for ((path, stamps), unsettled) in paths
+                            .iter()
+                            .zip(std::mem::take(&mut file_stamps))
+                            .zip(&unsettled)
+                        {
+                            if *unsettled
+                                || stamps.is_empty()
+                                || !this
+                                    .store
+                                    .workspaces
+                                    .iter()
+                                    .any(|workspace| &workspace.path == path)
+                            {
+                                continue;
+                            }
+                            // Merge, not replace: files skipped this run keep the stamp
+                            // they were imported at.
+                            this.store
+                                .history_file_stamps
+                                .entry(path.clone())
+                                .or_default()
+                                .extend(stamps);
+                            this.dirty = true;
                         }
                     }
                     if done && persist && this.dirty {
@@ -1174,14 +1509,54 @@ impl ConduitApp {
                     cx.notify();
                     true
                 });
-                if done || !matches!(updated, Ok(true)) {
+                merge_time += merge_started.elapsed();
+                if done {
+                    finished = true;
+                    break;
+                }
+                if !matches!(updated, Ok(true)) {
                     break;
                 }
             }
+            let status = if cancel.load(std::sync::atomic::Ordering::Acquire) {
+                "cancelled"
+            } else if finished {
+                "complete"
+            } else {
+                "aborted"
+            };
+            let summary = format!(
+                "history_import mode={} status={} workspaces={} batches={} files={}/{} skipped={} cache_hits={} claude_cache_hits={} codex_cache_hits={} bytes_read={} claude_parse_bytes={} codex_parse_bytes={} codex_probe_bytes={} opencode_bytes={} verified_bytes={} claude_verified_bytes={} codex_verified_bytes={} emitted_sessions={} warnings={} init_ms={} scan_ms={} prepare_ms={} merge_ms={} total_ms={}",
+                if persist { "manual" } else { "startup" },
+                status,
+                paths.len(),
+                batches,
+                completed,
+                total,
+                skipped,
+                cache_hits,
+                claude_cache_hits,
+                codex_cache_hits,
+                bytes_read,
+                claude_parse_bytes,
+                codex_parse_bytes,
+                codex_probe_bytes,
+                opencode_bytes,
+                verified_bytes,
+                claude_verified_bytes,
+                codex_verified_bytes,
+                emitted_sessions,
+                warning_count,
+                init_time.as_millis(),
+                scan_time.as_millis(),
+                prepare_time.as_millis(),
+                merge_time.as_millis(),
+                started.elapsed().as_millis(),
+            );
+            let _ = crate::history::record_scan_summary(&summary);
         })
         .detach();
     }
-
     #[cfg(all(test, feature = "ui-tests"))]
     pub(super) fn finish_history_import(
         &mut self,
@@ -1206,11 +1581,20 @@ impl ConduitApp {
             &crate::transcript::directory(&Store::path()),
         );
         if !warnings.is_empty() {
-            self.message = Some(warnings.join("\n"));
+            self.notify_feedback(
+                NoticeSource::Session,
+                NoticeLevel::Warning,
+                warnings.join("\n"),
+                Some(NoticeTarget::Workspace(path.to_path_buf())),
+                cx,
+            );
         }
-        self.finish_prepared_history_import(path, records, persist, complete, window, cx);
+        let _ = self.finish_prepared_history_import(path, records, persist, complete, window, cx);
     }
 
+    /// Returns true when some prepared record was not applied (workspace gone, a run
+    /// or edit raced the scan, or the session was deleted/recreated), so the files
+    /// behind this workspace's import must not be stamped as imported.
     fn finish_prepared_history_import(
         &mut self,
         path: &Path,
@@ -1219,7 +1603,7 @@ impl ConduitApp {
         complete: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         if complete {
             self.history_loading.remove(path);
         }
@@ -1230,7 +1614,7 @@ impl ConduitApp {
             .iter()
             .position(|workspace| workspace.path == path)
         else {
-            return;
+            return true;
         };
         let mut reclassified = Vec::new();
         let mut updates = Vec::new();
@@ -1260,6 +1644,7 @@ impl ConduitApp {
         // A scan can finish after a turn has started. Its older transcript must
         // never replace messages or invalidate the active run's message index.
         let versions = self.session_control.imports.get(path);
+        let considered = updates.len();
         let imported = updates
             .into_iter()
             .filter(|imported| {
@@ -1273,6 +1658,7 @@ impl ConduitApp {
                 })
             })
             .collect::<Vec<_>>();
+        let mut dropped = imported.len() < considered;
         if complete {
             self.session_control.imports.remove(path);
         }
@@ -1298,6 +1684,7 @@ impl ConduitApp {
             {
                 // A deleted/recreated native conversation is a different identity.
                 if record.id != existing.id {
+                    dropped = true;
                     continue;
                 }
                 record.pinned = existing.pinned;
@@ -1306,6 +1693,9 @@ impl ConduitApp {
                 record.id = self.next_id;
                 self.next_id += 1;
                 self.store.workspaces[index].sessions.push(record);
+            } else {
+                // Deleted locally while the scan ran.
+                dropped = true;
             }
         }
         self.store.workspaces[index]
@@ -1345,6 +1735,7 @@ impl ConduitApp {
             self.persist();
         }
         cx.notify();
+        dropped
     }
 
     pub(super) fn new_session(
@@ -1460,6 +1851,7 @@ impl ConduitApp {
             .get(&provider)
             .and_then(|catalog| catalog.current.clone());
         let mut session = SessionRecord {
+            task_list: None,
             subagents: Default::default(),
             is_subagent: false,
             branching: Default::default(),
@@ -1690,5 +2082,44 @@ impl ConduitApp {
                     )),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod empty_session_cleanup_tests {
+    use super::{EMPTY_SESSION_RETENTION_SECS, eligible_for_empty_session_cleanup};
+    use crate::domain::SessionRecord;
+
+    fn empty_session(created_at: u64) -> SessionRecord {
+        serde_json::from_value(serde_json::json!({
+            "id": 1,
+            "provider": "Claude",
+            "created_at": created_at,
+            "title": "New session"
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn cleanup_requires_a_full_day_and_preserves_native_sessions() {
+        let _locale = crate::test_support::chinese();
+        let created_at = 10;
+        let session = empty_session(created_at);
+        assert!(!eligible_for_empty_session_cleanup(
+            &session,
+            created_at + EMPTY_SESSION_RETENTION_SECS - 1
+        ));
+        assert!(eligible_for_empty_session_cleanup(
+            &session,
+            created_at + EMPTY_SESSION_RETENTION_SECS
+        ));
+        assert!(!eligible_for_empty_session_cleanup(&session, 0));
+
+        let mut native = session;
+        native.native_id = Some("native-thread".into());
+        assert!(!eligible_for_empty_session_cleanup(
+            &native,
+            created_at + EMPTY_SESSION_RETENTION_SECS
+        ));
     }
 }

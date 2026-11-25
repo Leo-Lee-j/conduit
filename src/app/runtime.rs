@@ -105,17 +105,17 @@ impl ConduitApp {
 
     /// Resolve the destination before checking concurrency or changing drafts.
     pub(super) fn send_target(&self, append_user: bool) -> Option<u64> {
-        self.selected_session.filter(|id| {
+        self.composer_session().filter(|id| {
             !append_user
                 || self
                     .session(*id)
-                    .is_some_and(|session| session.provider == self.new_session_provider)
+                    .is_some_and(|session| session.provider == self.composer_provider())
         })
     }
 
     /// Shared by keyboard sends and the composer button.
     pub(super) fn send_blocked(&self, append_user: bool) -> Option<&'static str> {
-        if self.viewing_subagent() {
+        if self.composer_read_only() {
             return Some(conduit::i18n::text_static("subagents.read_only"));
         }
         if self
@@ -152,9 +152,11 @@ impl ConduitApp {
             ));
         }
         if self.git.operation.as_ref().is_some_and(|operation| {
-            self.selected_workspace_path().is_some_and(|path| {
-                git::repository_scope(&operation.worktree) == git::repository_scope(&path)
-            })
+            self.composer_target()
+                .map(|target| target.workspace)
+                .is_some_and(|path| {
+                    git::repository_scope(&operation.worktree) == git::repository_scope(&path)
+                })
         }) {
             return Some(conduit::i18n::text_static(
                 "runtime.a_git_operation_is_running_in_this",
@@ -169,11 +171,11 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.send_prompt(window, cx);
+        self.send_prompt_for(self.composer_binding(), window, cx);
     }
 
     pub(super) fn send_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.viewing_subagent() {
+        if self.composer_read_only() {
             return;
         }
         if self.composer_is_composing(window, cx) {
@@ -189,19 +191,18 @@ impl ConduitApp {
     }
 
     pub(super) fn send_ordinary_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.viewing_subagent() {
+        if self.composer_read_only() {
             return;
         }
         if self
             .send_target(true)
             .is_some_and(|id| self.session_fork_pending(id))
         {
-            self.message = Some(conduit::i18n::text("branching.pending"));
-            cx.notify();
+            self.notify_composer_warning(conduit::i18n::text("branching.pending"), cx);
             return;
         }
         let target = self.composer_target();
-        let text = self.input.read(cx).value().to_string();
+        let text = self.composer_input().read(cx).value().to_string();
         let references = self
             .current_files()
             .map(|files| files.references.as_slice())
@@ -226,8 +227,7 @@ impl ConduitApp {
         }
         let prompt = file_ref::compose_prompt(&text, references);
         if let Some(reason) = self.composer_send_blocked() {
-            self.message = Some(reason.into());
-            cx.notify();
+            self.notify_composer_warning(reason, cx);
             return;
         }
         let accepted = if let Some(id) = self.send_target(true)
@@ -237,11 +237,7 @@ impl ConduitApp {
         } else {
             self.send_text(prompt, true, window, cx)
         };
-        if !accepted && let Some(target) = target {
-            // A failed send may have attempted to create or retarget a session.
-            // Keep the draft and its files visible in their original conversation.
-            self.selected_session = target.session;
-        }
+        let _ = accepted; // The durable barrier owns draft clearing on success.
     }
 
     /// Starts one engine turn. `append_user` is false when regenerating: the
@@ -267,26 +263,25 @@ impl ConduitApp {
         if self.closing || !self.writable {
             return false;
         }
-        let Some(index) = self.selected_workspace else {
-            self.message = Some(
-                conduit::i18n::text_static("composer.select_a_workspace_in_the_upper_left").into(),
+        let Some(index) = self.composer_workspace() else {
+            self.notify_composer_warning(
+                conduit::i18n::text_static("composer.select_a_workspace_in_the_upper_left"),
+                cx,
             );
-            cx.notify();
             return false;
         };
         if let Some(reason) = self.send_blocked(append_user) {
-            self.message = Some(reason.into());
-            cx.notify();
+            self.notify_composer_warning(reason, cx);
             return false;
         }
         if prompt.trim().is_empty() {
             return false;
         }
         if prompt.len() > 256 * 1024 {
-            self.message = Some(
-                conduit::i18n::text_static("runtime.each_message_may_be_no_larger_than").into(),
+            self.notify_composer_warning(
+                conduit::i18n::text_static("runtime.each_message_may_be_no_larger_than"),
+                cx,
             );
-            cx.notify();
             return false;
         }
         // Resolve the target engine and validate the environment before creating
@@ -294,7 +289,7 @@ impl ConduitApp {
         // A pending engine switch (composer engine differs from the selected
         // session's) retargets the message to a fresh session instead of
         // jumping to history. Regeneration always stays on its own session.
-        if !append_user && self.selected_session.is_none() {
+        if !append_user && self.composer_session().is_none() {
             return false;
         }
         let target = self.send_target(append_user);
@@ -307,7 +302,7 @@ impl ConduitApp {
         match self.start_turn(
             index,
             target,
-            self.new_session_provider,
+            self.composer_provider(),
             input,
             append_user,
             cx,
@@ -326,10 +321,13 @@ impl ConduitApp {
                 {
                     pending.composer = composer;
                 }
-                self.input.read(cx).focus_handle(cx).focus(window, cx);
-                // Save progress belongs to the run activity, not the error banner.
-                self.message = None;
-                self.scroll_to_end();
+                self.composer_input()
+                    .read(cx)
+                    .focus_handle(cx)
+                    .focus(window, cx);
+                if self.composer_is_main() {
+                    self.scroll_to_end();
+                }
                 cx.notify();
                 true
             }
@@ -481,9 +479,16 @@ impl ConduitApp {
             .into());
         }
         let worktree = git::worktree_root(&cwd);
-        let prepared = target
-            .is_none()
-            .then(|| self.prepare_workspace_session(index, provider, true));
+        let prepared = target.is_none().then(|| {
+            let mut session =
+                self.prepare_workspace_session(index, provider, self.composer_is_main());
+            if !self.composer_is_main() {
+                self.composer_selection_for(&self.composer_binding())
+                    .apply(&mut session);
+                session.permission = self.composer_permission();
+            }
+            session
+        });
         let selection = prepared.as_ref().map(ComposerSelection::from_session);
         let mut route = if let Some(session) = &prepared {
             let mut route = self
@@ -525,10 +530,18 @@ impl ConduitApp {
             .unwrap_or_default();
         let effort = self
             .session(id)
-            .map(|s| s.reasoning_effort)
+            .map(|s| {
+                if matches!(provider, Provider::Claude | Provider::Codex) {
+                    self.reasoning_capabilities(&ComposerSelection::from_session(s))
+                        .constrain(s.reasoning_effort)
+                } else {
+                    s.reasoning_effort
+                }
+            })
             .unwrap_or_default();
         let model = model.or_else(|| route.default_model.clone());
         let session = self.session_mut(id).unwrap();
+        session.reasoning_effort = effort;
         let prefix = next_turn_prefix(session);
         if append_user {
             if !session.messages.iter().any(|m| m.kind == ItemKind::User) {
@@ -610,6 +623,13 @@ impl ConduitApp {
             native_id,
             model: model.clone(),
             permission,
+            tool_policy: if self.store.scheduler.runs.iter().any(|run| {
+                run.session == Some(id) && run.status == crate::automation::Status::Running
+            }) {
+                crate::cli_adapter::ToolPolicy::Automation
+            } else {
+                crate::cli_adapter::ToolPolicy::Chat
+            },
             effort,
             route: std::mem::take(&mut route),
         });
@@ -670,10 +690,10 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.viewing_subagent() || self.closing || !self.writable {
+        if self.composer_read_only() || self.closing || !self.writable {
             return;
         }
-        let Some(id) = self.selected_session else {
+        let Some(id) = self.composer_session() else {
             return;
         };
         let Some(session) = self.session(id) else {
@@ -710,13 +730,13 @@ impl ConduitApp {
     /// Re-runs the latest exchange: keeps its user message, drops everything
     /// after it, and starts a fresh engine turn with the same prompt.
     pub(super) fn regenerate(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if self.viewing_subagent() {
+        if self.composer_read_only() {
             return;
         }
         if self.closing || !self.writable {
             return;
         }
-        let Some(id) = self.selected_session else {
+        let Some(id) = self.composer_session() else {
             return;
         };
         let Some(session) = self.session(id) else {
@@ -746,11 +766,10 @@ impl ConduitApp {
             return;
         }
         if session.native_id.is_none() {
-            self.message = Some(
-                conduit::i18n::text_static("runtime.this_session_has_no_reliable_cli_session")
-                    .into(),
+            self.notify_composer_warning(
+                conduit::i18n::text_static("runtime.this_session_has_no_reliable_cli_session"),
+                cx,
             );
-            cx.notify();
             return;
         }
         let prompt = session.messages[user_index].text.clone();
@@ -775,8 +794,17 @@ impl ConduitApp {
     }
 
     pub(super) fn poll(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.prune_composer_editors();
         self.poll_terminals(window, cx);
         self.poll_persistence(cx);
+        self.auto_archive_sessions(false, cx);
+        if self.store.ui.auto_cleanup_empty_sessions
+            && self
+                .last_empty_session_cleanup
+                .is_none_or(|last| last.elapsed() >= Duration::from_secs(60 * 60))
+        {
+            self.cleanup_stale_empty_sessions(cx);
+        }
         self.poll_pending_sends(window, cx);
         if self.closing
             && let Some(error) = self
@@ -798,8 +826,7 @@ impl ConduitApp {
                 })
         {
             self.closing = false;
-            self.message = Some(error);
-            cx.notify();
+            self.notify_feedback(NoticeSource::App, NoticeLevel::Error, error, None, cx);
         }
         if !self.search_query.trim().is_empty()
             && !self.search_ui.running
@@ -832,12 +859,6 @@ impl ConduitApp {
             if self.startup.as_ref().is_some_and(|s| !s.imports_done) {
                 self.session_control.cancel_imports();
                 self.history_loading.clear();
-                self.message = Some(
-                    conduit::i18n::text_static(
-                        "runtime.history_reading_timed_out_existing_conversations_were",
-                    )
-                    .into(),
-                );
                 self.notify_user(
                     Notice::new(
                         NoticeSource::App,
@@ -910,17 +931,22 @@ impl ConduitApp {
         {
             match self.save_exit_drafts(cx) {
                 Ok(()) => {
-                    self.cleanup_attachments();
+                    self.cleanup_attachments(cx);
                     window.remove_window();
                     cx.quit();
                 }
                 Err(error) => {
                     self.closing = false;
-                    self.message = Some(conduit::i18n::format(
-                        "runtime.draft_save_failed_exit_cancelled_keep_your",
-                        &[("error", format!("{:#}", error))],
-                    ));
-                    cx.notify();
+                    self.notify_feedback(
+                        NoticeSource::Persistence,
+                        NoticeLevel::Error,
+                        conduit::i18n::format(
+                            "runtime.draft_save_failed_exit_cancelled_keep_your",
+                            &[("error", format!("{:#}", error))],
+                        ),
+                        None,
+                        cx,
+                    );
                 }
             }
         }

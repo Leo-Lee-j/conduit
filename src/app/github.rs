@@ -1,6 +1,8 @@
 //! A workspace-bound PR/CI snapshot. Remote writes require explicit user actions.
 use super::*;
+use gpui_kit::component::{skeleton::Skeleton, tag::Tag, tooltip::Tooltip};
 mod checks;
+mod details;
 mod document;
 mod presentation;
 mod sidebar;
@@ -16,7 +18,31 @@ fn label(key: &'static str) -> &'static str {
     conduit::i18n::text_static(key)
 }
 
+fn content_skeleton(id: &'static str) -> AnyElement {
+    v_flex()
+        .id(id)
+        .debug_selector(move || id.into())
+        .w_full()
+        .gap_4()
+        .p_3()
+        .children((0..2).map(|_| {
+            v_flex()
+                .w_full()
+                .gap_2()
+                .child(Skeleton::new().w(px(100.)).h(px(12.)).rounded_sm())
+                .children([0.94, 0.82, 0.62].map(|width| {
+                    Skeleton::new()
+                        .w(relative(width))
+                        .h(px(12.))
+                        .rounded_sm()
+                        .secondary()
+                }))
+        }))
+        .into_any_element()
+}
+
 struct GithubCommentPanel {
+    inline: bool,
     host: WeakEntity<ConduitApp>,
     parent: WeakEntity<PullRequestPanel>,
     workspace: PathBuf,
@@ -146,6 +172,7 @@ pub(super) struct PullRequestPanel {
     pub(super) workspace: PathBuf,
     pub(super) focus: FocusHandle,
     document: bool,
+    details: details::DetailsUi,
     scrolls: [ScrollHandle; 3],
     snapshot: Option<crate::github::PullRequest>,
     requested: Option<(crate::github::forge::Forge, u64, String)>,
@@ -184,6 +211,7 @@ impl PullRequestPanel {
         provider: Option<Option<crate::github::forge::Forge>>,
         cx: &mut Context<Self>,
     ) {
+        self.details.cancel_load();
         if provider.is_some()
             && self.host.upgrade().is_none_or(|host| {
                 let app = host.read(cx);
@@ -203,6 +231,7 @@ impl PullRequestPanel {
         if provider.is_some() {
             self.snapshot = None;
             self.requested = None;
+            self.details.reset_request();
         }
         self.loading = true;
         self.error = None;
@@ -247,6 +276,7 @@ impl PullRequestPanel {
                             }
                         }
                         this.snapshot = Some(snapshot);
+                        this.load_details(cx);
                     }
                     Err((error, required)) => {
                         this.error = Some(error);
@@ -287,7 +317,7 @@ impl PullRequestPanel {
         }
     }
 
-    fn open_comment(&self, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open_write(
             crate::github::write::Action::Comment(String::new()),
             window,
@@ -296,7 +326,7 @@ impl PullRequestPanel {
     }
 
     fn open_write(
-        &self,
+        &mut self,
         action: crate::github::write::Action,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -323,6 +353,13 @@ impl PullRequestPanel {
         if expected.state != "OPEN" {
             return;
         }
+        let inline = self.document && matches!(action, crate::github::write::Action::Comment(_));
+        if inline && let Some(form) = self.details.composers.get(&expected.url) {
+            if let Some(editor) = &form.read(cx).editor {
+                editor.read(cx).focus_handle(cx).focus(window, cx);
+            }
+            return;
+        }
         let with_editor = !matches!(action, crate::github::write::Action::Resolve(_));
         let title = label(match &action {
             crate::github::write::Action::Comment(_) => "github.comment_title",
@@ -336,6 +373,7 @@ impl PullRequestPanel {
             })
         });
         let panel = cx.new(|cx| GithubCommentPanel {
+            inline,
             host: host.downgrade(),
             parent,
             workspace: self.workspace.clone(),
@@ -354,6 +392,15 @@ impl PullRequestPanel {
             _task: Task::ready(()),
             _subscription: cx.observe(&host, |_, _, cx| cx.notify()),
         });
+        if inline {
+            let url = panel.read(cx).expected.url.clone();
+            self.details.composers.insert(url, panel.clone());
+            if let Some(editor) = &panel.read(cx).editor {
+                editor.read(cx).focus_handle(cx).focus(window, cx);
+            }
+            cx.notify();
+            return;
+        }
         window.open_dialog(cx, move |dialog, window, cx| {
             let panel = panel.clone();
             let dismiss = panel.clone();
@@ -380,6 +427,7 @@ impl Drop for PullRequestPanel {
 
 impl Render for PullRequestPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut document_tabs = None;
         let writable = self.host.upgrade().is_some_and(|host| {
             let app = host.read(cx);
             app.writable
@@ -393,16 +441,33 @@ impl Render for PullRequestPanel {
         let mut header = v_flex().gap_2().flex_shrink_0().child(
             h_flex()
                 .gap_2()
+                .when(self.document, |row| row.flex_wrap())
                 .items_center()
                 .justify_between()
                 .child(
                     div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(ui_text_size(11.))
-                        .text_color(rgb(palette().muted))
-                        .child(self.workspace.display().to_string()),
+                        .id("github-workspace-tag")
+                        .debug_selector(|| "github-workspace-tag".into())
+                        .tooltip({
+                            let path = display_path(&self.workspace);
+                            move |window, cx| Tooltip::new(path.clone()).build(window, cx)
+                        })
+                        .child(
+                            Tag::secondary()
+                                .small()
+                                .text_size(ui_text_size(11.))
+                                .max_w(px(180.))
+                                .overflow_hidden()
+                                .child(
+                                    div().truncate().child(
+                                        self.workspace
+                                            .file_name()
+                                            .unwrap_or(self.workspace.as_os_str())
+                                            .to_string_lossy()
+                                            .into_owned(),
+                                    ),
+                                ),
+                        ),
                 )
                 .child({
                     let panel = cx.weak_entity();
@@ -448,12 +513,8 @@ impl Render for PullRequestPanel {
                     Button::new("github-refresh")
                         .small()
                         .ghost()
-                        .label(label(if self.loading {
-                            "github.loading"
-                        } else {
-                            "github.refresh"
-                        }))
-                        .disabled(self.loading)
+                        .label(label("github.refresh"))
+                        .disabled(self.loading || self.details.loading)
                         .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
                 ),
         );
@@ -483,8 +544,12 @@ impl Render for PullRequestPanel {
         if let Some(form) = self.sign_in.view(window, cx, Self::reload) {
             header = header.child(form);
         }
-        if let Some(pr) = &self.snapshot {
-            header = header.child(self.overview(pr));
+        if self.loading {
+            body = body.child(content_skeleton("github-content-skeleton"));
+        } else if let Some(pr) = &self.snapshot {
+            if !self.document {
+                header = header.child(self.overview(pr));
+            }
             let mut tabs = h_flex()
                 .gap_1()
                 .flex_wrap()
@@ -507,7 +572,15 @@ impl Render for PullRequestPanel {
                 let button = Button::new(("github-tab", index))
                     .small()
                     .selected(self.tab == index)
-                    .label(format!("{} · {}", label(key), count))
+                    .label(format!(
+                        "{} · {}",
+                        label(if self.document && index == 2 {
+                            "github.detail_activity"
+                        } else {
+                            key
+                        }),
+                        count
+                    ))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.tab = index;
                         cx.notify();
@@ -518,7 +591,11 @@ impl Render for PullRequestPanel {
                     button.ghost()
                 });
             }
-            header = header.child(tabs);
+            if self.document {
+                document_tabs = Some(tabs.into_any_element());
+            } else {
+                header = header.child(tabs);
+            }
             if pr.head != pr.local_head {
                 body = body.child(
                     div()
@@ -618,16 +695,25 @@ impl Render for PullRequestPanel {
                 }
             }
             if self.tab == 2 {
-                body = body.child(
-                    Button::new("github-publish-comment")
-                        .small()
-                        .primary()
-                        .label(label("github.publish_comment"))
-                        .disabled(
-                            !writable || self.loading || self.error.is_some() || pr.state != "OPEN",
-                        )
-                        .on_click(cx.listener(|this, _, window, cx| this.open_comment(window, cx))),
-                );
+                if self.document {
+                    body = body.child(self.detail_description());
+                } else {
+                    body = body.child(
+                        Button::new("github-publish-comment")
+                            .small()
+                            .primary()
+                            .label(label("github.publish_comment"))
+                            .disabled(
+                                !writable
+                                    || self.loading
+                                    || self.error.is_some()
+                                    || pr.state != "OPEN",
+                            )
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.open_comment(window, cx)),
+                            ),
+                    );
+                }
                 if pr.comments.is_empty() {
                     body = body.child(
                         div()
@@ -636,7 +722,8 @@ impl Render for PullRequestPanel {
                             .child(label("github.no_comments")),
                     );
                 }
-                for (index, comment) in pr.comments.iter().enumerate().take(self.shown) {
+                for index in (0..pr.comments.len().min(self.shown)).rev() {
+                    let comment = &pr.comments[index];
                     let text = conduit::i18n::format(
                         "github.comment_feedback",
                         &[
@@ -657,20 +744,31 @@ impl Render for PullRequestPanel {
                     let mut row = v_flex()
                         .gap_1()
                         .p_3()
-                        .border_1()
-                        .border_color(rgb(palette().border))
-                        .rounded_md()
+                        .when(!self.document, |row| {
+                            row.border_1()
+                                .border_color(rgb(palette().border))
+                                .rounded_md()
+                        })
                         .child(
                             div()
                                 .text_size(ui_text_size(11.))
                                 .text_color(rgb(palette().muted))
                                 .child(comment.author.clone()),
                         )
-                        .child(
+                        .child(if self.document {
+                            TextView::markdown(
+                                SharedString::from(format!("github-comment-body-{index}")),
+                                comment.body.clone(),
+                            )
+                            .selectable(true)
+                            .text_size(ui_text_size(12.))
+                            .into_any_element()
+                        } else {
                             div()
                                 .text_size(ui_text_size(12.))
-                                .child(comment.body.clone()),
-                        )
+                                .child(comment.body.clone())
+                                .into_any_element()
+                        })
                         .child(
                             Button::new(("github-comment-attach", index))
                                 .small()
@@ -693,6 +791,9 @@ impl Render for PullRequestPanel {
                     }
                     body = body.child(row);
                 }
+                if self.document {
+                    body = body.child(self.review_threads(writable && self.error.is_none(), cx));
+                }
             }
             if (self.tab == 0 && pr.checks.len() > self.shown)
                 || (self.tab == 2 && pr.comments.len() > self.shown)
@@ -708,30 +809,32 @@ impl Render for PullRequestPanel {
                 );
             }
         }
-        if self.snapshot.is_none() {
-            body =
-                body.child(
-                    v_flex()
-                        .p_6()
-                        .gap_3()
-                        .child(
-                            div()
-                                .text_size(ui_text_size(18.))
-                                .font_semibold()
-                                .child(label(if self.loading {
-                                    "github.loading"
-                                } else {
-                                    "github.unavailable_title"
-                                })),
-                        )
-                        .child(div().text_color(rgb(palette().muted)).child(label(
-                            if self.loading {
-                                "github.loading_hint"
-                            } else {
-                                "github.unavailable_hint"
-                            },
-                        ))),
-                );
+        if self.snapshot.is_none() && !self.loading {
+            body = body.child(
+                v_flex()
+                    .p_6()
+                    .gap_3()
+                    .child(
+                        div()
+                            .text_size(ui_text_size(18.))
+                            .font_semibold()
+                            .child(label("github.unavailable_title")),
+                    )
+                    .child(
+                        div()
+                            .text_color(rgb(palette().muted))
+                            .child(label("github.unavailable_hint")),
+                    ),
+            );
+        }
+        if self.document {
+            return self.document_layout(
+                header.into_any_element(),
+                body.into_any_element(),
+                document_tabs,
+                window,
+                cx,
+            );
         }
         let host = self.host.clone();
         let workspace = self.workspace.clone();

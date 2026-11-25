@@ -264,6 +264,116 @@ mod tests {
     use gpui_kit::{AppContext as _, TestAppContext};
 
     #[gpui_kit::test]
+    fn automation_launch_preserves_save_barrier_and_does_not_restrict_later_chat(
+        cx: &mut TestAppContext,
+    ) {
+        use std::{
+            sync::{
+                atomic::{AtomicBool, Ordering},
+                mpsc,
+            },
+            time::{Duration, Instant},
+        };
+        let _locale = crate::test_support::chinese();
+        let (app, cx, root) = crate::app::queue::tests::fixture(cx, "automation-policy-launch");
+        let launcher = root.join("capture.cmd");
+        let marker = root.join("automation-args.txt");
+        std::fs::write(
+            &launcher,
+            "@echo off\r\n> \"%~dp0automation-args.txt\" echo %*\r\nexit /b 23\r\n",
+        )
+        .unwrap();
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.persistence.flush();
+                let (release, wait) = mpsc::channel();
+                let (entered, snapshot) = mpsc::channel();
+                let first = AtomicBool::new(true);
+                app.persistence = crate::persistence::Persistence::with_writer(move |store| {
+                    if first.swap(false, Ordering::AcqRel) {
+                        entered.send(store).unwrap();
+                        wait.recv_timeout(Duration::from_secs(5)).unwrap()
+                    } else {
+                        Ok(())
+                    }
+                });
+                app.startup = None;
+                app.automation.recovered = true;
+                app.store.cli.claude_path = Some(launcher);
+                app.store
+                    .scheduler
+                    .add(
+                        Preset {
+                            id: 0,
+                            workspace: root.clone(),
+                            name: "review".into(),
+                            prompt: "review".into(),
+                            provider: Provider::Claude,
+                            channel: ModelChannel::Cli,
+                            model: None,
+                            effort: ReasoningEffort::Default,
+                            acp_variant: None,
+                            permission: PermissionLevel::FullAccess,
+                            archived: false,
+                        },
+                        Some(3600),
+                        0,
+                    )
+                    .unwrap();
+                let claims = app.store.scheduler.due(3600);
+                app.launch_automation(claims[0], cx);
+                let saved = snapshot.recv_timeout(Duration::from_secs(5)).unwrap();
+                let session = saved.scheduler.runs[0].session.unwrap();
+                assert_eq!(app.selected_session, Some(1));
+                assert_eq!(
+                    app.session(session).unwrap().permission,
+                    PermissionLevel::ReadOnly
+                );
+                app.poll_pending_sends(window, cx);
+                assert!(app.session_control.runs[&session].pending_save.is_some());
+                assert!(!marker.exists());
+                release.send(Ok(())).unwrap();
+                app.persistence.flush();
+                app.poll_pending_sends(window, cx);
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while app.session_control.runs.contains_key(&session) {
+                    app.poll_streams(window, cx);
+                    assert!(Instant::now() < deadline);
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                let args = std::fs::read_to_string(&marker).unwrap();
+                assert!(args.contains("--strict-mcp-config"), "{args}");
+                assert!(args.contains("Read,Glob,Grep,AskUserQuestion"), "{args}");
+                assert!(!args.contains("--dangerously-skip-permissions"));
+                // A finished automation does not turn future human messages into automations.
+                app.session_mut(session).unwrap().permission = PermissionLevel::FullAccess;
+                app.start_turn(
+                    0,
+                    Some(session),
+                    Provider::Claude,
+                    "human follow-up".to_owned(),
+                    true,
+                    cx,
+                )
+                .unwrap();
+                app.persistence.flush();
+                app.poll_pending_sends(window, cx);
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while app.session_control.runs.contains_key(&session) {
+                    app.poll_streams(window, cx);
+                    assert!(Instant::now() < deadline);
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                let args = std::fs::read_to_string(marker).unwrap();
+                assert!(!args.contains("--strict-mcp-config"), "{args}");
+                assert!(args.contains("--dangerously-skip-permissions"), "{args}");
+                app.persistence.flush();
+                app.writable = false;
+            })
+        });
+    }
+
+    #[gpui_kit::test]
     fn failed_claim_save_never_starts_a_model_and_keeps_the_foreground_draft(
         cx: &mut TestAppContext,
     ) {
@@ -326,6 +436,76 @@ mod tests {
                 app
             });
             gpui_kit::component::Root::new(app, window, cx)
+        });
+    }
+
+    #[gpui_kit::test]
+    fn command_discovery_does_not_trigger_automation(cx: &mut TestAppContext) {
+        use crate::app::queue::tests::{fixture, running};
+        use crate::{commands::RequestIntent, protocol::Event};
+        let _locale = crate::test_support::chinese();
+        let (app, cx, root) = fixture(cx, "review-discovery");
+        cx.update(|window, cx| {
+            app.update(cx, |this, cx| {
+                this.persistence.flush();
+                this.persistence = crate::persistence::Persistence::with_writer(|_| Ok(()));
+                this.store
+                    .scheduler
+                    .add(
+                        Preset {
+                            id: 0,
+                            workspace: root,
+                            name: "review".into(),
+                            prompt: "review".into(),
+                            provider: Provider::Claude,
+                            channel: ModelChannel::Cli,
+                            model: None,
+                            effort: ReasoningEffort::Default,
+                            acp_variant: None,
+                            permission: PermissionLevel::ReadOnly,
+                            archived: false,
+                        },
+                        None,
+                        0,
+                    )
+                    .unwrap();
+                let sender = running(this, 1);
+                this.session_control.runs.get_mut(&1).unwrap().intent = RequestIntent::Discover;
+                sender
+                    .send(Event::Finished {
+                        error: None,
+                        cancelled: false,
+                    })
+                    .unwrap();
+                this.poll_streams(window, cx);
+                assert!(
+                    this.store.scheduler.runs.is_empty(),
+                    "Connecting a command catalog claimed an automation: {:?}",
+                    this.store.scheduler.runs
+                );
+                let sender = running(this, 1);
+                this.session_control.runs[&1].runtime.cancel();
+                sender
+                    .send(Event::Finished {
+                        error: None,
+                        cancelled: false,
+                    })
+                    .unwrap();
+                this.poll_streams(window, cx);
+                assert!(this.store.scheduler.runs.is_empty());
+                let sender = running(this, 1);
+                sender
+                    .send(Event::Finished {
+                        error: None,
+                        cancelled: false,
+                    })
+                    .unwrap();
+                this.poll_streams(window, cx);
+                assert_eq!(this.store.scheduler.runs.len(), 1);
+                assert_eq!(this.store.scheduler.runs[0].status, Status::Claimed);
+                this.persistence.flush();
+                this.writable = false;
+            })
         });
     }
 }

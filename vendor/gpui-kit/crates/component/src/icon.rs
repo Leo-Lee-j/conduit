@@ -172,9 +172,18 @@ impl Icon {
         self
     }
 
-    fn into_svg(self, text_size: Pixels, fallback_color: Hsla) -> Svg {
+    fn into_svg(self, text_size: Pixels, fallback_color: Hsla, icon_scale: f32) -> Svg {
         let text_color = self.text_color.unwrap_or(fallback_color);
         let has_base_size = self.style.size.width.is_some() || self.style.size.height.is_some();
+        let transformation = if icon_scale == 1.0 {
+            self.transformation
+        } else {
+            let scale = gpui::size(icon_scale, icon_scale);
+            Some(match self.transformation {
+                Some(transformation) => transformation.with_scaling(scale),
+                None => Transformation::scale(scale),
+            })
+        };
 
         svg()
             .map(|mut this| {
@@ -195,7 +204,7 @@ impl Icon {
                 IconSource::Path(path) => this.path(path),
                 IconSource::Data(data) => this.data(&data),
             })
-            .when_some(self.transformation, |this, transformation| {
+            .when_some(transformation, |this, transformation| {
                 this.with_transformation(transformation)
             })
     }
@@ -220,9 +229,9 @@ impl Sizable for Icon {
 }
 
 impl RenderOnce for Icon {
-    fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let text_size = window.text_style().font_size.to_pixels(window.rem_size());
-        self.into_svg(text_size, window.text_style().color)
+        self.into_svg(text_size, window.text_style().color, cx.theme().icon_scale)
     }
 }
 
@@ -235,7 +244,8 @@ impl From<Icon> for AnyElement {
 impl Render for Icon {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let text_size = window.text_style().font_size.to_pixels(window.rem_size());
-        self.clone().into_svg(text_size, cx.theme().foreground)
+        self.clone()
+            .into_svg(text_size, cx.theme().foreground, cx.theme().icon_scale)
     }
 }
 

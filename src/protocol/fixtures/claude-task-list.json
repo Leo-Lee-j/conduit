@@ -1,0 +1,1083 @@
+{
+  "cli": "2.1.322 (Claude Code)",
+  "source": "Real CLI; isolated local synthetic Anthropic SSE; native stdout and JSONL; synthetic task content; paths and session IDs normalized",
+  "frames": [
+    {
+      "type": "assistant",
+      "message": {
+        "id": "msg_task_0",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool_task_0",
+            "name": "TaskCreate",
+            "input": {
+              "subject": "Inspect the code",
+              "description": "Review task tracking.",
+              "activeForm": "Inspecting the code"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "tool_task_0",
+            "type": "tool_result",
+            "content": "Task #1 created successfully: Inspect the code"
+          }
+        ]
+      },
+      "tool_use_result": {
+        "task": {
+          "id": "1",
+          "subject": "Inspect the code",
+          "description": "Review task tracking."
+        }
+      }
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "id": "msg_task_1",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool_task_1",
+            "name": "TaskCreate",
+            "input": {
+              "subject": "Verify the changes",
+              "description": "Run focused tests."
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "tool_task_1",
+            "type": "tool_result",
+            "content": "Task #2 created successfully: Verify the changes"
+          }
+        ]
+      },
+      "tool_use_result": {
+        "task": {
+          "id": "2",
+          "subject": "Verify the changes",
+          "description": "Run focused tests."
+        }
+      }
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "id": "msg_task_2",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool_task_2",
+            "name": "TaskUpdate",
+            "input": {
+              "taskId": "1",
+              "status": "in_progress",
+              "owner": "developer"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "tool_task_2",
+            "type": "tool_result",
+            "content": "Updated task #1 owner, status"
+          }
+        ]
+      },
+      "tool_use_result": {
+        "success": true,
+        "taskId": "1",
+        "updatedFields": [
+          "owner",
+          "status"
+        ],
+        "statusChange": {
+          "from": "pending",
+          "to": "in_progress"
+        }
+      }
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "id": "msg_task_3",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool_task_3",
+            "name": "TaskUpdate",
+            "input": {
+              "taskId": "2",
+              "addBlockedBy": [
+                "1"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "tool_task_3",
+            "type": "tool_result",
+            "content": "Updated task #2 blockedBy"
+          }
+        ]
+      },
+      "tool_use_result": {
+        "success": true,
+        "taskId": "2",
+        "updatedFields": [
+          "blockedBy"
+        ]
+      }
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "id": "msg_task_4",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool_task_4",
+            "name": "TaskList",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "tool_task_4",
+            "type": "tool_result",
+            "content": "#1 [in_progress] Inspect the code (developer)\n#2 [pending] Verify the changes [blocked by #1]"
+          }
+        ]
+      },
+      "tool_use_result": {
+        "tasks": [
+          {
+            "id": "1",
+            "subject": "Inspect the code",
+            "status": "in_progress",
+            "owner": "developer",
+            "blockedBy": []
+          },
+          {
+            "id": "2",
+            "subject": "Verify the changes",
+            "status": "pending",
+            "blockedBy": [
+              "1"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "id": "msg_task_5",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool_task_5",
+            "name": "TaskGet",
+            "input": {
+              "taskId": "2"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "tool_task_5",
+            "type": "tool_result",
+            "content": "Task #2: Verify the changes\nStatus: pending\nDescription: Run focused tests.\nBlocked by: #1"
+          }
+        ]
+      },
+      "tool_use_result": {
+        "task": {
+          "id": "2",
+          "subject": "Verify the changes",
+          "description": "Run focused tests.",
+          "status": "pending",
+          "blocks": [],
+          "blockedBy": [
+            "1"
+          ]
+        }
+      }
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "id": "msg_task_6",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool_task_6",
+            "name": "TaskUpdate",
+            "input": {
+              "taskId": "1",
+              "status": "completed"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "tool_task_6",
+            "type": "tool_result",
+            "content": "Updated task #1 status"
+          }
+        ]
+      },
+      "tool_use_result": {
+        "success": true,
+        "taskId": "1",
+        "updatedFields": [
+          "status"
+        ],
+        "statusChange": {
+          "from": "in_progress",
+          "to": "completed"
+        }
+      }
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "id": "msg_task_7",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool_task_7",
+            "name": "TaskUpdate",
+            "input": {
+              "taskId": "2",
+              "subject": "Verify the task list",
+              "status": "in_progress"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "tool_task_7",
+            "type": "tool_result",
+            "content": "Updated task #2 subject, status"
+          }
+        ]
+      },
+      "tool_use_result": {
+        "success": true,
+        "taskId": "2",
+        "updatedFields": [
+          "subject",
+          "status"
+        ],
+        "statusChange": {
+          "from": "pending",
+          "to": "in_progress"
+        }
+      }
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "id": "msg_task_8",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool_task_8",
+            "name": "TaskUpdate",
+            "input": {
+              "taskId": "2",
+              "status": "deleted"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "tool_task_8",
+            "type": "tool_result",
+            "content": "Updated task #2 deleted"
+          }
+        ]
+      },
+      "tool_use_result": {
+        "success": true,
+        "taskId": "2",
+        "updatedFields": [
+          "deleted"
+        ],
+        "statusChange": {
+          "from": "in_progress",
+          "to": "deleted"
+        }
+      }
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "id": "msg_task_9",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool_task_9",
+            "name": "TaskUpdate",
+            "input": {
+              "taskId": "1",
+              "status": "deleted"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "tool_task_9",
+            "type": "tool_result",
+            "content": "Updated task #1 deleted"
+          }
+        ]
+      },
+      "tool_use_result": {
+        "success": true,
+        "taskId": "1",
+        "updatedFields": [
+          "deleted"
+        ],
+        "statusChange": {
+          "from": "completed",
+          "to": "deleted"
+        }
+      }
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "id": "msg_task_10",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool_task_10",
+            "name": "TaskList",
+            "input": {}
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "tool_task_10",
+            "type": "tool_result",
+            "content": "No tasks found"
+          }
+        ]
+      },
+      "tool_use_result": {
+        "tasks": []
+      }
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "id": "msg_task_11",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool_task_11",
+            "name": "TaskUpdate",
+            "input": {
+              "taskId": "404",
+              "status": "completed"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "tool_task_11",
+            "type": "tool_result",
+            "content": "Task not found"
+          }
+        ]
+      },
+      "tool_use_result": {
+        "success": false,
+        "taskId": "404",
+        "updatedFields": [],
+        "error": "Task not found"
+      }
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "id": "msg_task_12",
+        "content": [
+          {
+            "type": "text",
+            "text": "Local task-list probe complete."
+          }
+        ]
+      }
+    }
+  ],
+  "native_frames": [
+    {
+      "type": "user",
+      "promptSource": "sdk",
+      "isSidechain": false,
+      "message": {
+        "role": "user",
+        "content": "Exercise the local task tools."
+      },
+      "cwd": "C:/fixture",
+      "sessionId": "task-fixture"
+    },
+    {
+      "type": "assistant",
+      "isSidechain": false,
+      "message": {
+        "id": "msg_task_0",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool_task_0",
+            "name": "TaskCreate",
+            "input": {
+              "subject": "Inspect the code",
+              "description": "Review task tracking.",
+              "activeForm": "Inspecting the code"
+            }
+          }
+        ]
+      },
+      "cwd": "C:/fixture",
+      "sessionId": "task-fixture"
+    },
+    {
+      "type": "user",
+      "toolUseResult": {
+        "task": {
+          "id": "1",
+          "subject": "Inspect the code",
+          "description": "Review task tracking."
+        }
+      },
+      "isSidechain": false,
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "tool_task_0",
+            "type": "tool_result",
+            "content": "Task #1 created successfully: Inspect the code"
+          }
+        ]
+      },
+      "cwd": "C:/fixture",
+      "sessionId": "task-fixture"
+    },
+    {
+      "type": "assistant",
+      "isSidechain": false,
+      "message": {
+        "id": "msg_task_1",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool_task_1",
+            "name": "TaskCreate",
+            "input": {
+              "subject": "Verify the changes",
+              "description": "Run focused tests."
+            }
+          }
+        ]
+      },
+      "cwd": "C:/fixture",
+      "sessionId": "task-fixture"
+    },
+    {
+      "type": "user",
+      "toolUseResult": {
+        "task": {
+          "id": "2",
+          "subject": "Verify the changes",
+          "description": "Run focused tests."
+        }
+      },
+      "isSidechain": false,
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "tool_task_1",
+            "type": "tool_result",
+            "content": "Task #2 created successfully: Verify the changes"
+          }
+        ]
+      },
+      "cwd": "C:/fixture",
+      "sessionId": "task-fixture"
+    },
+    {
+      "type": "assistant",
+      "isSidechain": false,
+      "message": {
+        "id": "msg_task_2",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool_task_2",
+            "name": "TaskUpdate",
+            "input": {
+              "taskId": "1",
+              "status": "in_progress",
+              "owner": "developer"
+            }
+          }
+        ]
+      },
+      "cwd": "C:/fixture",
+      "sessionId": "task-fixture"
+    },
+    {
+      "type": "user",
+      "toolUseResult": {
+        "success": true,
+        "taskId": "1",
+        "updatedFields": [
+          "owner",
+          "status"
+        ],
+        "statusChange": {
+          "from": "pending",
+          "to": "in_progress"
+        }
+      },
+      "isSidechain": false,
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "tool_task_2",
+            "type": "tool_result",
+            "content": "Updated task #1 owner, status"
+          }
+        ]
+      },
+      "cwd": "C:/fixture",
+      "sessionId": "task-fixture"
+    },
+    {
+      "type": "assistant",
+      "isSidechain": false,
+      "message": {
+        "id": "msg_task_3",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool_task_3",
+            "name": "TaskUpdate",
+            "input": {
+              "taskId": "2",
+              "addBlockedBy": [
+                "1"
+              ]
+            }
+          }
+        ]
+      },
+      "cwd": "C:/fixture",
+      "sessionId": "task-fixture"
+    },
+    {
+      "type": "user",
+      "toolUseResult": {
+        "success": true,
+        "taskId": "2",
+        "updatedFields": [
+          "blockedBy"
+        ]
+      },
+      "isSidechain": false,
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "tool_task_3",
+            "type": "tool_result",
+            "content": "Updated task #2 blockedBy"
+          }
+        ]
+      },
+      "cwd": "C:/fixture",
+      "sessionId": "task-fixture"
+    },
+    {
+      "type": "assistant",
+      "isSidechain": false,
+      "message": {
+        "id": "msg_task_4",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool_task_4",
+            "name": "TaskList",
+            "input": {}
+          }
+        ]
+      },
+      "cwd": "C:/fixture",
+      "sessionId": "task-fixture"
+    },
+    {
+      "type": "user",
+      "toolUseResult": {
+        "tasks": [
+          {
+            "id": "1",
+            "subject": "Inspect the code",
+            "status": "in_progress",
+            "owner": "developer",
+            "blockedBy": []
+          },
+          {
+            "id": "2",
+            "subject": "Verify the changes",
+            "status": "pending",
+            "blockedBy": [
+              "1"
+            ]
+          }
+        ]
+      },
+      "isSidechain": false,
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "tool_task_4",
+            "type": "tool_result",
+            "content": "#1 [in_progress] Inspect the code (developer)\n#2 [pending] Verify the changes [blocked by #1]"
+          }
+        ]
+      },
+      "cwd": "C:/fixture",
+      "sessionId": "task-fixture"
+    },
+    {
+      "type": "assistant",
+      "isSidechain": false,
+      "message": {
+        "id": "msg_task_5",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool_task_5",
+            "name": "TaskGet",
+            "input": {
+              "taskId": "2"
+            }
+          }
+        ]
+      },
+      "cwd": "C:/fixture",
+      "sessionId": "task-fixture"
+    },
+    {
+      "type": "user",
+      "toolUseResult": {
+        "task": {
+          "id": "2",
+          "subject": "Verify the changes",
+          "description": "Run focused tests.",
+          "status": "pending",
+          "blocks": [],
+          "blockedBy": [
+            "1"
+          ]
+        }
+      },
+      "isSidechain": false,
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "tool_task_5",
+            "type": "tool_result",
+            "content": "Task #2: Verify the changes\nStatus: pending\nDescription: Run focused tests.\nBlocked by: #1"
+          }
+        ]
+      },
+      "cwd": "C:/fixture",
+      "sessionId": "task-fixture"
+    },
+    {
+      "type": "assistant",
+      "isSidechain": false,
+      "message": {
+        "id": "msg_task_6",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool_task_6",
+            "name": "TaskUpdate",
+            "input": {
+              "taskId": "1",
+              "status": "completed"
+            }
+          }
+        ]
+      },
+      "cwd": "C:/fixture",
+      "sessionId": "task-fixture"
+    },
+    {
+      "type": "user",
+      "toolUseResult": {
+        "success": true,
+        "taskId": "1",
+        "updatedFields": [
+          "status"
+        ],
+        "statusChange": {
+          "from": "in_progress",
+          "to": "completed"
+        }
+      },
+      "isSidechain": false,
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "tool_task_6",
+            "type": "tool_result",
+            "content": "Updated task #1 status"
+          }
+        ]
+      },
+      "cwd": "C:/fixture",
+      "sessionId": "task-fixture"
+    },
+    {
+      "type": "assistant",
+      "isSidechain": false,
+      "message": {
+        "id": "msg_task_7",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool_task_7",
+            "name": "TaskUpdate",
+            "input": {
+              "taskId": "2",
+              "subject": "Verify the task list",
+              "status": "in_progress"
+            }
+          }
+        ]
+      },
+      "cwd": "C:/fixture",
+      "sessionId": "task-fixture"
+    },
+    {
+      "type": "user",
+      "toolUseResult": {
+        "success": true,
+        "taskId": "2",
+        "updatedFields": [
+          "subject",
+          "status"
+        ],
+        "statusChange": {
+          "from": "pending",
+          "to": "in_progress"
+        }
+      },
+      "isSidechain": false,
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "tool_task_7",
+            "type": "tool_result",
+            "content": "Updated task #2 subject, status"
+          }
+        ]
+      },
+      "cwd": "C:/fixture",
+      "sessionId": "task-fixture"
+    },
+    {
+      "type": "assistant",
+      "isSidechain": false,
+      "message": {
+        "id": "msg_task_8",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool_task_8",
+            "name": "TaskUpdate",
+            "input": {
+              "taskId": "2",
+              "status": "deleted"
+            }
+          }
+        ]
+      },
+      "cwd": "C:/fixture",
+      "sessionId": "task-fixture"
+    },
+    {
+      "type": "user",
+      "toolUseResult": {
+        "success": true,
+        "taskId": "2",
+        "updatedFields": [
+          "deleted"
+        ],
+        "statusChange": {
+          "from": "in_progress",
+          "to": "deleted"
+        }
+      },
+      "isSidechain": false,
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "tool_task_8",
+            "type": "tool_result",
+            "content": "Updated task #2 deleted"
+          }
+        ]
+      },
+      "cwd": "C:/fixture",
+      "sessionId": "task-fixture"
+    },
+    {
+      "type": "assistant",
+      "isSidechain": false,
+      "message": {
+        "id": "msg_task_9",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool_task_9",
+            "name": "TaskUpdate",
+            "input": {
+              "taskId": "1",
+              "status": "deleted"
+            }
+          }
+        ]
+      },
+      "cwd": "C:/fixture",
+      "sessionId": "task-fixture"
+    },
+    {
+      "type": "user",
+      "toolUseResult": {
+        "success": true,
+        "taskId": "1",
+        "updatedFields": [
+          "deleted"
+        ],
+        "statusChange": {
+          "from": "completed",
+          "to": "deleted"
+        }
+      },
+      "isSidechain": false,
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "tool_task_9",
+            "type": "tool_result",
+            "content": "Updated task #1 deleted"
+          }
+        ]
+      },
+      "cwd": "C:/fixture",
+      "sessionId": "task-fixture"
+    },
+    {
+      "type": "assistant",
+      "isSidechain": false,
+      "message": {
+        "id": "msg_task_10",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool_task_10",
+            "name": "TaskList",
+            "input": {}
+          }
+        ]
+      },
+      "cwd": "C:/fixture",
+      "sessionId": "task-fixture"
+    },
+    {
+      "type": "user",
+      "toolUseResult": {
+        "tasks": []
+      },
+      "isSidechain": false,
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "tool_task_10",
+            "type": "tool_result",
+            "content": "No tasks found"
+          }
+        ]
+      },
+      "cwd": "C:/fixture",
+      "sessionId": "task-fixture"
+    },
+    {
+      "type": "assistant",
+      "isSidechain": false,
+      "message": {
+        "id": "msg_task_11",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "tool_task_11",
+            "name": "TaskUpdate",
+            "input": {
+              "taskId": "404",
+              "status": "completed"
+            }
+          }
+        ]
+      },
+      "cwd": "C:/fixture",
+      "sessionId": "task-fixture"
+    },
+    {
+      "type": "user",
+      "toolUseResult": {
+        "success": false,
+        "taskId": "404",
+        "updatedFields": [],
+        "error": "Task not found"
+      },
+      "isSidechain": false,
+      "message": {
+        "role": "user",
+        "content": [
+          {
+            "tool_use_id": "tool_task_11",
+            "type": "tool_result",
+            "content": "Task not found"
+          }
+        ]
+      },
+      "cwd": "C:/fixture",
+      "sessionId": "task-fixture"
+    },
+    {
+      "type": "assistant",
+      "isSidechain": false,
+      "message": {
+        "id": "msg_task_12",
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Local task-list probe complete."
+          }
+        ]
+      },
+      "cwd": "C:/fixture",
+      "sessionId": "task-fixture"
+    }
+  ]
+}

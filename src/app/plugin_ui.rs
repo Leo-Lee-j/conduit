@@ -489,10 +489,16 @@ impl ConduitApp {
         match self.select_navigation(id) {
             Ok(adapter) => (adapter.activate)(self, cx),
             Err(error) => {
-                self.message = Some(conduit::i18n::format(
-                    "plugin_ui.unable_to_open_navigation",
-                    &[("error", format!("{}", error))],
-                ))
+                self.notify_feedback(
+                    NoticeSource::App,
+                    NoticeLevel::Error,
+                    conduit::i18n::format(
+                        "plugin_ui.unable_to_open_navigation",
+                        &[("error", format!("{}", error))],
+                    ),
+                    None,
+                    cx,
+                );
             }
         }
         cx.notify();

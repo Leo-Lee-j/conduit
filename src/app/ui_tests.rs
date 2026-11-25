@@ -2,6 +2,8 @@ use super::{ChatItem, file_ref};
 use crate::app::{NoticeLevel, NoticeSource};
 use gpui_kit::{AppContext as _, TestAppContext, point, px};
 
+mod workspace_colors;
+
 fn pet_store(pet_enabled: bool) -> crate::store::Store {
     let mut store = crate::store::Store::default();
     store.ui.encourager.enabled = true;
@@ -222,7 +224,6 @@ fn error_retry_keeps_partial_output_when_context_validation_fails(cx: &mut TestA
                 before
             );
             assert!(app.session_control.runs.is_empty());
-            assert!(app.message.is_none());
             assert!(app.notifications.center.records().iter().any(|notice| {
                 notice.title == "会话无法启动" && notice.message.contains("缺少可靠的 CLI 会话标识")
             }));
@@ -287,7 +288,11 @@ fn error_retry_clears_cards_before_repeated_failures_and_preserves_output(cx: &m
                     .rposition(|item| item.kind == super::ItemKind::Error)
                     .unwrap();
                 app.retry_error(error_index, window, cx);
-                assert!(app.session_control.runs.contains_key(&1), "{:?}", app.message);
+                assert!(
+                    app.session_control.runs.contains_key(&1),
+                    "{:?}",
+                    app.notifications.center.records()
+                );
                 assert_eq!(
                     serde_json::to_value(&app.session(1).unwrap().messages).unwrap(),
                     serde_json::to_value(&kept).unwrap(),
@@ -426,6 +431,7 @@ fn settings_connections_switch_engines_and_guard_service_editors(cx: &mut TestAp
         for (selector, provider) in [
             ("settings-engine-1", Provider::Codex),
             ("settings-engine-3", Provider::Qoder),
+            ("settings-engine-4", Provider::Gemini),
             ("settings-engine-2", Provider::OpenCode),
             ("settings-nav-8", Provider::OpenCode),
             ("settings-engine-0", Provider::Claude),
@@ -500,10 +506,19 @@ fn settings_connections_switch_engines_and_guard_service_editors(cx: &mut TestAp
             cx.update(|window, cx| {
                 let _ = window.draw(cx);
             });
-            assert_eq!(
-                cx.debug_bounds("provider-advanced-fields").is_some(),
-                expanded
-            );
+            let trigger = cx.update(|window, _| {
+                gpui_kit::base::test_support::snapshots(window)
+                    .into_iter()
+                    .find(|node| {
+                        node.expanded().is_some() && node.bounds().contains(&toggle.center())
+                    })
+                    .expect("accordion trigger")
+            });
+            // Closing panels can remain mounted until the spring finishes.
+            assert_eq!(trigger.expanded(), Some(expanded));
+            if expanded {
+                assert!(cx.debug_bounds("provider-advanced-fields").is_some());
+            }
         }
         cx.simulate_keystrokes("escape");
         cx.run_until_parked();
@@ -654,16 +669,26 @@ fn model_picker_switches_engine_and_applies_the_full_route_to_a_new_session(
         assert_eq!(selection.engine, Provider::Codex);
         assert_eq!(selection.channel, ModelChannel::Cli);
         assert_eq!(selection.model, None);
-        assert_eq!(selection.effort, ReasoningEffort::Medium);
+        assert_eq!(selection.effort, ReasoningEffort::Default);
     });
     click!("session-channel-control");
     click!("session-provider-option-1");
     click!("session-model-option-2");
-    let slider = cx.debug_bounds("session-effort-control").unwrap();
-    let point = point(slider.left() + slider.size.width * 0.75, slider.center().y);
-    cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
-    cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
-    cx.run_until_parked();
+    assert!(cx.debug_bounds("session-effort-minimal").is_some());
+    assert!(cx.debug_bounds("session-effort-none").is_none());
+    assert!(cx.debug_bounds("session-effort-xhigh").is_none());
+    click!("session-effort-high");
+    click!("session-model-option-1");
+    assert!(cx.debug_bounds("session-effort-default").is_some());
+    assert!(cx.debug_bounds("session-effort-high").is_none());
+    cx.update(|_, cx| {
+        assert_eq!(
+            app.read(cx).composer_selection(1).effort,
+            ReasoningEffort::Default
+        );
+    });
+    click!("session-model-option-2");
+    click!("session-effort-high");
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
             let selection = app.composer_selection(1);
@@ -833,6 +858,7 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
     use gpui_kit::AppContext as _;
 
     let session = |id, provider, native: &str| SessionRecord {
+        task_list: None,
         subagents: Default::default(),
         is_subagent: false,
         branching: Default::default(),
@@ -1021,6 +1047,8 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
             this.finish_history_import(
                 &root,
                 vec![crate::history::ImportedSession {
+                    usage: Default::default(),
+                    task_list: None,
                     is_subagent: false,
                     provider: Provider::Claude,
                     native_id: "first".into(),
@@ -1296,9 +1324,9 @@ fn attaching_a_file_outside_the_workspace_uses_an_absolute_mention(cx: &mut Test
     cx.update(|_, cx| {
         let app = app.read(cx);
         assert!(
-            app.message.is_none(),
+            app.notifications.center.records().is_empty(),
             "both paths are usable, so nothing may be skipped: {:?}",
-            app.message
+            app.notifications.center.records()
         );
         assert!(app.input.read(cx).value().is_empty());
         let files = app
@@ -1344,6 +1372,7 @@ fn composer_files_paste_drafts_removal_and_failed_send(cx: &mut TestAppContext) 
     std::fs::write(&first, b"fn first() {}").unwrap();
     std::fs::write(&second, b"fn second() {}").unwrap();
     let session = |id| SessionRecord {
+        task_list: None,
         subagents: Default::default(),
         is_subagent: false,
         branching: Default::default(),
@@ -1649,7 +1678,7 @@ fn clipboard_images_are_collected_after_the_last_draft_or_history_reference(
             this.switch(0, None, window, cx);
             this.paste_attachments(&ClipboardItem::new_image(&image), window, cx);
             assert!(pasted.exists());
-            this.discard_composer_attachments();
+            this.discard_composer_attachments(cx);
             assert!(
                 !pasted.exists(),
                 "closing must collect unsent workspace drafts"
@@ -1671,13 +1700,13 @@ fn clipboard_images_are_collected_after_the_last_draft_or_history_reference(
 
             file_ref::save_clipboard_image(&image, &directory).unwrap();
             this.writable = false;
-            this.cleanup_attachments();
+            this.cleanup_attachments(cx);
             assert!(
                 pasted.exists(),
                 "read-only or corrupt state must disable collection"
             );
             this.writable = true;
-            this.cleanup_attachments();
+            this.cleanup_attachments(cx);
             assert!(!pasted.exists());
         })
     });
@@ -1827,6 +1856,8 @@ mod history_and_search {
     }
     fn imported(messages: Vec<ChatItem>) -> crate::history::ImportedSession {
         crate::history::ImportedSession {
+            usage: Default::default(),
+            task_list: None,
             is_subagent: false,
             provider: Provider::Claude,
             native_id: "review-native".into(),
@@ -2091,6 +2122,86 @@ fn qoder_picker_persists_session_catalog_and_resets_effort_when_model_changes(
         assert_eq!(restored.provider, Provider::Qoder);
         assert_eq!(restored.native_id.as_deref(), Some("qoder-context"));
         assert_eq!(restored.opencode.variant.as_deref(), Some("high"));
+        assert_eq!(restored.opencode.models().len(), 2);
+    });
+    click!("session-model-option-2");
+    cx.update(|_, cx| {
+        app.update(cx, |app, _| {
+            let session = app.session(1).unwrap();
+            assert_eq!(session.model.as_deref(), Some("model-b"));
+            assert!(session.opencode.variant.is_none());
+            assert!(session.opencode.variants().is_empty());
+            assert_eq!(session.opencode.models().len(), 2);
+            app.writable = false;
+        });
+    });
+}
+
+#[gpui_kit::test]
+fn gemini_picker_persists_native_models_without_reasoning_controls(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    use crate::domain::Provider;
+    use gpui_kit::{AppContext as _, Modifiers, MouseButton};
+    cx.update(gpui_kit::init);
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let mut session = super::tests::session();
+            session.provider = Provider::Gemini;
+            session.native_id = Some("gemini-context".into());
+            session.reasoning_effort = crate::providers::ReasoningEffort::Default;
+            session.opencode.options = serde_json::json!([
+                {"id":"model","options":[{"value":"model-a","name":"Alpha"},{"value":"model-b","name":"Beta"}]}
+            ]);
+            let store = crate::store::Store {
+                workspaces: vec![crate::domain::Workspace {
+                    path: std::env::temp_dir().join("conduit-gemini-picker-ui"), sessions: vec![session]
+                }],
+                ..Default::default()
+            };
+            let mut app = super::ConduitApp::with_store(window,cx,Ok(store),false,false);
+            app.selected_workspace = Some(0);
+            app.selected_session = Some(1);
+            app.new_session_provider = Provider::Gemini;
+            app.writable = true;
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        gpui_kit::component::Root::new(app,window,cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    macro_rules! click {
+        ($selector:expr) => {{
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+            let point = cx.debug_bounds($selector).expect($selector).center();
+            cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
+            cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        }};
+    }
+    click!("composer-model-control");
+    assert!(cx.debug_bounds("session-effort-control").is_none());
+    assert!(cx.debug_bounds("opencode-effort-0").is_none());
+    cx.update(|_, cx| {
+        let app = app.read(cx);
+        let session = app.session(1).unwrap();
+        assert_eq!(app.session_route(1).unwrap().acp_variant.as_deref(), None);
+        assert!(
+            app.channel_route(Provider::Gemini, &super::ModelChannel::Ccs("test".into()))
+                .is_err()
+        );
+        let restored: crate::domain::SessionRecord =
+            serde_json::from_value(serde_json::to_value(session).unwrap()).unwrap();
+        assert_eq!(restored.provider, Provider::Gemini);
+        assert_eq!(restored.native_id.as_deref(), Some("gemini-context"));
+        assert!(restored.opencode.variant.is_none());
         assert_eq!(restored.opencode.models().len(), 2);
     });
     click!("session-model-option-2");
@@ -2504,7 +2615,7 @@ fn workspace_new_session_keeps_explicit_choices_and_empty_workspace_defaults(
                 ModelChannel::Provider("global-service".into())
             );
             assert_eq!(created.model.as_deref(), Some("global-model"));
-            assert_eq!(created.reasoning_effort, ReasoningEffort::Medium);
+            assert_eq!(created.reasoning_effort, ReasoningEffort::Default);
             app.persistence.flush();
         });
     });

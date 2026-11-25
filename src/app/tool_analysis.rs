@@ -8,14 +8,14 @@ use std::{
 #[derive(Default)]
 pub(super) struct Analysis {
     pub files: Vec<EditFileDiff>,
-    pub plan: Vec<PlanStep>,
+    pub plan: Option<Vec<PlanStep>>,
 }
 
 impl Analysis {
     fn parse(item: &ChatItem) -> Self {
         Self {
             files: edit_tool_diffs(item).unwrap_or_default(),
-            plan: plan_steps_from_input(&item.input).unwrap_or_default(),
+            plan: super::state::plan_from_tool(item),
         }
     }
     fn bytes(&self) -> usize {
@@ -23,7 +23,12 @@ impl Analysis {
             .iter()
             .map(|f| f.path.len() + f.note.len() + f.patch.len())
             .sum::<usize>()
-            + self.plan.iter().map(|p| p.text.len()).sum::<usize>()
+            + self
+                .plan
+                .iter()
+                .flatten()
+                .map(PlanStep::bytes)
+                .sum::<usize>()
     }
 }
 
@@ -36,7 +41,7 @@ struct Entry {
 struct Contribution {
     identity: Weak<crate::domain::ChatItemData>,
     ready: bool,
-    value: Option<(TurnFileStats, Vec<PlanStep>)>,
+    value: Option<(TurnFileStats, Option<Vec<PlanStep>>)>,
 }
 
 #[derive(Default)]
@@ -168,9 +173,7 @@ impl Cache {
             {
                 self.turn.finish(&item.key, &identity, &value);
             }
-            if let Some((_, steps)) = &self.turn.entries[&item.key].value
-                && !steps.is_empty()
-            {
+            if let Some((_, Some(steps))) = &self.turn.entries[&item.key].value {
                 plan = steps.clone();
             }
         }
@@ -294,6 +297,16 @@ impl Cache {
                             .position(|m| m.identity().ptr_eq(&identity))
                     {
                         this.remeasure_message(index);
+                    }
+                    for (id, _) in this.reference_chat_views() {
+                        if let Some(index) = this.session(id).and_then(|session| {
+                            session
+                                .messages
+                                .iter()
+                                .position(|m| m.identity().ptr_eq(&identity))
+                        }) {
+                            this.remeasure_session_message(id, index, cx);
+                        }
                     }
                 }
                 this.tool_analysis.trim();
@@ -464,7 +477,7 @@ mod tests {
                 let (stats, _) = app.tool_analysis.turn(1, &items, cx);
                 assert_eq!(stats.added, 640_000);
                 assert_eq!(stats.files.len(), 1);
-                assert!(app.turn_stats_tags(1, cx).is_some());
+                assert!(app.turn_stats_tags(1, cx).is_none());
 
                 // Finishing the turn replaces message identities. Keep the old
                 // counts visible while these final versions are being parsed.
@@ -484,7 +497,7 @@ mod tests {
                     .collect();
                 let (stats, _) = app.tool_analysis.turn(1, &items, cx);
                 assert_eq!(stats.added, 640_000);
-                assert!(app.turn_stats_tags(1, cx).is_some());
+                assert!(app.turn_stats_tags(1, cx).is_none());
                 cx.notify();
             })
         });
@@ -493,12 +506,17 @@ mod tests {
             app.update(cx, |app, cx| {
                 assert_eq!(app.tool_analysis.turn.stats.added, 640_000);
                 assert_eq!(app.tool_analysis.turn.stats.files.len(), 1);
-                assert!(app.turn_stats_tags(1, cx).is_some());
+                assert!(app.turn_stats_tags(1, cx).is_none());
                 // A new turn or another session must not inherit the old totals.
                 let (stats, _) = app.tool_analysis.turn(1, &[], cx);
                 assert!(stats.files.is_empty());
                 let (stats, _) = app.tool_analysis.turn(2, &[], cx);
                 assert!(stats.files.is_empty());
+                crate::task_list::apply(
+                    app.session_mut(1).unwrap(),
+                    crate::task_list::wire_plan(vec![("Review changes".into(), "pending".into())]),
+                );
+                assert!(app.turn_stats_tags(1, cx).is_some());
             })
         });
     }

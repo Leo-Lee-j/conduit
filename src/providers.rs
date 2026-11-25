@@ -26,48 +26,63 @@ pub enum ModelChannel {
 pub enum ReasoningEffort {
     #[default]
     Default,
+    None,
+    Minimal,
     Low,
     Medium,
     High,
     Xhigh,
+    Max,
+    Ultra,
 }
 
 impl ReasoningEffort {
-    /// ACP engines negotiate their native effort catalog after selecting the model.
-    pub fn for_provider(provider: Provider) -> Self {
-        match provider {
-            Provider::Claude | Provider::Codex => Self::Medium,
-            Provider::OpenCode | Provider::Qoder => Self::Default,
-        }
+    /// Preserve the CLI/model default until the user explicitly chooses a level.
+    pub fn for_provider(_provider: Provider) -> Self {
+        Self::Default
     }
 
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 9] = [
         Self::Default,
+        Self::None,
+        Self::Minimal,
         Self::Low,
         Self::Medium,
         Self::High,
         Self::Xhigh,
+        Self::Max,
+        Self::Ultra,
     ];
     pub fn wire(self) -> Option<&'static str> {
         match self {
             Self::Default => None,
+            Self::None => Some("none"),
+            Self::Minimal => Some("minimal"),
             Self::Low => Some("low"),
             Self::Medium => Some("medium"),
             Self::High => Some("high"),
             Self::Xhigh => Some("xhigh"),
+            Self::Max => Some("max"),
+            Self::Ultra => Some("ultra"),
         }
     }
     pub fn label(self) -> &'static str {
         match self {
-            Self::Default => conduit::i18n::text_static("chat.default"),
+            Self::Default => conduit::i18n::text_static("model_picker.follow_default"),
+            Self::None => conduit::i18n::text_static("providers.no_reasoning"),
+            Self::Minimal => conduit::i18n::text_static("providers.minimal"),
             Self::Low => conduit::i18n::text_static("providers.low"),
             Self::Medium => conduit::i18n::text_static("providers.medium"),
             Self::High => conduit::i18n::text_static("providers.high"),
             Self::Xhigh => conduit::i18n::text_static("providers.extra_high"),
+            Self::Max => conduit::i18n::text_static("providers.maximum"),
+            Self::Ultra => "Ultra",
         }
     }
-    pub fn index(self) -> usize {
-        Self::ALL.iter().position(|v| *v == self).unwrap_or(0)
+    pub fn from_wire(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|level| level.wire() == Some(value))
     }
 }
 
@@ -151,6 +166,8 @@ impl ModelProvider {
         if !self.engine.descriptor().capabilities.model_services {
             bail!(conduit::i18n::text(if self.engine == Provider::Qoder {
                 "qoder.native_route"
+            } else if self.engine == Provider::Gemini {
+                "gemini.native_route"
             } else {
                 "providers.opencode_uses_its_native_provider_configuration_configure"
             }));
@@ -231,7 +248,7 @@ impl RuntimeRoute {
         let url = discovery::runtime_base_url(url, engine);
         let mut route = Self::default();
         match engine {
-            Provider::OpenCode | Provider::Qoder => {}
+            Provider::OpenCode | Provider::Qoder | Provider::Gemini => {}
             Provider::Claude => {
                 route.env.insert("ANTHROPIC_BASE_URL".into(), url);
                 route

@@ -30,9 +30,15 @@ fn theme_selection_preserves_mode_fonts_drafts_and_restores_saved_choices(cx: &m
     });
     // Drive the real select subscriptions, including a choice for the inactive mode.
     for (mode, name) in [
+        (ThemeMode::Light, "Graphite & Indigo"),
+        (ThemeMode::Light, "Warm Paper & Terracotta"),
+        (ThemeMode::Light, "Slate & Teal"),
         (ThemeMode::Light, "Catppuccin Latte"),
         (ThemeMode::Dark, "Tokyo Night"),
         (ThemeMode::Dark, "Catppuccin Mocha"),
+        (ThemeMode::Dark, "Graphite & Indigo Dark"),
+        (ThemeMode::Dark, "Warm Charcoal & Terracotta"),
+        (ThemeMode::Dark, "Deep Slate & Teal"),
     ] {
         cx.update(|window, cx| {
             let state = if mode.is_dark() {
@@ -58,6 +64,15 @@ fn theme_selection_preserves_mode_fonts_drafts_and_restores_saved_choices(cx: &m
                 assert_eq!(app.store.ui.dark_theme, name);
                 assert_eq!(theme.theme_name().as_ref(), name);
                 assert_eq!(theme.highlight_theme.name, name);
+                assert_eq!(
+                    theme.shadow,
+                    !matches!(
+                        name,
+                        "Graphite & Indigo Dark"
+                            | "Warm Charcoal & Terracotta"
+                            | "Deep Slate & Teal"
+                    )
+                );
             } else {
                 assert_eq!(app.store.ui.light_theme, name);
                 assert_eq!(theme.theme_name().as_ref(), "Conduit Dark");
@@ -76,13 +91,26 @@ fn theme_selection_preserves_mode_fonts_drafts_and_restores_saved_choices(cx: &m
             app.store.ui.appearance = AppearanceMode::System;
             app.apply_appearance(window, cx);
             let expected = if ThemeMode::from(window.appearance()).is_dark() {
-                "Catppuccin Mocha"
+                "Deep Slate & Teal"
             } else {
                 "Catppuccin Latte"
             };
             assert_eq!(Theme::global(cx).theme_name().as_ref(), expected);
             app.store.ui.appearance = AppearanceMode::Light;
             app.apply_appearance(window, cx);
+            for name in [
+                "Graphite & Indigo",
+                "Warm Paper & Terracotta",
+                "Slate & Teal",
+                "Catppuccin Latte",
+            ] {
+                app.select_theme(ThemeMode::Light, name, window, cx);
+                assert_eq!(app.store.ui.light_theme, name);
+                assert_eq!(Theme::global(cx).theme_name().as_ref(), name);
+                assert_eq!(Theme::global(cx).font_size, px(18.));
+                assert!(Theme::global(cx).shadow);
+                assert_eq!(app.input.read(cx).value().as_ref(), "retain this draft");
+            }
             assert_eq!(Theme::global(cx).theme_name().as_ref(), "Catppuccin Latte");
             // Read-only settings cannot alter the saved choice.
             app.writable = false;
@@ -102,7 +130,7 @@ fn theme_selection_preserves_mode_fonts_drafts_and_restores_saved_choices(cx: &m
                 false,
             )
         });
-        assert_eq!(restored.read(cx).store.ui.dark_theme, "Catppuccin Mocha");
+        assert_eq!(restored.read(cx).store.ui.dark_theme, "Deep Slate & Teal");
         assert_eq!(Theme::global(cx).theme_name().as_ref(), "Catppuccin Latte");
         assert_eq!(Theme::global(cx).font_size, px(18.));
         // A removed name or a name from the wrong mode must not prevent startup.

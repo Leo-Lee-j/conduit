@@ -97,6 +97,7 @@ pub fn runtime_route(
         Provider::Codex => "codex",
         Provider::OpenCode => "opencode",
         Provider::Qoder => "qoder",
+        Provider::Gemini => "gemini",
     };
     let raw: String = connection
         .query_row(
@@ -123,6 +124,7 @@ fn route_from_settings(
     use anyhow::bail;
     match engine {
         Provider::Qoder => bail!(conduit::i18n::text("qoder.native_route")),
+        Provider::Gemini => bail!(conduit::i18n::text("gemini.native_route")),
         Provider::OpenCode => bail!(conduit::i18n::text(
             "ccs.ccs_routing_is_not_yet_supported_for"
         )),
@@ -268,6 +270,7 @@ pub fn load_from(path: &Path) -> CcsCatalog {
             Provider::Codex => "codex",
             Provider::OpenCode => "opencode",
             Provider::Qoder => "qoder",
+            Provider::Gemini => "gemini",
         };
         let raw: rusqlite::Result<String> = connection.query_row(
             "SELECT settings_config FROM providers WHERE id = ?1 AND app_type = ?2",

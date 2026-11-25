@@ -7,6 +7,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod session_archive;
+pub use session_archive::{AutoArchiveDays, AutoArchiveSettings};
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AppearanceMode {
@@ -14,6 +17,35 @@ pub enum AppearanceMode {
     Light,
     #[default]
     Dark,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UiIconSize {
+    Compact,
+    #[default]
+    Standard,
+    Large,
+}
+
+impl UiIconSize {
+    pub const ALL: [Self; 3] = [Self::Compact, Self::Standard, Self::Large];
+
+    pub const fn scale(self) -> f32 {
+        match self {
+            Self::Compact => 0.8,
+            Self::Standard => 1.0,
+            Self::Large => 1.2,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Compact => "80%",
+            Self::Standard => "100%",
+            Self::Large => "120%",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,6 +79,12 @@ pub struct UiSettings {
     /// Session ids ordered by most recently opened.
     #[serde(default)]
     pub recent_sessions: Vec<u64>,
+    /// Optional packed RGBA display colors keyed by stable workspace path.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub workspace_colors: HashMap<PathBuf, u32>,
+    /// Pinned workspace paths; their relative order follows the saved manual order.
+    #[serde(default, skip_serializing_if = "HashSet::is_empty")]
+    pub pinned_workspaces: HashSet<PathBuf>,
     /// User bindings by stable action ID; an empty list explicitly unbinds an action.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub shortcuts: std::collections::BTreeMap<String, Vec<String>>,
@@ -64,15 +102,21 @@ pub struct UiSettings {
     /// Follow the system appearance or force light/dark mode.
     #[serde(default)]
     pub appearance: AppearanceMode,
+    /// Shared visual scale for functional interface icons.
+    #[serde(default)]
+    pub icon_size: UiIconSize,
     #[serde(default = "default_light_theme")]
     pub light_theme: String,
     #[serde(default = "default_dark_theme")]
     pub dark_theme: String,
     #[serde(default)]
     pub background: crate::wallpaper::Settings,
-    /// Collapse workspaces with no session activity during the last three days.
+    /// Collapse workspaces with no recent session activity.
     #[serde(default)]
     pub auto_collapse_inactive_workspaces: bool,
+    /// Number of inactive days before a workspace is automatically collapsed.
+    #[serde(default = "default_auto_collapse_inactive_days")]
+    pub auto_collapse_inactive_days: u32,
     /// Display running workspaces first, then the most recently active ones.
     #[serde(default = "default_auto_sort_workspaces")]
     pub auto_sort_workspaces: bool,
@@ -102,6 +146,12 @@ pub struct UiSettings {
     pub naming_mode: NamingMode,
     #[serde(default = "default_auto_rename")]
     pub auto_rename: bool,
+    /// Remove stale, unused sessions that have no conversation history.
+    #[serde(default)]
+    pub auto_cleanup_empty_sessions: bool,
+    /// Automatic archival policy and durable daily-check/restoration state.
+    #[serde(default)]
+    pub auto_archive: AutoArchiveSettings,
     /// CLI engine used to auto-name sessions; `None` follows the session's
     /// own engine.
     #[serde(default)]
@@ -178,6 +228,10 @@ fn default_sessions_per_workspace() -> usize {
 
 fn default_auto_sort_workspaces() -> bool {
     true
+}
+
+fn default_auto_collapse_inactive_days() -> u32 {
+    1
 }
 fn default_full_width_content() -> bool {
     true
@@ -260,16 +314,20 @@ impl Default for UiSettings {
             terminal_profile: Default::default(),
             terminal_height: default_terminal_height(),
             recent_sessions: Vec::new(),
+            workspace_colors: HashMap::new(),
+            pinned_workspaces: HashSet::new(),
             shortcuts: Default::default(),
             sessions_per_workspace: default_sessions_per_workspace(),
             default_session_permission: Default::default(),
             last_provider: None,
             performance_monitor: default_performance_monitor(),
             appearance: AppearanceMode::default(),
+            icon_size: UiIconSize::default(),
             light_theme: default_light_theme(),
             dark_theme: default_dark_theme(),
             background: Default::default(),
             auto_collapse_inactive_workspaces: false,
+            auto_collapse_inactive_days: default_auto_collapse_inactive_days(),
             auto_sort_workspaces: true,
             full_width_content: default_full_width_content(),
             files_open_beside: false,
@@ -281,6 +339,8 @@ impl Default for UiSettings {
             max_tabs: default_max_tabs(),
             naming_mode: NamingMode::default(),
             auto_rename: true,
+            auto_cleanup_empty_sessions: false,
+            auto_archive: AutoArchiveSettings::default(),
             naming_provider: None,
             naming_model: None,
             naming_channel: None,
@@ -379,8 +439,8 @@ impl EncouragerVerbosity {
     pub fn max_chars(self) -> usize {
         match self {
             Self::Short => 40,
-            Self::Normal => 100,
-            Self::Chatty => 180,
+            Self::Normal => 80,
+            Self::Chatty => 120,
         }
     }
 }
@@ -515,6 +575,12 @@ pub struct Store {
     pub cli_model_catalogs: HashMap<crate::domain::Provider, crate::models::ModelCatalog>,
     #[serde(default)]
     pub session_defaults: std::collections::HashMap<crate::domain::Provider, SessionDefaults>,
+    /// Maps workspace paths to history file stamps, allowing startup imports to skip unchanged files.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub history_file_stamps: std::collections::HashMap<
+        PathBuf,
+        std::collections::HashMap<PathBuf, crate::domain::HistoryFileStamp>,
+    >,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -670,15 +736,11 @@ impl Store {
                 {
                     std::env::temp_dir().join(format!("conduit-tests-{}", std::process::id()))
                 }
+                // Shared with crash.log. Keeps cargo run separate from the
+                // installed app, including both its state files and the
+                // data-directory instance lock.
                 #[cfg(not(test))]
-                PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_else(|| ".".into()))
-                    // Keep cargo run separate from the installed app, including
-                    // both its state files and the data-directory instance lock.
-                    .join(if cfg!(debug_assertions) {
-                        "Conduit-dev"
-                    } else {
-                        "Conduit"
-                    })
+                conduit::diagnostics::default_data_dir()
             });
         // Detached saves can outlive a test even with --test-threads=1. Give
         // each test thread its own files, including under an explicit data root.
@@ -734,6 +796,7 @@ impl Store {
                 ccs_catalog: None,
                 cli_model_catalogs: HashMap::new(),
                 session_defaults: Default::default(),
+                history_file_stamps: Default::default(),
             });
         }
         let mut state: Self = serde_json::from_slice(&fs::read(path)?).with_context(|| {
@@ -767,6 +830,14 @@ impl Store {
                     crate::workspace_files::display_path(&path).into(),
                     path.clone(),
                 );
+                if workspace.path != path
+                    && let Some(stamps) = state.history_file_stamps.remove(&workspace.path)
+                {
+                    state
+                        .history_file_stamps
+                        .entry(path.clone())
+                        .or_insert(stamps);
+                }
                 workspace.path = path;
             }
             if !paths.insert(workspace.path.clone()) {
@@ -819,6 +890,15 @@ impl Store {
                 restore_session(session);
             }
         }
+        // Pins use the same canonical identity as workspaces, including Windows
+        // display-path aliases. Ignore records for workspaces no longer present.
+        state.ui.pinned_workspaces = state
+            .ui
+            .pinned_workspaces
+            .into_iter()
+            .map(|path| usage_path_aliases.get(&path).cloned().unwrap_or(path))
+            .filter(|path| paths.contains(path))
+            .collect();
         for workspace in state
             .usage_ledger
             .observations
@@ -1368,6 +1448,7 @@ mod tests {
             ccs_catalog: None,
             cli_model_catalogs: HashMap::new(),
             session_defaults: Default::default(),
+            history_file_stamps: Default::default(),
             workspaces: vec![Workspace {
                 path: directory.clone(),
                 sessions: vec![],
@@ -1375,6 +1456,7 @@ mod tests {
         };
         store.save_to(&path).unwrap();
         store.workspaces[0].sessions.push(SessionRecord {
+            task_list: None,
             subagents: Default::default(),
             is_subagent: false,
             branching: Default::default(),
@@ -1411,6 +1493,7 @@ mod tests {
             finished_at: 1,
             input: Some(1_000),
             cached: None,
+            cache_write: None,
             output: Some(500),
             elapsed_ms: 12_000,
             incomplete: false,
@@ -1561,6 +1644,14 @@ mod tests {
         assert_eq!(store.ui.light_theme, "Conduit Light");
         assert_eq!(store.ui.dark_theme, "Conduit Dark");
         assert!(!store.ui.auto_collapse_inactive_workspaces);
+        assert_eq!(store.ui.auto_collapse_inactive_days, 1);
+        assert_eq!(UiSettings::default().auto_collapse_inactive_days, 1);
+        assert_eq!(
+            serde_json::from_value::<UiSettings>(serde_json::json!({}))
+                .unwrap()
+                .auto_collapse_inactive_days,
+            1
+        );
         assert!(store.ui.auto_sort_workspaces);
         assert!(
             serde_json::from_value::<UiSettings>(serde_json::json!({}))
@@ -1591,6 +1682,7 @@ mod tests {
                 .collapse_reasoning
         );
         assert_eq!(store.ui.naming_mode, NamingMode::FirstMessage);
+        assert!(!store.ui.auto_cleanup_empty_sessions);
         assert_eq!(store.ui.ui_font_family, None);
         assert_eq!(store.ui.ui_font_size, DEFAULT_UI_FONT_SIZE);
         assert_eq!(store.ui.chat_font_family, None);
@@ -1617,6 +1709,7 @@ mod tests {
         store.ui.light_theme = "Catppuccin Latte".into();
         store.ui.dark_theme = "Tokyo Night".into();
         store.ui.auto_collapse_inactive_workspaces = true;
+        store.ui.auto_collapse_inactive_days = 7;
         store.ui.auto_sort_workspaces = false;
         store.ui.max_tabs = 12;
         store.ui.full_width_content = false;
@@ -1627,6 +1720,7 @@ mod tests {
         store.ui.collapse_reasoning = true;
         store.ui.auto_collapse_question_history = true;
         store.ui.naming_mode = NamingMode::Latest;
+        store.ui.auto_cleanup_empty_sessions = true;
         store.ui.ui_font_family = Some("Microsoft YaHei".into());
         store.ui.ui_font_size = 18.0;
         store.ui.chat_font_family = Some("Segoe UI".into());
@@ -1641,6 +1735,7 @@ mod tests {
             "Write an English subject followed by a body.\nKeep it under 72 columns.".into();
         store.save_to(&path).unwrap();
         let reloaded = Store::load_from(&path).unwrap();
+        assert!(reloaded.ui.auto_cleanup_empty_sessions);
         assert!(reloaded.ui.encourager.enabled);
         assert!(reloaded.ui.encourager.pet_enabled);
         assert_eq!(
@@ -1675,6 +1770,7 @@ mod tests {
         assert_eq!(reloaded.ui.light_theme, "Catppuccin Latte");
         assert_eq!(reloaded.ui.dark_theme, "Tokyo Night");
         assert!(reloaded.ui.auto_collapse_inactive_workspaces);
+        assert_eq!(reloaded.ui.auto_collapse_inactive_days, 7);
         assert!(!reloaded.ui.auto_sort_workspaces);
         assert_eq!(reloaded.ui.max_tabs, 12);
         assert!(!reloaded.ui.full_width_content);
@@ -1811,6 +1907,84 @@ mod tests {
                 ..Default::default()
             };
             assert_eq!(settings.content_split_ratio(), 0.5);
+        }
+    }
+
+    #[test]
+    fn workspace_colors_default_empty_and_roundtrip_by_path() {
+        let old: UiSettings = serde_json::from_str("{}").unwrap();
+        assert!(old.workspace_colors.is_empty());
+
+        let path = PathBuf::from("/workspace/project");
+        let settings = UiSettings {
+            workspace_colors: HashMap::from([(path.clone(), 0x2a7fffff)]),
+            ..Default::default()
+        };
+        let restored: UiSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored.workspace_colors.get(&path), Some(&0x2a7fffff));
+    }
+
+    #[test]
+    fn pinned_workspaces_default_empty_and_roundtrip_by_path() {
+        let old: UiSettings = serde_json::from_str("{}").unwrap();
+        assert!(old.pinned_workspaces.is_empty());
+        assert!(
+            serde_json::to_value(&old)
+                .unwrap()
+                .get("pinned_workspaces")
+                .is_none()
+        );
+        let pins = HashSet::from([PathBuf::from("/a/project"), PathBuf::from("/b/project")]);
+        let settings = UiSettings {
+            pinned_workspaces: pins.clone(),
+            ..Default::default()
+        };
+        let restored: UiSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored.pinned_workspaces, pins);
+    }
+
+    #[test]
+    fn pinned_workspaces_follow_canonical_paths_and_drop_removed_records_on_reload() {
+        let directory =
+            std::env::temp_dir().join(format!("conduit-workspace-pins-{}", std::process::id()));
+        fs::create_dir_all(directory.join("child")).unwrap();
+        let path = directory.join("state.json");
+        let alias = directory.join("child").join("..");
+        let missing = directory.join("removed");
+        let value = serde_json::json!({
+            "version": 2,
+            "workspaces": [{"path": alias, "sessions": []}],
+            "ui": {"pinned_workspaces": [alias, missing]}
+        });
+        fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let restored = Store::load_from(&path).unwrap();
+        let canonical = directory.canonicalize().unwrap();
+        assert_eq!(restored.workspaces[0].path, canonical);
+        assert_eq!(restored.ui.pinned_workspaces, HashSet::from([canonical]));
+        restored.save_to(&path).unwrap();
+        let reloaded = Store::load_from(&path).unwrap();
+        assert_eq!(reloaded.ui.pinned_workspaces, restored.ui.pinned_workspaces);
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(directory.join("child")).unwrap();
+        // Empty workspaces create no transcript blobs.
+        fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    fn icon_size_defaults_for_existing_settings_and_roundtrips() {
+        let old: UiSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.icon_size, UiIconSize::Standard);
+
+        for size in UiIconSize::ALL {
+            let settings = UiSettings {
+                icon_size: size,
+                ..Default::default()
+            };
+            let encoded = serde_json::to_string(&settings).unwrap();
+            let restored: UiSettings = serde_json::from_str(&encoded).unwrap();
+            assert_eq!(restored.icon_size, size);
         }
     }
 

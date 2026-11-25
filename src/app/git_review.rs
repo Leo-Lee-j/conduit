@@ -70,7 +70,9 @@ impl GitDiffDialog {
     }
 
     fn review_target(&self) -> Target {
-        let source = if let Some(commit) = &self.commit {
+        let source = if let Some((source, _)) = &self.remote {
+            source.clone()
+        } else if let Some(commit) = &self.commit {
             format!(
                 "commit:{}:{}",
                 commit.parent.as_deref().unwrap_or("empty"),

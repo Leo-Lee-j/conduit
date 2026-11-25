@@ -19,7 +19,8 @@ fn pet_setting_row(
         .items_center()
         .justify_between()
         .gap(px(8.))
-        .py(px(10.))
+        .px_3()
+        .py_1()
         .child(
             div()
                 .flex_1()
@@ -55,16 +56,7 @@ impl ConduitApp {
         let refresh_view = view.clone();
         let default_view = view.clone();
         let default_active = self.store.ui.plugins.file_icon_theme.is_none();
-        let mut content = v_flex()
-            .id("settings-plugins-list")
-            .debug_selector(|| "settings-plugins-list".into())
-            .flex_1()
-            .min_h_0()
-            .h_full()
-            .w_full()
-            .overflow_y_scroll()
-            .p_4()
-            .gap_4()
+        let mut content = settings_scroll_area("settings-plugins-list")
             .child(
                 h_flex()
                     .flex_wrap()
@@ -111,12 +103,6 @@ impl ConduitApp {
                 v_flex()
                     .w_full()
                     .gap_2()
-                    .when(is_dark_mode(), |this| {
-                        this.p_4().rounded_md().bg(rgb(palette().surface_strong))
-                    })
-                    .when(!is_dark_mode(), |this| {
-                        this.py_3().border_y_1().border_color(rgb(palette().border))
-                    })
                     .child(
                         h_flex()
                             .gap_2()
@@ -136,12 +122,7 @@ impl ConduitApp {
                 v_flex()
                     .w_full()
                     .gap_3()
-                    .when(is_dark_mode(), |this| {
-                        this.p_4().rounded_md().bg(rgb(palette().surface_strong))
-                    })
-                    .when(!is_dark_mode(), |this| {
-                        this.py_3().border_b_1().border_color(rgb(palette().border))
-                    })
+                    .refine_style(&settings_group_style())
                     .child(
                         div()
                             .text_size(ui_text_size(14.))
@@ -185,14 +166,8 @@ impl ConduitApp {
                 v_flex()
                     .id(SharedString::from(format!("plugin-{id}")))
                     .debug_selector(move || format!("plugin-{id}"))
-                    .p_4()
+                    .refine_style(&settings_group_style())
                     .gap_3()
-                    .rounded_md()
-                    .bg(rgb(if is_dark_mode() {
-                        palette().surface_strong
-                    } else {
-                        palette().surface_hover
-                    }))
                     .child(
                         h_flex()
                             .flex_wrap()
@@ -515,47 +490,35 @@ impl ConduitApp {
             .id("programmer-encourager-settings")
             .debug_selector(|| "programmer-encourager-settings".into())
             .w_full()
-            .when(is_dark_mode(), |this| {
-                this.p(px(20.))
-                    .rounded_md()
-                    .bg(rgb(palette().surface_strong))
-            })
-            .when(!is_dark_mode(), |this| this.py_3())
+            .gap_2()
             .child(
                 h_flex()
-                    .w_full()
-                    .flex_wrap()
                     .gap_2()
-                    .items_center()
-                    .pb(px(16.))
-                    .border_b_1()
-                    .border_color(rgb(palette().border))
                     .child(Icon::new(FullIconName::Cat).small())
                     .child(
                         div()
-                            .flex_1()
-                            .text_size(ui_text_size(14.))
                             .font_medium()
+                            .text_size(ui_text_size(14.))
                             .child(conduit::i18n::text_static("encourager.title")),
-                    )
-                    .child(caption(conduit::i18n::text_static(if enabled {
-                        "encourager.enabled"
-                    } else {
-                        "encourager.disabled"
-                    })))
-                    .child(toggle),
+                    ),
             )
-            .child(pet_setting_row(
-                "encourager-pet-row",
-                "encourager.pet.disabled",
-                pet_switch_control(pet_toggle),
-            ))
             .child(
                 v_flex()
                     .w_full()
-                    .border_t_1()
-                    .border_color(rgb(palette().border))
-                    .py(px(6.))
+                    .refine_style(&settings_group_style())
+                    .px_0()
+                    .py_2()
+                    .gap_1()
+                    .child(pet_setting_row(
+                        "encourager-enable-row",
+                        "encourager.enable",
+                        pet_switch_control(toggle),
+                    ))
+                    .child(pet_setting_row(
+                        "encourager-pet-row",
+                        "encourager.pet.disabled",
+                        pet_switch_control(pet_toggle),
+                    ))
                     .child(pet_setting_row(
                         "encourager-service-row",
                         "encourager.setting.service",
@@ -568,7 +531,7 @@ impl ConduitApp {
                             ))
                             .id("encourager-service-hint")
                             .debug_selector(|| "encourager-service-hint".into())
-                            .pb(px(8.)),
+                            .px_3(),
                         )
                     })
                     .child(pet_setting_row(
@@ -585,24 +548,20 @@ impl ConduitApp {
                         "encourager-verbosity-row",
                         "encourager.setting.verbosity",
                         pet_picker_control(verbosity_picker),
-                    )),
-            )
-            .child(
-                v_flex()
-                    .w_full()
-                    .border_t_1()
-                    .border_color(rgb(palette().border))
-                    .pt(px(6.))
+                    ))
                     .child(pet_setting_row(
                         "encourager-context-row",
                         "encourager.setting.context",
                         pet_switch_control(context_button),
                     ))
-                    .child(caption(conduit::i18n::text_static(if include_context {
-                        "encourager.setting.privacy_context_on"
-                    } else {
-                        "encourager.setting.privacy_context_off"
-                    }))),
+                    .child(
+                        caption(conduit::i18n::text_static(if include_context {
+                            "encourager.setting.privacy_context_on"
+                        } else {
+                            "encourager.setting.privacy_context_off"
+                        }))
+                        .px_3(),
+                    ),
             )
             .into_any_element()
     }

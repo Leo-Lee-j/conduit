@@ -21,34 +21,18 @@ pub(super) fn management_badge(label: impl Into<SharedString>, active: bool) -> 
         .child(label.into())
 }
 
-fn management_actions(actions: AnyElement) -> Div {
-    h_flex()
-        .debug_selector(|| "settings-page-actions".into())
-        .w_full()
-        .flex_shrink_0()
-        .justify_end()
-        .px(px(settings_content_inset()))
-        .py(px(8.))
-        .child(actions)
-}
-
-fn engine_tabs(
+pub(super) fn engine_tabs(
     engine: Provider,
     extensions: bool,
-    columns: u16,
     view: Entity<ConduitApp>,
 ) -> AnyElement {
-    let mut tabs = div()
-        .grid()
-        .grid_cols(columns)
+    let mut tabs = h_flex()
         .id("management-engines")
         .debug_selector(|| "management-engines".into())
-        .w_full()
-        .max_w(rems(36.))
-        .gap_1()
-        .p_1()
-        .rounded_lg()
-        .bg(rgb(palette().surface_strong));
+        .flex_1()
+        .min_w_0()
+        .flex_wrap()
+        .gap_1();
     for (index, candidate) in Provider::ALL.into_iter().enumerate() {
         let view = view.clone();
         let selected = candidate == engine;
@@ -64,8 +48,8 @@ fn engine_tabs(
                 .tooltip(candidate.label())
                 .ghost()
                 .selected(selected)
-                .w_full()
-                .min_w_0()
+                .flex_shrink_0()
+                .px_3()
                 .h(px(32.))
                 .rounded_md()
                 .child(
@@ -83,25 +67,7 @@ fn engine_tabs(
                 })
                 .on_click(move |_, window, cx| {
                     view.update(cx, |app, cx| {
-                        if extensions {
-                            app.extensions_ui.engine = candidate;
-                            app.extensions_ui.feedback = None;
-                            app.ensure_extensions(window, cx, false);
-                        } else {
-                            app.connection_settings.engine = candidate;
-                            app.connection_settings.service_selection = None;
-                            app.connection_settings.service_detail_open = false;
-                            app.connection_settings.service_tab =
-                                super::services::DetailTab::Models;
-                            app.connection_settings.models_expanded = false;
-                            app.connection_settings.sources_expanded = false;
-                            app.connection_settings.model_limit = 50;
-                            app.connection_settings
-                                .model_search
-                                .update(cx, |input, cx| input.set_value("", window, cx));
-                            app.settings_ui.group = None;
-                        }
-                        cx.notify();
+                        app.select_settings_engine(candidate, window, cx);
                     })
                 }),
         );
@@ -109,82 +75,63 @@ fn engine_tabs(
     tabs.into_any_element()
 }
 
-/// Give engine choices and page actions separate rows so the full set of
-/// labels can wrap without clipping either controls or content.
+/// Engine choices and page modes share a toolbar, wrapping when space is limited.
 pub(super) fn management_toolbar(
     engine: Provider,
     extensions: bool,
+    mode_tabs: Option<AnyElement>,
     actions: Option<AnyElement>,
-    available_width: f32,
-    font_size: f32,
     view: Entity<ConduitApp>,
 ) -> AnyElement {
-    management_toolbar_padding(
-        engine,
-        extensions,
-        actions,
-        available_width,
-        font_size,
-        view,
-        (12., 8.),
-    )
-}
-
-/// Let content-dense pages align the engine tabs with their own page inset.
-pub(super) fn management_toolbar_inset(
-    engine: Provider,
-    extensions: bool,
-    actions: Option<AnyElement>,
-    available_width: f32,
-    font_size: f32,
-    view: Entity<ConduitApp>,
-    inset: f32,
-) -> AnyElement {
-    management_toolbar_padding(
-        engine,
-        extensions,
-        actions,
-        available_width,
-        font_size,
-        view,
-        (inset, inset),
-    )
-}
-
-fn management_toolbar_padding(
-    engine: Provider,
-    extensions: bool,
-    actions: Option<AnyElement>,
-    available_width: f32,
-    font_size: f32,
-    view: Entity<ConduitApp>,
-    (horizontal_inset, vertical_inset): (f32, f32),
-) -> AnyElement {
-    // Budget for complete labels, icons, button padding and grid gaps. Change
-    // the column count with the pane width and UI font, never clip a label.
-    let inner_width = (available_width - horizontal_inset * 2.).max(0.);
-    let scale = font_size / DEFAULT_UI_FONT_SIZE;
-    let columns = if inner_width >= 548. * scale {
-        4
-    } else if inner_width >= 272. * scale {
-        2
-    } else {
-        1
-    };
-    let tabs = engine_tabs(engine, extensions, columns, view);
-    v_flex()
+    let inset = settings_content_inset();
+    let tabs = engine_tabs(engine, extensions, view);
+    h_flex()
+        .debug_selector(|| "management-engine-bar".into())
         .w_full()
+        .min_w_0()
         .flex_shrink_0()
-        .child(
-            div()
-                .debug_selector(|| "management-engine-bar".into())
-                .w_full()
-                .px(px(horizontal_inset))
-                .py(px(vertical_inset))
-                .child(tabs),
-        )
-        .when_some(actions, |bar, actions| {
-            bar.child(management_actions(actions))
-        })
+        .flex_wrap()
+        .items_center()
+        .gap_2()
+        .px(px(inset))
+        .pt(px(inset))
+        .child(tabs)
+        .when_some(mode_tabs, |bar, modes| bar.child(modes))
+        .when_some(actions, |bar, actions| bar.child(actions))
         .into_any_element()
+}
+
+impl ConduitApp {
+    /// Browsing is shared across settings pages and never changes session defaults.
+    pub(super) fn select_settings_engine(
+        &mut self,
+        engine: Provider,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.connection_settings.engine == engine && self.extensions_ui.engine == engine {
+            return;
+        }
+        if self.connection_settings.engine != engine {
+            self.connection_settings.service_selection = None;
+            self.connection_settings.service_detail_open = false;
+            self.connection_settings.service_tab = super::services::DetailTab::Models;
+            self.connection_settings.models_expanded = false;
+            self.connection_settings.sources_expanded = false;
+            self.connection_settings.model_limit = 50;
+            self.connection_settings
+                .model_search
+                .update(cx, |input, cx| {
+                    input.set_value("", window, cx);
+                });
+        }
+        self.connection_settings.engine = engine;
+        self.extensions_ui.engine = engine;
+        self.extensions_ui.feedback = None;
+        self.settings_ui.group = None;
+        if matches!(self.settings_ui.page, 4 | 9) {
+            self.ensure_extensions(window, cx, false);
+        }
+        cx.notify();
+    }
 }

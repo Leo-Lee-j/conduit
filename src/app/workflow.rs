@@ -40,6 +40,7 @@ pub(super) struct WorkflowPanel {
     through: Entity<InputState>,
     context: Entity<TextareaState>,
     source_session: Option<u64>,
+    handoff_drafts: BTreeMap<Option<u64>, (String, String)>,
     editing: Option<u64>,
     show_archived: bool,
     error: Option<String>,
@@ -51,10 +52,18 @@ impl ConduitApp {
     pub(super) fn activate_workflow(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.workflow_panels
             .retain(|path, _| self.store.workspaces.iter().any(|w| &w.path == path));
-        if let Some(workspace) = self.selected_workspace_path()
-            && !self.workflow_panels.contains_key(&workspace)
-        {
-            self.open_workflow_at(None, None, window, cx);
+        if let Some(workspace) = self.selected_workspace_path() {
+            if let Some(panel) = self.workflow_panels.get(&workspace).cloned() {
+                let source = self.selected_session;
+                let through = source
+                    .and_then(|id| self.session(id))
+                    .map_or(0, |s| s.messages.len());
+                panel.update(cx, |panel, cx| {
+                    panel.select_source(source, through, window, cx)
+                });
+            } else {
+                self.open_workflow_at(None, None, window, cx);
+            }
         }
     }
 
@@ -141,55 +150,78 @@ impl ConduitApp {
             workflow::handoff(&workspace, session, index)
         });
         let host = cx.entity();
-        let view = cx.new(|cx| {
-            let title =
-                cx.new(|cx| InputState::new(window, cx).placeholder(label("workflow.name")));
-            let goal =
-                cx.new(|cx| TextareaState::new(window, cx).placeholder(label("workflow.goal")));
-            let criteria = cx.new(|cx| {
-                TextareaState::new(window, cx).placeholder(label("workflow.criteria_hint"))
+        let view = self
+            .workflow_panels
+            .get(&workspace)
+            .cloned()
+            .unwrap_or_else(|| {
+                cx.new(|cx| {
+                    let title = cx
+                        .new(|cx| InputState::new(window, cx).placeholder(label("workflow.name")));
+                    let goal = cx.new(|cx| {
+                        TextareaState::new(window, cx).placeholder(label("workflow.goal"))
+                    });
+                    let criteria = cx.new(|cx| {
+                        TextareaState::new(window, cx).placeholder(label("workflow.criteria_hint"))
+                    });
+                    let preset_name = cx
+                        .new(|cx| InputState::new(window, cx).placeholder(label("workflow.name")));
+                    let preset_prompt = cx.new(|cx| {
+                        TextareaState::new(window, cx).placeholder(label("workflow.goal"))
+                    });
+                    let through =
+                        cx.new(|cx| InputState::new(window, cx).default_value(through.to_string()));
+                    let context = cx.new(|cx| {
+                        TextareaState::new(window, cx).placeholder(label("workflow.context_hint"))
+                    });
+                    let subscriptions = vec![
+                        cx.observe(&host, |_, _, cx| cx.notify()),
+                        cx.observe(&through, |_, _, cx| cx.notify()),
+                    ];
+                    WorkflowPanel {
+                        host: host.downgrade(),
+                        workspace: workspace.clone(),
+                        page: if message.is_some() {
+                            Page::Handoff
+                        } else {
+                            Page::Tasks
+                        },
+                        title,
+                        goal,
+                        criteria,
+                        preset_name,
+                        preset_prompt,
+                        through,
+                        context,
+                        source_session,
+                        handoff_drafts: BTreeMap::new(),
+                        editing: None,
+                        show_archived: archived,
+                        error: None,
+                        shown: 30,
+                        _subscriptions: subscriptions,
+                    }
+                })
             });
-            let preset_name =
-                cx.new(|cx| InputState::new(window, cx).placeholder(label("workflow.name")));
-            let preset_prompt =
-                cx.new(|cx| TextareaState::new(window, cx).placeholder(label("workflow.goal")));
-            let through =
-                cx.new(|cx| InputState::new(window, cx).default_value(through.to_string()));
-            let context = cx.new(|cx| {
-                TextareaState::new(window, cx).placeholder(label("workflow.context_hint"))
-            });
-            let subscriptions = vec![
-                cx.observe(&host, |_, _, cx| cx.notify()),
-                cx.observe(&through, |_, _, cx| cx.notify()),
-            ];
-            WorkflowPanel {
-                host: host.downgrade(),
-                workspace: workspace.clone(),
-                page: if message.is_some() {
-                    Page::Handoff
-                } else {
-                    Page::Tasks
-                },
-                title,
-                goal,
-                criteria,
-                preset_name,
-                preset_prompt,
-                through,
-                context,
-                source_session,
-                editing: None,
-                show_archived: archived,
-                error: None,
-                shown: 30,
-                _subscriptions: subscriptions,
-            }
-        });
         if let Some(handoff) = handoff {
-            view.update(cx, |panel, cx| panel.apply_handoff(handoff, window, cx));
+            view.update(cx, |panel, cx| {
+                panel.select_source(source_session, through, window, cx);
+                panel.page = Page::Handoff;
+                panel.through.update(cx, |input, cx| {
+                    input.set_value(through.to_string(), window, cx)
+                });
+                panel.apply_handoff(handoff, window, cx);
+            });
         }
-        if selected_task.is_some() {
-            view.update(cx, |panel, cx| panel.fill_task(selected_task, window, cx));
+        if let Some(task) = selected_task {
+            view.update(cx, |panel, cx| {
+                panel.page = Page::Tasks;
+                panel.show_archived = archived;
+                if panel.editing != Some(task.id) {
+                    panel.fill_task(Some(task), window, cx);
+                }
+                cx.notify();
+            });
         }
         self.workflow_panels.insert(workspace, view);
         self.open_right_view(&ViewId::new(builtins::WORKFLOW).unwrap(), window, cx);
@@ -264,6 +296,49 @@ impl ConduitApp {
 }
 
 impl WorkflowPanel {
+    fn select_source(
+        &mut self,
+        source: Option<u64>,
+        through: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if source == self.source_session {
+            return;
+        }
+        self.handoff_drafts.insert(
+            self.source_session,
+            (
+                self.through.read(cx).value().to_string(),
+                self.context.read(cx).value().to_string(),
+            ),
+        );
+        self.source_session = source;
+        let (through, context) = self
+            .handoff_drafts
+            .remove(&source)
+            .unwrap_or_else(|| (through.to_string(), String::new()));
+        self.through
+            .update(cx, |input, cx| input.set_value(through, window, cx));
+        self.context
+            .update(cx, |input, cx| input.set_value(context, window, cx));
+        self.error = None;
+        cx.notify();
+    }
+
+    fn preset_configuration(&self, app: &ConduitApp) -> (ComposerSelection, PermissionLevel) {
+        let session = app
+            .selected_session
+            .filter(|_| app.selected_workspace_path().as_ref() == Some(&self.workspace))
+            .and_then(|id| app.session(id));
+        (
+            session
+                .map(ComposerSelection::from_session)
+                .unwrap_or_else(|| app.default_selection(app.new_session_provider)),
+            session.map_or(app.pending_permission, |s| s.permission),
+        )
+    }
+
     fn host(&self) -> Result<Entity<ConduitApp>, String> {
         self.host
             .upgrade()
@@ -493,11 +568,7 @@ impl WorkflowPanel {
         let name = self.preset_name.read(cx).value().to_string();
         let prompt = self.preset_prompt.read(cx).value().to_string();
         let result = self.write(cx, |app, _| {
-            let session = self.source_session.and_then(|id| app.session(id));
-            let selection = session
-                .map(ComposerSelection::from_session)
-                .unwrap_or_else(|| app.default_selection(app.new_session_provider));
-            let permission = session.map_or(app.pending_permission, |s| s.permission);
+            let (selection, permission) = self.preset_configuration(app);
             app.store.workflow.save_preset(Preset {
                 id: 0,
                 workspace: self.workspace.clone(),
@@ -909,10 +980,7 @@ impl WorkflowPanel {
             .ok()
             .map(|host| {
                 let app = host.read(cx);
-                let s = self.source_session.and_then(|id| app.session(id));
-                let selection = s
-                    .map(ComposerSelection::from_session)
-                    .unwrap_or_else(|| app.default_selection(app.new_session_provider));
+                let (selection, permission) = self.preset_configuration(app);
                 format!(
                     "{} · {} · {}",
                     selection.engine.label(),
@@ -920,7 +988,7 @@ impl WorkflowPanel {
                         .model
                         .as_deref()
                         .unwrap_or(label("workflow.default_model")),
-                    s.map_or(app.pending_permission, |s| s.permission).label()
+                    permission.label()
                 )
             })
             .unwrap_or_default();

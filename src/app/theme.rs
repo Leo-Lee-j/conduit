@@ -7,6 +7,7 @@ use std::rc::Rc;
 /// Conduit themes retain their palettes for existing installations.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) struct Palette {
+    pub(super) restrained_projects: bool,
     pub(super) canvas: u32,
     pub(super) sidebar_bg: u32,
     pub(super) document_tab_bar_bg: u32,
@@ -37,6 +38,7 @@ pub(super) struct Palette {
     pub(super) warning_bg: u32,
     pub(super) warning_icon_bg: u32,
     pub(super) warning_text: u32,
+    pub(super) context_warning_fill: u32,
     pub(super) warning_chip_bg: u32,
     pub(super) warning_chip_text: u32,
     pub(super) warning_muted: u32,
@@ -48,6 +50,7 @@ pub(super) struct Palette {
 }
 
 const DARK_PALETTE: Palette = Palette {
+    restrained_projects: false,
     canvas: 0x0e0e10,
     sidebar_bg: 0x131315,
     document_tab_bar_bg: 0x1b1b1e,
@@ -78,6 +81,7 @@ const DARK_PALETTE: Palette = Palette {
     warning_bg: 0x1d1a14,
     warning_icon_bg: 0x2a2317,
     warning_text: 0xe3b96b,
+    context_warning_fill: 0xe3b96b,
     warning_chip_bg: 0x332b1b,
     warning_chip_text: 0xd6b26b,
     warning_muted: 0x9c9284,
@@ -89,6 +93,7 @@ const DARK_PALETTE: Palette = Palette {
 };
 
 const LIGHT_PALETTE: Palette = Palette {
+    restrained_projects: false,
     canvas: 0xf7f7f8,
     sidebar_bg: 0xf1f1f3,
     document_tab_bar_bg: 0xeaeaed,
@@ -119,6 +124,7 @@ const LIGHT_PALETTE: Palette = Palette {
     warning_bg: 0xfff8e9,
     warning_icon_bg: 0xf9eed2,
     warning_text: 0x8a5b00,
+    context_warning_fill: 0x8a5b00,
     warning_chip_bg: 0xf5e8c8,
     warning_chip_text: 0x785200,
     warning_muted: 0x8c7c5d,
@@ -155,7 +161,7 @@ pub(super) fn chrome_background(color: u32) -> gpui_kit::Rgba {
 static ACTIVE_PALETTE: std::sync::RwLock<Palette> = std::sync::RwLock::new(DARK_PALETTE);
 
 pub(super) fn palette() -> Palette {
-    *ACTIVE_PALETTE.read().unwrap()
+    *ACTIVE_PALETTE.read().unwrap_or_else(|e| e.into_inner())
 }
 
 pub(super) fn sidebar_session_text_color() -> u32 {
@@ -169,9 +175,44 @@ pub(super) fn is_dark_mode() -> bool {
     DARK_MODE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Project identity follows the paired themes without rewriting saved colors.
+pub(super) fn project_marker_color(path: &std::path::Path, stored: Option<u32>) -> Option<u32> {
+    if !palette().restrained_projects {
+        return stored;
+    }
+    let hue = if let Some(color) = stored {
+        let color = gpui_kit::Hsla::from(gpui_kit::rgba(color));
+        if color.h < 0.12 || color.h > 0.84 {
+            0.70
+        } else {
+            color.h
+        }
+    } else {
+        let hash = path
+            .to_string_lossy()
+            .bytes()
+            .fold(2166136261_u32, |hash, byte| {
+                (hash ^ u32::from(byte)).wrapping_mul(16777619)
+            });
+        [0.62, 0.46, 0.70, 0.34, 0.54, 0.22][hash as usize % 6]
+    };
+    let (saturation, lightness) = if is_dark_mode() {
+        (0.48, 0.68)
+    } else {
+        (0.28, 0.52)
+    };
+    let color: gpui_kit::Rgba = gpui_kit::hsla(hue, saturation, lightness, 1.).into();
+    Some(
+        ((color.r * 255.).round() as u32) << 24
+            | ((color.g * 255.).round() as u32) << 16
+            | ((color.b * 255.).round() as u32) << 8
+            | 255,
+    )
+}
+
 pub(crate) fn set_palette(mode: gpui_kit::component::ThemeMode) {
     DARK_MODE.store(mode.is_dark(), std::sync::atomic::Ordering::Relaxed);
-    *ACTIVE_PALETTE.write().unwrap() = palette_for_mode(mode);
+    *ACTIVE_PALETTE.write().unwrap_or_else(|e| e.into_inner()) = palette_for_mode(mode);
 }
 
 pub(super) fn palette_for_mode(mode: gpui_kit::component::ThemeMode) -> Palette {
@@ -184,6 +225,8 @@ pub(super) fn palette_for_mode(mode: gpui_kit::component::ThemeMode) -> Palette 
 
 const THEME_PACKS: &[&str] = &[
     include_str!("../../assets/themes/conduit.json"),
+    include_str!("../../assets/themes/conduit-lights.json"),
+    include_str!("../../assets/themes/conduit-darks.json"),
     include_str!("../../assets/themes/adventure.json"),
     include_str!("../../assets/themes/alduin.json"),
     include_str!("../../assets/themes/asciinema.json"),
@@ -217,6 +260,7 @@ pub(crate) fn install_theme_packs(cx: &mut gpui_kit::App) {
     }
     for pack in THEME_PACKS {
         if let Err(error) = ThemeRegistry::global_mut(cx).load_themes_from_str(pack) {
+            conduit::diagnostics::record_crash("bundled themes", &format!("{error}"));
             eprintln!(
                 "{}",
                 conduit::i18n::format(
@@ -266,6 +310,10 @@ pub(crate) fn apply_theme(mode: ThemeMode, light: &str, dark: &str, cx: &mut gpu
         || current.dark_theme.name != dark.name;
     if changed {
         Theme::update(cx, |theme| {
+            // Theme packs may disable shadows; restore the default when switching away.
+            theme.shadow = if mode.is_dark() { &dark } else { &light }
+                .shadow
+                .unwrap_or(true);
             theme.light_theme = light;
             theme.dark_theme = dark;
         });
@@ -277,8 +325,12 @@ pub(crate) fn apply_theme(mode: ThemeMode, light: &str, dark: &str, cx: &mut gpu
         current.theme_name().as_ref(),
         "Conduit Light" | "Conduit Dark"
     ) {
-        *ACTIVE_PALETTE.write().unwrap() = palette_from_theme(current);
+        *ACTIVE_PALETTE.write().unwrap_or_else(|e| e.into_inner()) = palette_from_theme(current);
     }
+}
+
+pub(crate) fn apply_icon_size(size: crate::store::UiIconSize, cx: &mut gpui_kit::App) {
+    Theme::update(cx, |theme| theme.icon_scale = size.scale());
 }
 
 pub(super) fn theme_preview(name: &str, mode: ThemeMode, cx: &gpui_kit::App) -> Palette {
@@ -347,6 +399,16 @@ fn readable(color: u32, backgrounds: &[u32]) -> u32 {
 }
 
 fn palette_from_theme(theme: &Theme) -> Palette {
+    let restrained_projects = matches!(
+        theme.theme_name().as_ref(),
+        "Graphite & Indigo"
+            | "Warm Paper & Terracotta"
+            | "Slate & Teal"
+            | "Graphite & Indigo Dark"
+            | "Warm Charcoal & Terracotta"
+            | "Deep Slate & Teal"
+    );
+    let dark_status = restrained_projects && theme.is_dark();
     let canvas = color_on(theme.background, if theme.is_dark() { 0 } else { 0xffffff });
     let surface = color_on(theme.popover, canvas);
     let sidebar_bg = color_on(theme.tab_bar, canvas);
@@ -360,14 +422,34 @@ fn palette_from_theme(theme: &Theme) -> Palette {
     };
     let surface_hover = color_on(theme.secondary_hover, canvas);
     let surface_strong = color_on(theme.group_box, canvas);
-    let backgrounds = [canvas, sidebar_bg, surface, surface_hover, surface_strong];
+    let selected = if dark_status {
+        color_on(theme.list_active, canvas)
+    } else {
+        canvas
+    };
+    let backgrounds = [
+        canvas,
+        sidebar_bg,
+        surface,
+        surface_hover,
+        surface_strong,
+        selected,
+    ];
     let text = readable(color_on(theme.foreground, canvas), &backgrounds);
     let muted = readable(color_on(theme.muted_foreground, canvas), &backgrounds);
     let primary = readable(color_on(theme.primary, canvas), &backgrounds);
-    let success = readable(color_on(theme.success, canvas), &backgrounds);
-    let danger = readable(color_on(theme.danger, canvas), &backgrounds);
-    let warning = readable(color_on(theme.warning, canvas), &backgrounds);
+    // The paired dark themes use deep status fills with separate bright text.
+    let status_text = |fill, foreground| {
+        readable(
+            color_on(if dark_status { foreground } else { fill }, canvas),
+            &backgrounds,
+        )
+    };
+    let success = status_text(theme.success, theme.success_foreground);
+    let danger = status_text(theme.danger, theme.danger_foreground);
+    let warning = status_text(theme.warning, theme.warning_foreground);
     Palette {
+        restrained_projects,
         canvas,
         sidebar_bg,
         document_tab_bar_bg,
@@ -383,8 +465,16 @@ fn palette_from_theme(theme: &Theme) -> Palette {
         activity_completed: success,
         focus: color_on(theme.ring, canvas),
         on_text: canvas,
-        highlight_text: warning,
-        highlight_bg: blend(warning, canvas, 0.12),
+        highlight_text: if restrained_projects {
+            primary
+        } else {
+            warning
+        },
+        highlight_bg: if restrained_projects {
+            color_on(theme.list_active, canvas)
+        } else {
+            blend(warning, canvas, 0.12)
+        },
         diff_add_text: success,
         diff_remove_text: danger,
         inline_code_bg: color_on(theme.secondary, canvas),
@@ -392,12 +482,27 @@ fn palette_from_theme(theme: &Theme) -> Palette {
         git_modified_text: warning,
         git_deleted_text: danger,
         danger_border: blend(danger, canvas, 0.4),
-        danger_bg: blend(danger, canvas, 0.08),
+        danger_bg: if dark_status {
+            color_on(theme.danger, canvas)
+        } else {
+            blend(danger, canvas, 0.08)
+        },
         danger_text: danger,
         warning_border: blend(warning, canvas, 0.4),
-        warning_bg: blend(warning, canvas, 0.06),
+        warning_bg: if dark_status {
+            color_on(theme.warning, canvas)
+        } else {
+            blend(warning, canvas, 0.06)
+        },
         warning_icon_bg: blend(warning, canvas, 0.12),
         warning_text: warning,
+        context_warning_fill: if dark_status {
+            0xe0a33a
+        } else if restrained_projects {
+            0xd98a12
+        } else {
+            warning
+        },
         warning_chip_bg: blend(warning, canvas, 0.12),
         warning_chip_text: warning,
         warning_muted: muted,
@@ -469,4 +574,65 @@ pub(super) fn theme_choices(mode: ThemeMode, cx: &gpui_kit::App) -> Vec<ThemeCho
         .collect();
     choices.sort_by_key(|theme| (theme.name.as_ref() != default, theme.name.to_lowercase()));
     choices
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dark_theme_status_text_and_selected_rows_remain_readable() {
+        let pack: gpui_kit::component::ThemeSet =
+            serde_json::from_str(include_str!("../../assets/themes/conduit-darks.json")).unwrap();
+        for config in pack.themes {
+            let mut theme = Theme::default();
+            theme.apply_config(&Rc::new(config));
+            let palette = palette_from_theme(&theme);
+            assert!(palette.restrained_projects);
+            for (fill, foreground, projected) in [
+                (
+                    theme.success,
+                    theme.success_foreground,
+                    palette.git_added_text,
+                ),
+                (theme.danger, theme.danger_foreground, palette.danger_text),
+                (
+                    theme.warning,
+                    theme.warning_foreground,
+                    palette.warning_text,
+                ),
+            ] {
+                let fill = color_on(fill, palette.canvas);
+                let foreground = color_on(foreground, palette.canvas);
+                assert_eq!(projected, foreground, "{} status hue", theme.theme_name());
+                assert!(
+                    contrast(projected, fill) >= 4.5,
+                    "{} status text",
+                    theme.theme_name()
+                );
+            }
+            for background in [
+                palette.canvas,
+                palette.sidebar_bg,
+                palette.surface,
+                palette.surface_hover,
+                palette.surface_strong,
+                palette.highlight_bg,
+            ] {
+                for foreground in [palette.text, palette.muted, palette.highlight_text] {
+                    assert!(
+                        contrast(foreground, background) >= 4.5,
+                        "{}: {foreground:06x} on {background:06x}",
+                        theme.theme_name()
+                    );
+                }
+            }
+            assert!(
+                contrast(
+                    color_on(theme.primary_foreground, palette.canvas),
+                    color_on(theme.primary, palette.canvas),
+                ) >= 4.5
+            );
+        }
+    }
 }

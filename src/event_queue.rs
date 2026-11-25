@@ -103,6 +103,7 @@ pub(crate) fn event_bytes(event: &Event) -> usize {
         Event::ApprovalResolved { id, .. } => id.len(),
         Event::Finished { error, .. } => error.as_ref().map_or(0, String::len),
         Event::Plan { steps } => steps.iter().map(|(a, b)| a.len() + b.len() + 64).sum(),
+        Event::Tasks(change) => change.bytes(),
         Event::AcpConfig(value) => value.to_string().len(),
         Event::CommandCatalog(result) => match result {
             Ok(items) => items.iter().map(crate::commands::Descriptor::bytes).sum(),
@@ -125,7 +126,7 @@ impl Drop for Sender {
 }
 impl Sender {
     pub(crate) fn send(&self, event: Event) -> Result<(), Box<mpsc::SendError<Event>>> {
-        let mut queue = self.0.queue.lock().unwrap();
+        let mut queue = self.0.queue.lock().unwrap_or_else(|e| e.into_inner());
         if !queue.receiver {
             return Err(Box::new(mpsc::SendError(event)));
         }
@@ -263,7 +264,7 @@ impl Sender {
 }
 impl Receiver {
     pub(crate) fn try_recv(&self) -> Result<Event, mpsc::TryRecvError> {
-        let mut queue = self.0.queue.lock().unwrap();
+        let mut queue = self.0.queue.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(event) = queue.pop_front() {
             return Ok(event);
         }
@@ -276,7 +277,7 @@ impl Receiver {
     #[cfg(test)]
     pub(crate) fn recv_timeout(&self, timeout: Duration) -> Result<Event, mpsc::RecvTimeoutError> {
         let until = Instant::now() + timeout;
-        let mut queue = self.0.queue.lock().unwrap();
+        let mut queue = self.0.queue.lock().unwrap_or_else(|e| e.into_inner());
         loop {
             if let Some(event) = queue.pop_front() {
                 return Ok(event);
@@ -288,13 +289,18 @@ impl Receiver {
             if remaining.is_zero() {
                 return Err(mpsc::RecvTimeoutError::Timeout);
             }
-            queue = self.0.ready.wait_timeout(queue, remaining).unwrap().0;
+            queue = self
+                .0
+                .ready
+                .wait_timeout(queue, remaining)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
         }
     }
 }
 impl Drop for Receiver {
     fn drop(&mut self) {
-        let mut queue = self.0.queue.lock().unwrap();
+        let mut queue = self.0.queue.lock().unwrap_or_else(|e| e.into_inner());
         queue.receiver = false;
         queue.events.clear();
         queue.bytes = 0;

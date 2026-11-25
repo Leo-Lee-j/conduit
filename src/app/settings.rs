@@ -80,26 +80,121 @@ fn settings_actions_style() -> StyleRefinement {
         .bg(chrome_background(palette().canvas))
 }
 
-/// Section headings and aligned rows share the same quiet surface in every theme.
-/// The library's group title stays unset to avoid a duplicate navigation tree.
-pub(super) fn settings_section(title: impl Into<SharedString>) -> SettingGroup {
-    let title = title.into();
-    let keywords = [title.clone()];
-    SettingGroup::new().variant(GroupBoxVariant::Normal).item(
-        SettingItem::render(move |_, _, _| {
-            div()
-                .w_full()
-                .pb_2()
-                .border_b_1()
-                .border_color(rgb(palette().border))
-                .text_size(ui_text_size(13.))
-                .line_height(ui_text_size(20.))
-                .font_medium()
-                .text_color(rgb(palette().text))
-                .child(title.clone())
+/// A route supplies its body and any persistent controls. The workspace owns
+/// the size and placement of both, including for global search results.
+struct SettingsContent {
+    toolbar: Option<AnyElement>,
+    body: AnyElement,
+}
+
+impl SettingsContent {
+    fn new(body: impl IntoElement) -> Self {
+        Self {
+            toolbar: None,
+            body: body.into_any_element(),
+        }
+    }
+
+    fn with_toolbar(mut self, toolbar: impl IntoElement) -> Self {
+        self.toolbar = Some(toolbar.into_any_element());
+        self
+    }
+
+    fn into_element(self) -> impl IntoElement {
+        v_flex()
+            .id("settings-content")
+            .debug_selector(|| "settings-content".into())
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .w_full()
+            .when_some(self.toolbar, |content, toolbar| {
+                content.child(div().w_full().min_w_0().flex_shrink_0().child(toolbar))
+            })
+            .child(div().w_full().min_w_0().flex_1().min_h_0().child(self.body))
+    }
+}
+
+fn settings_controls(
+    id: impl Into<ElementId>,
+    page: gpui_kit::component::setting::SettingPage,
+) -> Settings {
+    Settings::new(id)
+        .sidebar_width(px(0.))
+        .sidebar_size_range(px(0.)..px(0.))
+        .sidebar_style(&StyleRefinement::default().hidden())
+        .with_group_variant(GroupBoxVariant::Normal)
+        .page(page)
+}
+
+fn settings_scroll_area(id: &'static str) -> Stateful<Div> {
+    v_flex()
+        .id(id)
+        .debug_selector(move || id.into())
+        .size_full()
+        .min_h_0()
+        .min_w_0()
+        .overflow_y_scroll()
+        .p_4()
+        .gap_3()
+}
+
+fn settings_group_style() -> StyleRefinement {
+    StyleRefinement::default()
+        .min_w_0()
+        .rounded_lg()
+        .border_1()
+        .border_color(settings_group_border())
+        .p_3()
+}
+
+fn settings_group_border() -> Rgba {
+    gpui_kit::rgba((palette().border << 8) | 0xc4)
+}
+
+fn settings_accordion(
+    id: impl Into<ElementId>,
+    title: impl IntoElement,
+    open: bool,
+    content: impl IntoElement,
+    on_toggle: impl Fn(bool, &mut Window, &mut App) + 'static,
+) -> gpui_kit::component::accordion::Accordion {
+    gpui_kit::component::accordion::Accordion::new(id)
+        .bordered(false)
+        .h_auto()
+        .w_full()
+        .item(|item| {
+            item.open(open)
+                .bg(gpui_kit::rgba(0))
+                .title_style(StyleRefinement::default().px_1())
+                .content_style(StyleRefinement::default().px_1())
+                .hover(|style| style.bg(rgb(palette().surface_hover)).rounded_md())
+                .title(title)
+                .child(content)
         })
-        .keywords(keywords),
+        .on_toggle_click(move |open, window, cx| on_toggle(open.contains(&0), window, cx))
+}
+
+fn accordion_fields(
+    items: &[SettingItem],
+    options: &gpui_kit::component::setting::RenderOptions,
+    window: &mut Window,
+    cx: &mut App,
+) -> Div {
+    v_flex().w_full().gap_3().pt_2().children(
+        items
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, item)| item.render_item(&options.with_item_ix(index), window, cx)),
     )
+}
+
+pub(super) fn settings_section(title: impl Into<SharedString>) -> SettingGroup {
+    SettingGroup::new()
+        .variant(GroupBoxVariant::Normal)
+        .title(title)
+        .content_style(&settings_group_style().gap_3())
 }
 
 /// Plain library descriptions inherit the same 14px size as their labels.
@@ -469,7 +564,11 @@ mod workspace;
 #[cfg(all(test, feature = "ui-tests"))]
 mod workspace_tests;
 pub(super) use extensions_view::ExtensionsUi;
-pub(super) use navigation::SettingsUi;
+pub(super) use navigation::{SettingsRoute, SettingsUi};
+
+// Section indexes within the Appearance page.
+pub(super) const APPEARANCE_OPTIONS_GROUP: usize = 0;
+pub(super) const BACKGROUND_GROUP: usize = 2;
 
 impl ConduitApp {
     pub(super) fn open_engine_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {

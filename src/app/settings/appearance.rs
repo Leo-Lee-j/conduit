@@ -1,6 +1,93 @@
 //! Appearance settings.
 
 use super::*;
+use crate::store::UiIconSize;
+use gpui_kit::component::{input::NumberInput, switch::Switch};
+
+impl ConduitApp {
+    pub(in crate::app) fn on_auto_collapse_days_change(
+        &mut self,
+        input: &Entity<InputState>,
+        event: &InputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.writable || self.closing {
+            return;
+        }
+        if matches!(
+            event,
+            InputEvent::Change | InputEvent::Blur | InputEvent::PressEnter { .. }
+        ) {
+            if let Ok(days) = input.read(cx).value().parse::<u32>()
+                && days > 0
+                && self.store.ui.auto_collapse_inactive_days != days
+            {
+                self.store.ui.auto_collapse_inactive_days = days;
+                self.persist();
+                cx.notify();
+            }
+            if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
+                let value = self.store.ui.auto_collapse_inactive_days.max(1).to_string();
+                if input.read(cx).value().as_ref() != value {
+                    input.update(cx, |input, cx| input.set_value(value, window, cx));
+                }
+            }
+        }
+    }
+}
+
+fn auto_collapse_field(view: Entity<ConduitApp>) -> SettingField<SharedString> {
+    SettingField::render(move |options, _, cx| {
+        let app = view.read(cx);
+        let enabled = app.store.ui.auto_collapse_inactive_workspaces;
+        let input = app.settings_ui.auto_collapse_inactive_days.clone();
+        let view = view.clone();
+        h_flex()
+            .debug_selector(|| "auto-collapse-inactive-controls".into())
+            .gap_3()
+            .items_center()
+            .child(
+                h_flex()
+                    .debug_selector(|| "auto-collapse-inactive-days".into())
+                    .gap_2()
+                    .child(
+                        div().w(px(104.)).flex_shrink_0().child(
+                            NumberInput::new(&input)
+                                .small()
+                                .accessibility_label(conduit::i18n::text_static(
+                                    "settings.appearance.auto_collapse_inactive_days",
+                                ))
+                                .disabled(options.is_disabled() || !enabled),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .text_color(rgb(palette().muted))
+                            .child(conduit::i18n::text_static("settings.appearance.days")),
+                    ),
+            )
+            .child(
+                Switch::new("auto-collapse-inactive-switch")
+                    .accessibility_label(conduit::i18n::text_static(
+                        "settings.appearance.auto_collapse_inactive_workspaces",
+                    ))
+                    .checked(enabled)
+                    .with_size(options.size())
+                    .disabled(options.is_disabled())
+                    .on_click(move |checked, _, cx| {
+                        view.update(cx, |app, cx| {
+                            if !app.writable || app.closing {
+                                return;
+                            }
+                            app.store.ui.auto_collapse_inactive_workspaces = *checked;
+                            app.persist();
+                            cx.notify();
+                        });
+                    }),
+            )
+    })
+}
 
 #[cfg(all(test, feature = "ui-tests"))]
 mod tests;
@@ -229,6 +316,27 @@ enum FontTarget {
     Code,
 }
 
+fn icon_size_options(selected: UiIconSize, view: Entity<ConduitApp>, disabled: bool) -> AnyElement {
+    let mut options = h_flex().gap_1();
+    for (index, size) in UiIconSize::ALL.into_iter().enumerate() {
+        let view = view.clone();
+        options = options.child(
+            Button::new(("appearance-functional-icon-size", index))
+                .debug_selector(move || format!("appearance-functional-icon-size-{index}"))
+                .small()
+                .ghost()
+                .selected(size == selected)
+                .label(size.label())
+                .disabled(disabled)
+                .when(!disabled, |button| button.cursor_pointer())
+                .on_click(move |_, _, cx| {
+                    view.update(cx, |app, cx| app.set_ui_icon_size(size, cx));
+                }),
+        );
+    }
+    options.into_any_element()
+}
+
 fn theme_select_field(
     view: Entity<ConduitApp>,
     mode: gpui_kit::component::ThemeMode,
@@ -312,17 +420,12 @@ fn font_select_item(view: Entity<ConduitApp>, target: FontTarget, disabled: bool
             .flex_wrap()
             .items_center()
             .child(
-                v_flex()
+                div()
                     .flex_1()
                     .flex_basis(rems(16.))
                     .min_w_0()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_size(ui_text_size(14.))
-                            .child(conduit::i18n::text_static(title)),
-                    )
-                    .child(settings_description(conduit::i18n::text_static(description)).mt_0()),
+                    .text_size(ui_text_size(14.))
+                    .child(conduit::i18n::text_static(title)),
             )
             .child(
                 div()
@@ -388,21 +491,16 @@ fn font_settings_heading(
             .pt_3()
             .gap_3()
             .flex_wrap()
-            .items_start()
+            .items_center()
             .child(
-                v_flex()
+                div()
                     .flex_1()
                     .flex_basis(rems(16.))
                     .min_w_0()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_size(ui_text_size(13.))
-                            .font_semibold()
-                            .text_color(rgb(palette().text))
-                            .child(title),
-                    )
-                    .child(settings_description(scope).mt_0()),
+                    .text_size(ui_text_size(13.))
+                    .font_semibold()
+                    .text_color(rgb(palette().text))
+                    .child(title),
             )
             .when(matches!(target, FontTarget::Interface), |row| {
                 let view = view.clone();
@@ -550,10 +648,10 @@ impl ConduitApp {
     ) {
         if !self.writable
             || self.closing
-            || !gpui_kit::component::ThemeRegistry::global(cx)
+            || gpui_kit::component::ThemeRegistry::global(cx)
                 .themes()
                 .get(name)
-                .is_some_and(|theme| theme.mode == mode)
+                .is_none_or(|theme| theme.mode != mode)
         {
             return;
         }
@@ -581,9 +679,20 @@ impl ConduitApp {
             &self.store.ui.dark_theme,
             cx,
         );
+        super::super::theme::apply_icon_size(self.store.ui.icon_size, cx);
         // Theme changes reload font tokens. Restore both user choices afterward.
         self.apply_ui_font(cx);
         self.apply_code_font(cx);
+        cx.notify();
+    }
+
+    pub(in crate::app) fn set_ui_icon_size(&mut self, size: UiIconSize, cx: &mut Context<Self>) {
+        if !self.writable || self.closing || self.store.ui.icon_size == size {
+            return;
+        }
+        self.store.ui.icon_size = size;
+        super::super::theme::apply_icon_size(size, cx);
+        self.persist();
         cx.notify();
     }
 
@@ -756,6 +865,14 @@ impl ConduitApp {
             TypographyField::UiSize,
             view.clone(),
         );
+        let icon_view = view.clone();
+        let icon_size = SettingField::render(move |_, _, cx| {
+            icon_size_options(
+                icon_view.read(cx).store.ui.icon_size,
+                icon_view.clone(),
+                disabled,
+            )
+        });
         let chat_font = font_select_item(view.clone(), FontTarget::Chat, disabled);
         let chat_size = typography_field(
             "chat-font-size",
@@ -788,15 +905,8 @@ impl ConduitApp {
                 .min_w_0()
                 .gap_3()
                 .flex_wrap()
-                .items_start()
-                .child(
-                    div().flex_1().flex_basis(rems(16.)).min_w_0().child(
-                        settings_description(conduit::i18n::text_static(
-                            "settings.appearance.reset_chat_code_scope",
-                        ))
-                        .mt_0(),
-                    ),
-                )
+                .items_center()
+                .justify_end()
                 .child(
                     Button::new("appearance-typography-reset")
                         .debug_selector(|| "appearance-typography-reset".into())
@@ -837,11 +947,7 @@ impl ConduitApp {
             |app| app.store.ui.auto_sort_workspaces,
             |app, value| app.store.ui.auto_sort_workspaces = value,
         );
-        let auto_collapse = switch_field(
-            view.clone(),
-            |app| app.store.ui.auto_collapse_inactive_workspaces,
-            |app, value| app.store.ui.auto_collapse_inactive_workspaces = value,
-        );
+        let auto_collapse = auto_collapse_field(view.clone());
 
         // Search/navigation depend on these indices: 0 appearance, 1 typography,
         // 2 background. Font subsections and previews must not add top-level groups.
@@ -867,9 +973,6 @@ impl ConduitApp {
                         conduit::i18n::text_static("settings.appearance.light_theme"),
                         theme_select_field(view.clone(), gpui_kit::component::ThemeMode::Light, disabled),
                     )
-                    .description(settings_description(conduit::i18n::text_static(
-                        "settings.appearance.light_theme_description",
-                    )))
                     .disabled(disabled),
                 )
                 .item(
@@ -877,9 +980,6 @@ impl ConduitApp {
                         conduit::i18n::text_static("settings.appearance.dark_theme"),
                         theme_select_field(view.clone(), gpui_kit::component::ThemeMode::Dark, disabled),
                     )
-                    .description(settings_description(conduit::i18n::text_static(
-                        "settings.appearance.dark_theme_description",
-                    )))
                     .disabled(disabled),
                 )
                 .item(
@@ -902,9 +1002,6 @@ impl ConduitApp {
                         conduit::i18n::text_static("settings.appearance.auto_sort_workspaces"),
                         auto_sort,
                     )
-                    .description(settings_description(conduit::i18n::text_static(
-                        "settings.appearance.auto_sort_workspaces_description",
-                    )))
                     .disabled(disabled),
                 )
                 .item(
@@ -912,9 +1009,6 @@ impl ConduitApp {
                         conduit::i18n::text_static("settings.appearance.auto_collapse_inactive_workspaces"),
                         auto_collapse,
                     )
-                    .description(settings_description(conduit::i18n::text_static(
-                        "settings.appearance.auto_collapse_inactive_workspaces_description",
-                    )))
                     .disabled(disabled),
                 )
                 .footer(|_, _| {
@@ -941,30 +1035,34 @@ impl ConduitApp {
                     font_settings_heading(FontTarget::Interface, disabled, view.clone()),
                     ui_font,
                     SettingItem::new(conduit::i18n::text_static("settings.appearance.interface_font_size"), ui_size)
-                        .description(settings_description(conduit::i18n::text_static("settings.appearance.12_20_px_default_16_scales_interface")))
                         .keywords([conduit::i18n::text_static("settings.appearance.application"), conduit::i18n::text_static("settings.appearance.interface"), conduit::i18n::text_static("settings.appearance.font_size"), conduit::i18n::text_static("settings.appearance.size"), "font", "size"])
                         .disabled(disabled),
+                    SettingItem::new(
+                        conduit::i18n::text_static("settings.appearance.functional_icon_size"),
+                        icon_size,
+                    )
+                    .keywords([
+                        conduit::i18n::text_static("settings.appearance.functional_icon_size"),
+                        "icon",
+                        "sidebar",
+                        "toolbar",
+                    ])
+                    .disabled(disabled),
                     font_settings_heading(FontTarget::Chat, disabled, view.clone()),
                     chat_font,
                     SettingItem::new(conduit::i18n::text_static("settings.appearance.font_size"), chat_size)
-                        .description(settings_description(conduit::i18n::text_static("settings.appearance.12_20_px_default_15")))
                         .disabled(disabled),
                     SettingItem::new(conduit::i18n::text_static("settings.appearance.line_height"), chat_line_height)
-                        .description(settings_description(conduit::i18n::text_static("settings.appearance.1_2_2_0_default_1_5")))
                         .disabled(disabled),
                     font_settings_heading(FontTarget::Code, disabled, view.clone()),
                     code_font,
                     SettingItem::new(conduit::i18n::text_static("settings.appearance.code_font_size"), code_size)
-                        .description(settings_description(conduit::i18n::text_static("settings.appearance.10_18_px_default_13")))
                         .disabled(disabled),
                     SettingItem::new(conduit::i18n::text_static("settings.appearance.copy_button"), code_copy)
-                        .description(settings_description(conduit::i18n::text_static("settings.appearance.show_a_copy_button_in_the_upper")))
                         .disabled(disabled),
                     SettingItem::new(conduit::i18n::text_static("settings.appearance.line_numbers"), code_line_numbers)
-                        .description(settings_description(conduit::i18n::text_static("settings.appearance.show_line_numbers_beside_code_blocks_excluded")))
                         .disabled(disabled),
                     SettingItem::new(conduit::i18n::text_static("settings.appearance.syntax_highlighting"), code_syntax)
-                        .description(settings_description(conduit::i18n::text_static("settings.appearance.color_code_by_language_when_disabled_use")))
                         .disabled(disabled),
                     reset,
                 ])

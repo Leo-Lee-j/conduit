@@ -32,7 +32,7 @@ pub(crate) fn source(
                 .or_else(|| home().map(|p| p.join(".local/share")))
                 .map(|p| p.join("opencode/opencode.db"))
         }),
-        Provider::Qoder => None,
+        Provider::Qoder | Provider::Gemini => None,
     }?;
     let path = if path.is_absolute() {
         path

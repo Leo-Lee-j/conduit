@@ -42,7 +42,8 @@ struct QoderAdapter {
 }
 
 impl QoderAdapter {
-    fn new(request: AdapterRequest) -> Self {
+    fn new(mut request: AdapterRequest) -> Self {
+        request.permission = request.tool_policy.permission(request.permission);
         Self {
             request,
             stage: Stage::Initialize,
@@ -128,6 +129,9 @@ impl QoderAdapter {
             .route
             .acp_variant
             .clone()
+            .filter(|value| {
+                value != "default" || self.settings.variants().iter().any(|(id, _)| id == value)
+            })
             .or_else(|| self.request.effort.wire().map(str::to_owned));
         let effort = selected.or_else(|| self.settings.effective_variant().map(str::to_owned));
         if let Some(effort) = effort {
@@ -310,14 +314,15 @@ impl CliAdapter for QoderAdapter {
                     "Read,Grep,Glob".into()
                 },
             ]);
-            if self.request.text_only {
+            if self.request.text_only || self.request.tool_policy == ToolPolicy::Automation {
                 args.extend([
                     "--strict-mcp-config".into(),
                     "--mcp-config".into(),
                     "{\"mcpServers\":{}}".into(),
-                    "--disallowed-tools".into(),
-                    "*".into(),
                 ]);
+            }
+            if self.request.text_only {
+                args.extend(["--disallowed-tools".into(), "*".into()]);
             }
         }
         Ok(LaunchSpec {
@@ -494,6 +499,7 @@ impl CliAdapter for QoderAdapter {
                             input_tokens: usage["inputTokens"].as_u64().unwrap_or(0),
                             output_tokens: usage["outputTokens"].as_u64().unwrap_or(0),
                             cached_input_tokens: usage["cachedReadTokens"].as_u64().unwrap_or(0),
+                            cache_write_input_tokens: usage["cachedWriteTokens"].as_u64(),
                             total_tokens: usage["totalTokens"].as_u64().unwrap_or(0),
                             turn_output_tokens: usage["outputTokens"].as_u64(),
                             context_window: self.context_window,
@@ -542,6 +548,9 @@ impl CliAdapter for QoderAdapter {
         if approval.is_user_input() {
             return None;
         }
+        if self.request.tool_policy == ToolPolicy::Automation {
+            return Some(false);
+        }
         if approval.kind == ApprovalKind::McpTool {
             return Some(
                 option(&approval.input, "allow_once").is_some()
@@ -554,7 +563,16 @@ impl CliAdapter for QoderAdapter {
                 option(&approval.input, "allow_once").is_some()
                     || option(&approval.input, "allow_always").is_some(),
             ),
-            PermissionLevel::WorkspaceWrite => None,
+            PermissionLevel::WorkspaceWrite => {
+                let tool = approval.input["toolCall"]
+                    .pointer("/_meta/qoder/toolName")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                crate::protocol::is_web_tool_name(tool).then(|| {
+                    option(&approval.input, "allow_once").is_some()
+                        || option(&approval.input, "allow_always").is_some()
+                })
+            }
         }
     }
     fn approval_response(&self, approval: &Approval, allow: bool) -> Value {
@@ -563,6 +581,7 @@ impl CliAdapter for QoderAdapter {
         }
         let allow = allow
             && !self.request.text_only
+            && self.request.tool_policy != ToolPolicy::Automation
             && (self.request.permission != PermissionLevel::ReadOnly
                 || approval.kind == ApprovalKind::McpTool);
         let choice = option(
@@ -595,7 +614,7 @@ impl CliAdapter for QoderAdapter {
         questions::response(approval, answers)
     }
     fn enable_full_access(&mut self) {
-        if !self.request.text_only {
+        if !self.request.text_only && self.request.tool_policy != ToolPolicy::Automation {
             self.request.permission = PermissionLevel::FullAccess;
         }
     }

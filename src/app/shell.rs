@@ -3,7 +3,11 @@
 use super::*;
 
 mod cache;
+mod chat_approval;
+mod conversation;
 mod scroll;
+mod timeline_source;
+pub(in crate::app) use timeline_source::TimelineSource;
 
 #[cfg(all(test, feature = "ui-tests"))]
 mod tests;
@@ -27,15 +31,20 @@ pub(super) struct ChatTimeline {
     scroll: ListState,
     wheel: std::rc::Rc<std::cell::RefCell<scroll::Wheel>>,
     render_state: Option<cache::State>,
+    source: TimelineSource,
 }
 
 impl ChatTimeline {
     pub(super) fn wheel_pending(&self, app: &ConduitApp) -> bool {
-        self.wheel.borrow().is_pending(app)
+        self.wheel
+            .borrow()
+            .is_pending(app, &self.source, &self.scroll)
     }
 
     pub(super) fn resume_follow(&self, app: &ConduitApp) -> bool {
-        self.wheel.borrow().resume_follow(app)
+        self.wheel
+            .borrow()
+            .resume_follow(app, &self.source, &self.scroll)
     }
 
     pub(super) fn new(app: WeakEntity<ConduitApp>, scroll: ListState) -> Self {
@@ -44,6 +53,18 @@ impl ChatTimeline {
             scroll,
             wheel: Default::default(),
             render_state: None,
+            source: TimelineSource::Main,
+        }
+    }
+
+    pub(in crate::app) fn for_session(
+        app: WeakEntity<ConduitApp>,
+        scroll: ListState,
+        source: TimelineSource,
+    ) -> Self {
+        Self {
+            source,
+            ..Self::new(app, scroll)
         }
     }
 
@@ -60,22 +81,11 @@ impl ChatTimeline {
             return;
         }
         if let Some(app) = self.app.upgrade() {
-            self.wheel.borrow_mut().sync(app.read(cx));
+            self.wheel.borrow_mut().sync(app.read(cx), &self.source);
         }
         let at_bottom = self.wheel.borrow_mut().apply(&self.scroll, origin, delta);
-        let top = self.scroll.logical_scroll_top();
         let _ = self.app.update(cx, |app, cx| {
-            let navigating = app.pending_message_jump.take().is_some();
-            let outline = app
-                .outline
-                .active_for_item(app.chat_rows.message(top.item_ix));
-            // Let message_outline update its marker and scroll the rail when
-            // the active section changes. Wheel packets within a section only
-            // invalidate this timeline.
-            if navigating || app.at_bottom != at_bottom || app.outline.active != outline {
-                app.at_bottom = at_bottom;
-                cx.notify();
-            }
+            self.source.scrolled(&self.scroll, at_bottom, app, cx);
         });
         cx.notify();
     }
@@ -85,7 +95,10 @@ impl Render for ChatTimeline {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(app) = self.app.upgrade() {
             let app = app.read(cx);
-            if app.at_bottom && app.pending_message_jump.is_none() && !self.wheel_pending(app) {
+            if self.source.following(app)
+                && !self.source.navigating(app)
+                && !self.wheel_pending(app)
+            {
                 self.scroll.scroll_to_end();
             }
             let monitor = app
@@ -98,8 +111,9 @@ impl Render for ChatTimeline {
             }
         }
         let app = self.app.clone();
+        let source = self.source.clone();
         let list = gpui_kit::list(self.scroll.clone(), move |index, window, cx| {
-            app.update(cx, |app, cx| app.render_message(index, window, cx).0)
+            app.update(cx, |app, cx| source.render(app, index, window, cx).0)
                 .unwrap_or_else(|_| div().into_any_element())
         })
         .size_full();
@@ -109,6 +123,7 @@ impl Render for ChatTimeline {
         let layout_scroll = self.scroll.clone();
         let layout_app = self.app.clone();
         let wheel = self.wheel.clone();
+        let source = self.source.clone();
         div()
             .relative()
             .size_full()
@@ -120,9 +135,14 @@ impl Render for ChatTimeline {
             .child(
                 canvas(
                     move |bounds, window, cx| {
-                        wheel
-                            .borrow_mut()
-                            .prepare(&layout_scroll, &layout_app, bounds, window, cx);
+                        wheel.borrow_mut().prepare(
+                            &layout_scroll,
+                            &layout_app,
+                            &source,
+                            bounds,
+                            window,
+                            cx,
+                        );
                     },
                     move |bounds, _, window, _| {
                         // gpui-pre 0.3.9 coalesces wheel packets against the
@@ -294,11 +314,6 @@ impl Render for ConduitApp {
                 }
             });
         }
-        let has_workspace = self.selected_workspace.is_some();
-        let directory = self
-            .selected_workspace
-            .map(|i| self.store.workspaces[i].name())
-            .unwrap_or_else(|| conduit::i18n::text_static("git_ui.no_workspace_selected").into());
         let sidebar = self
             .sidebar_view
             .clone()
@@ -408,488 +423,18 @@ impl Render for ConduitApp {
                 .child(self.session_tab_bar(cx))
                 .child(self.render_subagent_page(window, cx))
         } else {
-            let mut messages = div()
-                .v_flex()
-                .id("messages")
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .min_w_0()
-                .px_2()
-                .py_1()
-                .gap_5()
-                .on_scroll_wheel(cx.listener(|this, _: &ScrollWheelEvent, _, cx| {
-                    if this.pending_message_jump.take().is_some() {
-                        this.at_bottom = false;
-                        cx.notify();
-                    }
-                }));
-            if let Some(session) = &selected {
-                let unloaded = self
-                    .session(session.id)
-                    .is_some_and(|record| !record.transcript.loaded);
-                if unloaded {
-                    let id = session.id;
-                    let error = self.transcripts.errors.get(&id).cloned();
-                    let mut loading = v_flex()
-                        .id("transcript-loading")
-                        .debug_selector(|| "transcript-loading".into())
-                        .flex_1()
-                        .items_center()
-                        .justify_center()
-                        .gap_3()
-                        .px_4()
-                        .child(
-                            div()
-                                .text_size(ui_text_size(14.))
-                                .child(if error.is_some() {
-                                    conduit::i18n::text_static(
-                                        "shell.failed_to_load_session_messages",
-                                    )
-                                } else {
-                                    conduit::i18n::text_static("shell.loading_session")
-                                }),
-                        );
-                    if let Some(error) = error {
-                        loading = loading
-                            .child(
-                                div()
-                                    .text_size(ui_text_size(12.))
-                                    .text_color(rgb(palette().muted))
-                                    .child(error),
-                            )
-                            .child(
-                                Button::new("retry-transcript")
-                                    .label(conduit::i18n::text_static("shell.retry_loading"))
-                                    .small()
-                                    .ghost()
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.retry_transcript(id, cx)
-                                    })),
-                            );
-                    } else {
-                        loading = loading.child(Spinner::new());
-                    }
-                    messages = messages.child(loading);
-                } else if session.message_count == 0 {
-                    messages = messages.child(
-                        v_flex()
-                            .flex_1()
-                            .justify_center()
-                            .items_center()
-                            .gap_3()
-                            .py_20()
-                            .child(
-                                h_flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(provider_icon(session.provider))
-                                    .child(
-                                        div()
-                                            .text_size(ui_text_size(12.))
-                                            .text_color(rgb(palette().faint))
-                                            .child(conduit::i18n::format(
-                                                "shell.ready_for_your_input",
-                                                &[("arg0", session.provider.label().to_string())],
-                                            )),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .text_size(ui_text_size(30.))
-                                    .font_bold()
-                                    .text_color(rgb(palette().text))
-                                    .child(conduit::i18n::text_static(
-                                        "shell.what_would_you_like_to_work_on",
-                                    )),
-                            )
-                            .child(
-                                div()
-                                    .text_size(ui_text_size(14.))
-                                    .text_color(rgb(palette().muted))
-                                    .child(conduit::i18n::format(
-                                        "shell.start_your_task_in_cli_sign_in",
-                                        &[("arg0", directory.to_string())],
-                                    )),
-                            ),
-                    );
-                }
-                if session.message_count > 0 {
-                    messages = div()
-                        .id("messages")
-                        .relative()
-                        .flex_1()
-                        .min_h_0()
-                        .min_w_0()
-                        .track_focus(&self.chat_focus)
-                        .on_mouse_up(MouseButton::Left, {
-                            let focus = self.chat_focus.clone();
-                            move |_, window, cx| {
-                                // The composer holds keyboard focus, so a finished chat
-                                // selection would never see Ctrl+C. Move focus onto the
-                                // conversation, inside the window root's key context.
-                                if !TextSelection::selected_text(window, cx).trim().is_empty() {
-                                    focus.focus(window, cx);
-                                }
-                            }
-                        })
-                        .child(
-                            self.timeline
-                                .clone()
-                                .cached(StyleRefinement::default().size_full()),
-                        )
-                        .when(!self.at_bottom, |messages| {
-                            messages.child(
-                                div()
-                                    .absolute()
-                                    .bottom(px(12.))
-                                    .right(px(24.))
-                                    .child(self.scroll_to_latest_button(cx)),
-                            )
-                        });
-                }
-            } else if has_workspace {
-                messages = messages.child(
-                    v_flex()
-                        .flex_1()
-                        .items_center()
-                        .justify_center()
-                        .gap_3()
-                        .py_20()
-                        .child(
-                            h_flex()
-                                .w(px(44.))
-                                .h(px(44.))
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(12.))
-                                .border_1()
-                                .border_color(rgb(palette().border))
-                                .bg(rgb(palette().surface))
-                                .child(
-                                    div()
-                                        .text_base()
-                                        .font_bold()
-                                        .text_color(rgb(palette().muted))
-                                        .child("C"),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .text_size(ui_text_size(30.))
-                                .font_semibold()
-                                .text_color(rgb(palette().text))
-                                .child(conduit::i18n::text_static(
-                                    "shell.what_would_you_like_to_work_on",
-                                )),
-                        )
-                        .child(
-                            div()
-                                .text_size(ui_text_size(14.))
-                                .text_color(rgb(palette().muted))
-                                .child(conduit::i18n::format(
-                                    "shell.the_session_will_run_in_enter_a",
-                                    &[("directory", directory.to_string())],
-                                )),
-                        ),
-                );
-            } else {
-                messages = messages.child(self.session_heatmap(13, cx));
-            }
-
+            let messages = self.render_chat_messages(
+                selected.as_ref(),
+                self.timeline.clone(),
+                TimelineSource::Main,
+                self.chat_focus.clone(),
+                cx,
+            );
             let mut conversation = v_flex().flex_1().min_w_0().h_full();
             conversation = conversation.child(self.session_tab_bar(cx));
-            // Keep the outline attached to the centered message column instead of
-            // the window edge. It stays outside the scrolling list, while the
-            // rail itself is vertically centered in the chat viewport.
-            let mut message_area = h_flex().flex_1().min_h_0().min_w_0().items_stretch();
-            if !self.outline.entries.is_empty() {
-                message_area = message_area.child(
-                    h_flex()
-                        .w_full()
-                        .when(!self.store.ui.full_width_content, |row| {
-                            row.max_w(px(952.)).mx_auto()
-                        })
-                        .h_full()
-                        .min_h_0()
-                        .min_w_0()
-                        .items_stretch()
-                        .child(self.message_outline(cx))
-                        .child(messages)
-                        // Balance the rail so messages stay aligned with the composer.
-                        .child(div().w(px(32.)).flex_shrink_0()),
-                );
-            } else {
-                message_area = message_area.child(messages);
-            }
-            conversation = conversation.child(message_area);
-            let approval_count = self
-                .selected_session
-                .and_then(|id| self.session_control.runs.get(&id))
-                .map(|r| r.approvals.len())
-                .unwrap_or(0);
-            let approvals = self
-                .selected_session
-                .and_then(|id| self.session_control.runs.get(&id))
-                .and_then(|r| r.approvals.front().cloned());
-            for (index, approval) in approvals.into_iter().enumerate() {
-                if approval.is_user_input() {
-                    conversation = conversation.child(self.render_user_input(
-                        self.selected_session.unwrap(),
-                        &approval,
-                        window,
-                        cx,
-                    ));
-                    continue;
-                }
-                let submitted = self
-                    .selected_session
-                    .and_then(|id| self.session_control.runs.get(&id))
-                    .is_some_and(|r| r.approvals.is_submitted(&approval.id));
-                let id = self.selected_session.unwrap();
-                let summary = notifications::approval_message(&approval);
-                let detail_copy = approval.detail.clone();
-                let origin = self
-                    .selected_workspace_path()
-                    .map(|path| display_path(&path))
-                    .unwrap_or_default();
-                let allow_id = approval.id.clone();
-                let deny_id = approval.id;
-                let toggle_id = deny_id.clone();
-                let expanded = self
-                    .session_control
-                    .runs
-                    .get(&id)
-                    .is_some_and(|run| run.expanded_approvals.contains(&deny_id));
-                let queue_label = if approval_count > 1 {
-                    conduit::i18n::format(
-                        "shell.item",
-                        &[
-                            ("arg0", format!("{}", index + 1)),
-                            ("arg1", format!("{}", approval_count)),
-                        ],
-                    )
-                } else {
-                    String::new()
-                };
-                conversation = conversation.child(
-                    div().w_full().px_6().mb_4().child(
-                        v_flex()
-                            .w_full()
-                            .when(!self.store.ui.full_width_content, |card| {
-                                card.max_w(px(840.)).mx_auto()
-                            })
-                            .p_4()
-                            .gap_3()
-                            .rounded(px(14.))
-                            .border_1()
-                            .border_color(rgb(palette().warning_border))
-                            .bg(rgb(palette().warning_bg))
-                            .child(
-                                h_flex()
-                                    .items_start()
-                                    .gap_3()
-                                    .child(
-                                        h_flex()
-                                            .w(px(28.))
-                                            .h(px(28.))
-                                            .flex_shrink_0()
-                                            .items_center()
-                                            .justify_center()
-                                            .rounded(px(8.))
-                                            .bg(rgb(palette().warning_icon_bg))
-                                            .child(
-                                                Icon::new(IconName::TriangleAlert)
-                                                    .small()
-                                                    .text_color(rgb(palette().warning_text)),
-                                            ),
-                                    )
-                                    .child(
-                                        v_flex()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .gap_1()
-                                            .child(
-                                                h_flex()
-                                                    .items_center()
-                                                    .gap_2()
-                                                    .child(
-                                                        div()
-                                                            .text_size(ui_text_size(13.))
-                                                            .font_semibold()
-                                                            .text_color(rgb(
-                                                                palette().highlight_text
-                                                            ))
-                                                            .child(approval.title.clone()),
-                                                    )
-                                                    .when(!queue_label.is_empty(), |row| {
-                                                        row.child(
-                                                            h_flex()
-                                                                .h(px(18.))
-                                                                .px_2()
-                                                                .items_center()
-                                                                .rounded_full()
-                                                                .bg(rgb(palette().warning_chip_bg))
-                                                                .text_size(ui_text_size(10.))
-                                                                .text_color(rgb(
-                                                                    palette().warning_chip_text
-                                                                ))
-                                                                .child(queue_label.clone()),
-                                                        )
-                                                    }),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_size(ui_text_size(11.))
-                                                    .line_height(relative(1.4))
-                                                    .text_color(rgb(palette().warning_muted))
-                                                    .child(conduit::i18n::text_static("shell.the_cli_requests_permission_for_this_operation")),
-                                            ),
-                                    )
-                                    .child(
-                                        Button::new(("approval-toggle", index))
-                                            .label(if expanded { conduit::i18n::text_static("chat.collapse") } else { conduit::i18n::text_static("shell.show_details") })
-                                            .small()
-                                            .ghost()
-                                            .cursor_pointer()
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.toggle_approval_detail(
-                                                    id,
-                                                    toggle_id.clone(),
-                                                    cx,
-                                                )
-                                            })),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .id(("approval-summary", index))
-                                    .max_h(px(120.))
-                                    .overflow_y_scroll()
-                                    .text_sm()
-                                    .text_color(rgb(palette().warning_text))
-                                    .child(summary),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(palette().warning_muted))
-                                    .child(conduit::i18n::format("shell.workspace", &[("origin", origin.to_string())])),
-                            )
-                            .when(expanded, |column| {
-                                column.child(
-                                    div()
-                                        .id(("approval-detail", index))
-                                        .max_h(px((f32::from(window.viewport_size().height) * 0.4)
-                                            .clamp(120., 360.)))
-                                        .overflow_y_scroll()
-                                        .p_3()
-                                        .rounded(px(10.))
-                                        .border_1()
-                                        .border_color(rgb(palette().warning_inner_border))
-                                        .bg(rgb(palette().warning_code_bg))
-                                        .text_xs()
-                                        .line_height(relative(1.5))
-                                        .text_color(rgb(palette().warning_code_text))
-                                        .child(approval.detail.clone()),
-                                )
-                            })
-                            .child(
-                                h_flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        Button::new(("approval-copy", index))
-                                            .label(conduit::i18n::text_static("shell.copy_full_request"))
-                                            .small()
-                                            .ghost()
-                                            .on_click(move |_, _, cx| {
-                                                cx.write_to_clipboard(ClipboardItem::new_string(
-                                                    detail_copy.clone(),
-                                                ))
-                                            }),
-                                    )
-                                    .when(!approval.allow_once, |row| {
-                                        row.child(
-                                            div()
-                                                .flex_1()
-                                                .text_size(ui_text_size(11.))
-                                                .text_color(rgb(palette().warning_accent))
-                                                .child(
-                                                    conduit::i18n::text_static("shell.the_cli_did_not_offer_allow_once"),
-                                                ),
-                                        )
-                                    })
-                                    .when(approval.allow_once, |row| row.child(div().flex_1()))
-                                    .child(
-                                        Button::new(("deny", index))
-                                            .label(conduit::i18n::text_static("notifications.deny"))
-                                            .small()
-                                            .ghost()
-                                            .disabled(self.closing || submitted)
-                                            .when(!self.closing && !submitted, |button| {
-                                                button.cursor_pointer()
-                                            })
-                                            .on_click(cx.listener(move |this, _, window, cx| {
-                                                this.decide(id, deny_id.clone(), false, window, cx)
-                                            })),
-                                    )
-                                    .child(
-                                        Button::new(("allow", index))
-                                            .label(conduit::i18n::text_static("notifications.allow_once"))
-                                            .small()
-                                            .primary()
-                                            .disabled(
-                                                self.closing || submitted || !approval.allow_once,
-                                            )
-                                            .when(
-                                                !self.closing && !submitted && approval.allow_once,
-                                                |button| button.cursor_pointer(),
-                                            )
-                                            .on_click(cx.listener(move |this, _, window, cx| {
-                                                this.decide(id, allow_id.clone(), true, window, cx)
-                                            })),
-                                    ),
-                            ),
-                    ),
-                );
-            }
-            if let Some(message) = &self.message
-                && self.writable
-                && self.persistence.error.is_none()
-            {
-                conversation = conversation.child(
-                    div()
-                        .mx_6()
-                        .mb_3()
-                        .child(
-                            gpui_kit::component::alert::Alert::error(
-                                "application-message",
-                                message.clone(),
-                            )
-                            .small()
-                            .on_close(cx.listener(|app, _, _, cx| {
-                                app.message = None;
-                                cx.notify();
-                            })),
-                        )
-                        .when(
-                            self.selected_session.is_some() || self.selected_workspace.is_some(),
-                            |body| {
-                                body.child(
-                                    Button::new("message-engine-settings")
-                                        .label(conduit::i18n::text_static(
-                                            "shell.open_ai_engine_settings",
-                                        ))
-                                        .small()
-                                        .ghost()
-                                        .on_click(cx.listener(|app, _, window, cx| {
-                                            app.open_engine_settings(window, cx)
-                                        })),
-                                )
-                            },
-                        ),
-                );
+            conversation = conversation.child(messages);
+            if let Some(id) = self.selected_session {
+                conversation = conversation.children(self.render_chat_approval(id, window, cx));
             }
             let composer = {
                 #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
@@ -904,9 +449,7 @@ impl Render for ConduitApp {
             conversation = conversation.child(composer);
             conversation
         };
-        conversation = conversation
-            .child(self.notification_banner(cx))
-            .child(self.update_notice(cx));
+        conversation = conversation.child(self.notification_banner(cx));
         let toolbar = self.render_toolbar(window, cx);
         #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
         let toolbar = chat::profiling::host_element(
@@ -940,6 +483,7 @@ impl Render for ConduitApp {
                 .mr_1()
                 .flex_shrink_0()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(self.update_indicator(cx))
                 .child(
                     Button::new("title-theme-toggle")
                         .debug_selector(|| "title-theme-toggle".into())

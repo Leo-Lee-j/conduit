@@ -466,14 +466,27 @@ fn restore_registry_version(version: &str) -> Result<()> {
     Ok(())
 }
 
+fn is_default_data_dir(data_dir: &Path) -> bool {
+    let default = crate::diagnostics::default_data_dir();
+    default.canonicalize().unwrap_or(default) == data_dir
+}
+
 fn restart(job: &Handoff) -> Result<()> {
     // The old versioned executable may have been removed. The stable launcher
     // is replaced (or restored on rollback) together with the installed app.
     let directory = job.executable.parent().context(conduit::i18n::text_static(
         "update.install.install_directory_missing",
     ))?;
-    Command::new(directory.join("conduit.exe"))
-        .env("CONDUIT_DATA_DIR", &job.data_dir)
+    let mut command = Command::new(directory.join("conduit.exe"));
+    // Inherited by every terminal and CLI the app starts, so it is set only
+    // when needed: the app would otherwise resolve the same default directory.
+    // The updater may itself have inherited it from an app started this way.
+    if is_default_data_dir(&job.data_dir) {
+        command.env_remove("CONDUIT_DATA_DIR");
+    } else {
+        command.env("CONDUIT_DATA_DIR", &job.data_dir);
+    }
+    command
         .arg("--updated")
         .current_dir(directory)
         .creation_flags(CREATE_NO_WINDOW)

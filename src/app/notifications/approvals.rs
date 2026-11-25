@@ -12,6 +12,13 @@ pub(super) struct ApprovalBinding {
 /// Prefer the command or affected paths to protocol IDs. Keep history bounded
 /// and leave the complete request in the conversation's approval details.
 pub(in crate::app) fn approval_message(approval: &Approval) -> String {
+    match approval_preview(approval) {
+        Some(preview) => format!("{}\n{preview}", approval.title),
+        None => approval.title.clone(),
+    }
+}
+
+pub(in crate::app) fn approval_preview(approval: &Approval) -> Option<String> {
     let details: serde_json::Value = serde_json::from_str(&approval.detail).unwrap_or_default();
     let values = [&approval.input, &details];
     let command = values.iter().find_map(|value| {
@@ -55,7 +62,7 @@ pub(in crate::app) fn approval_message(approval: &Approval) -> String {
         });
     let summary = summary.trim();
     if summary.is_empty() || summary == approval.title {
-        return approval.title.clone();
+        return None;
     }
     let mut preview: String = summary.chars().take(480).collect();
     if preview.len() < summary.len() {
@@ -63,7 +70,7 @@ pub(in crate::app) fn approval_message(approval: &Approval) -> String {
             "notifications.approvals.view_the_session_for_the_full_request",
         ));
     }
-    format!("{}\n{preview}", approval.title)
+    Some(preview)
 }
 
 impl ConduitApp {

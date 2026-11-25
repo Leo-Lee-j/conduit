@@ -178,6 +178,17 @@ pub(super) fn apply_event_indexed(
     event: Event,
     index: &mut MessageIndex,
 ) -> Option<usize> {
+    match event {
+        Event::Plan { steps } => {
+            crate::task_list::apply(session, crate::task_list::wire_plan(steps));
+            return None;
+        }
+        Event::Tasks(change) => {
+            crate::task_list::apply(session, change);
+            return None;
+        }
+        _ => {}
+    }
     if let Event::ReasoningSummary {
         key,
         text,

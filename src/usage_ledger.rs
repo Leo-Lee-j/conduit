@@ -17,6 +17,8 @@ pub struct Observation {
     pub finished_at: u64,
     pub input: Option<u64>,
     pub cached: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write: Option<u64>,
     pub output: Option<u64>,
     pub elapsed_ms: u64,
     pub incomplete: bool,
@@ -41,6 +43,8 @@ pub struct Budget {
     pub workspace: PathBuf,
     pub monthly_tokens: u64,
     pub notified_month: Option<String>,
+    #[serde(default)]
+    pub near_notified_month: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -49,6 +53,9 @@ pub struct Ledger {
     pub observations: Vec<Observation>,
     pub budgets: Vec<Budget>,
     pub truncated: bool,
+    /// Changes even when an observation is replaced or the bounded ledger rolls over.
+    #[serde(skip)]
+    revision: u64,
 }
 
 #[derive(Default)]
@@ -59,6 +66,13 @@ pub struct Totals {
     pub output: u64,
     pub incomplete: usize,
     pub elapsed_ms: u64,
+    pub complete_turns: usize,
+    pub complete_tokens: u64,
+    pub input_records: usize,
+    pub cached_records: usize,
+    pub output_records: usize,
+    pub requests: usize,
+    pub failed_requests: usize,
 }
 impl Totals {
     pub fn add(&mut self, observation: &Observation) {
@@ -66,15 +80,36 @@ impl Totals {
         self.input = self.input.saturating_add(observation.input.unwrap_or(0));
         self.cached = self.cached.saturating_add(observation.cached.unwrap_or(0));
         self.output = self.output.saturating_add(observation.output.unwrap_or(0));
-        self.incomplete += usize::from(
-            observation.incomplete || observation.input.is_none() || observation.output.is_none(),
-        );
+        self.input_records += usize::from(observation.input.is_some());
+        self.cached_records += usize::from(observation.cached.is_some());
+        self.output_records += usize::from(observation.output.is_some());
+        let incomplete =
+            observation.incomplete || observation.input.is_none() || observation.output.is_none();
+        self.incomplete += usize::from(incomplete);
+        if !incomplete {
+            self.complete_turns += 1;
+            self.complete_tokens = self.complete_tokens.saturating_add(
+                observation
+                    .input
+                    .unwrap_or(0)
+                    .saturating_add(observation.output.unwrap_or(0)),
+            );
+        }
+        if let Some(outcome) = observation.api_request_outcome
+            && outcome != ApiRequestOutcome::Cancelled
+        {
+            self.requests += 1;
+            self.failed_requests += usize::from(outcome == ApiRequestOutcome::Failed);
+        }
         if observation.output.is_some() {
             self.elapsed_ms = self.elapsed_ms.saturating_add(observation.elapsed_ms);
         }
     }
     pub fn tokens(&self) -> u64 {
         self.input.saturating_add(self.output)
+    }
+    pub fn average(&self) -> Option<u64> {
+        (self.complete_turns > 0).then(|| self.complete_tokens / self.complete_turns as u64)
     }
 }
 
@@ -89,7 +124,12 @@ pub fn date(timestamp: u64) -> String {
 }
 
 impl Ledger {
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     pub fn record(&mut self, observation: Observation) {
+        self.revision = self.revision.wrapping_add(1);
         if let Some(existing) = self
             .observations
             .iter_mut()
@@ -119,6 +159,7 @@ impl Ledger {
         if let Some(budget) = self.budgets.iter_mut().find(|b| b.workspace == workspace) {
             if budget.monthly_tokens != monthly_tokens {
                 budget.notified_month = None;
+                budget.near_notified_month = None;
             }
             budget.monthly_tokens = monthly_tokens;
         } else {
@@ -126,19 +167,26 @@ impl Ledger {
                 workspace,
                 monthly_tokens,
                 notified_month: None,
+                near_notified_month: None,
             });
         }
     }
     pub fn take_alert(&mut self, workspace: &Path, month: &str) -> Option<(u64, u64)> {
         let total = self.monthly(workspace, month).tokens();
         let budget = self.budgets.iter_mut().find(|b| b.workspace == workspace)?;
-        if budget.monthly_tokens == 0
-            || total < budget.monthly_tokens
-            || budget.notified_month.as_deref() == Some(month)
-        {
+        if budget.monthly_tokens == 0 || budget.notified_month.as_deref() == Some(month) {
             return None;
         }
-        budget.notified_month = Some(month.to_owned());
+        if total >= budget.monthly_tokens {
+            budget.notified_month = Some(month.to_owned());
+            budget.near_notified_month = Some(month.to_owned());
+        } else if total >= budget.monthly_tokens - budget.monthly_tokens / 5
+            && budget.near_notified_month.as_deref() != Some(month)
+        {
+            budget.near_notified_month = Some(month.to_owned());
+        } else {
+            return None;
+        }
         Some((total, budget.monthly_tokens))
     }
 }
@@ -163,6 +211,7 @@ mod tests {
             finished_at: timestamp,
             input: Some(100),
             cached: Some(80),
+            cache_write: Some(10),
             output: Some(50),
             elapsed_ms: 1_000,
             incomplete: false,
@@ -170,7 +219,9 @@ mod tests {
             api_request_outcome: Some(ApiRequestOutcome::Succeeded),
         };
         ledger.record(record.clone());
+        let first_revision = ledger.revision();
         ledger.record(record.clone());
+        assert_ne!(ledger.revision(), first_revision);
         assert_eq!(ledger.monthly(&workspace, &month).tokens(), 150);
         ledger.save_budget(workspace.clone(), 120);
         assert_eq!(ledger.take_alert(&workspace, &month), Some((150, 120)));
@@ -189,15 +240,74 @@ mod tests {
         assert_eq!(totals.turns, 2);
         assert_eq!(totals.incomplete, 1);
         assert_eq!(totals.tokens(), 150);
+        assert_eq!(totals.average(), Some(150)); // Unknown turns do not dilute a measured average.
+        assert_eq!(totals.complete_turns, 1);
+        assert_eq!(totals.requests, 1);
         let restored: Ledger =
             serde_json::from_str(&serde_json::to_string(&ledger).unwrap()).unwrap();
         assert_eq!(restored.monthly(&workspace, &month).incomplete, 1);
         assert_eq!(restored.observations[0].api_first_response_ms, Some(250));
+        assert_eq!(restored.observations[0].cache_write, Some(10));
         assert_eq!(
             restored.observations[0].api_request_outcome,
             Some(ApiRequestOutcome::Succeeded)
         );
         assert_eq!(restored.observations[1].api_first_response_ms, None);
         assert_eq!(restored.observations[1].api_request_outcome, None);
+        assert_eq!(
+            restored.revision(),
+            0,
+            "runtime revisions are not persisted"
+        );
+        let before_rollover = ledger.revision();
+        ledger
+            .observations
+            .resize(10_000, restored.observations[0].clone());
+        let mut next = restored.observations[0].clone();
+        next.key = "rollover".into();
+        ledger.record(next);
+        assert_eq!(ledger.observations.len(), 10_000);
+        assert!(ledger.truncated);
+        assert_ne!(ledger.revision(), before_rollover);
+    }
+
+    #[test]
+    fn usage_reminders_fire_once_at_eighty_and_one_hundred_percent_and_survive_reload() {
+        let workspace = PathBuf::from("C:/usage-alerts");
+        let mut observation: Observation = serde_json::from_value(serde_json::json!({
+            "key": "turn", "session": 1, "workspace": workspace, "provider": "Claude",
+            "service": "cli", "model": null, "finished_at": 1783000000u64,
+            "input": 79, "cached": null, "output": 0, "elapsed_ms": 0, "incomplete": false
+        }))
+        .unwrap();
+        assert_eq!(observation.cache_write, None);
+        let month = date(observation.finished_at)[..7].to_owned();
+        let mut ledger = Ledger::default();
+        ledger.save_budget(workspace.clone(), 100);
+        ledger.record(observation.clone());
+        assert!(ledger.take_alert(&workspace, &month).is_none());
+        observation.input = Some(80);
+        ledger.record(observation.clone());
+        assert_eq!(ledger.take_alert(&workspace, &month), Some((80, 100)));
+        let mut restored: Ledger =
+            serde_json::from_str(&serde_json::to_string(&ledger).unwrap()).unwrap();
+        assert!(restored.take_alert(&workspace, &month).is_none());
+        observation.input = Some(100);
+        restored.record(observation.clone());
+        assert_eq!(restored.take_alert(&workspace, &month), Some((100, 100)));
+        assert!(restored.take_alert(&workspace, &month).is_none());
+        assert_eq!(restored.take_alert(&workspace, "2026-08"), None);
+        restored.save_budget(workspace.clone(), 0);
+        assert!(restored.take_alert(&workspace, &month).is_none());
+        // Older profiles have no early-reminder field.
+        let mut legacy: Budget = serde_json::from_value(serde_json::json!({
+            "workspace": workspace, "monthly_tokens": 100, "notified_month": null
+        }))
+        .unwrap();
+        assert!(legacy.near_notified_month.take().is_none());
+        restored.save_budget(workspace.clone(), u64::MAX);
+        observation.input = Some(u64::MAX - u64::MAX / 5);
+        restored.record(observation);
+        assert!(restored.take_alert(&workspace, &month).is_some());
     }
 }

@@ -178,7 +178,7 @@ impl InstallDialog {
         if self.saving
             || !self.app.read(cx).writable
             || self.app.read(cx).closing
-            || self.engine == Provider::Qoder
+            || matches!(self.engine, Provider::Qoder | Provider::Gemini)
         {
             return;
         }
@@ -303,7 +303,7 @@ enum Save {
 impl Render for InstallDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let writable = self.app.read(cx).writable
-            && self.engine != Provider::Qoder
+            && !matches!(self.engine, Provider::Qoder | Provider::Gemini)
             && !self.app.read(cx).closing;
         let mut content = v_flex()
             .gap_3()

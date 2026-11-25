@@ -2,7 +2,7 @@ use crate::{
     app::{ConduitApp, settings::TypographyField},
     store::{
         AppearanceMode, MAX_CHAT_FONT_SIZE, MAX_CHAT_LINE_HEIGHT, MAX_CODE_FONT_SIZE,
-        MAX_UI_FONT_SIZE, UiSettings,
+        MAX_UI_FONT_SIZE, UiIconSize, UiSettings,
     },
 };
 use gpui_kit::{Context, TestAppContext, Window, component::Theme, px};
@@ -40,6 +40,30 @@ fn editor_and_font_entities(app: &ConduitApp) -> [gpui_kit::EntityId; 4] {
         app.chat_font_select.entity_id(),
         app.code_font_select.entity_id(),
     ]
+}
+
+#[gpui_kit::test]
+fn icon_size_updates_live_and_is_restored_after_theme_changes(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx, _) = crate::app::queue::tests::fixture(cx, "appearance-icon-size");
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.set_ui_icon_size(UiIconSize::Large, cx);
+            assert_eq!(app.store.ui.icon_size, UiIconSize::Large);
+            assert_eq!(Theme::global(cx).icon_scale, 1.2);
+
+            app.store.ui.appearance = AppearanceMode::Light;
+            app.apply_appearance(window, cx);
+            assert_eq!(Theme::global(cx).icon_scale, 1.2);
+
+            app.set_ui_icon_size(UiIconSize::Compact, cx);
+            assert_eq!(Theme::global(cx).icon_scale, 0.8);
+            app.persistence.flush();
+        });
+    });
+    cx.update(|window, _| window.remove_window());
+    drop(app);
+    cx.run_until_parked();
 }
 
 #[gpui_kit::test]

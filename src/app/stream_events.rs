@@ -205,22 +205,12 @@ impl ConduitApp {
                     self.dirty = true;
                     cx.emit(crate::providers::ProviderCatalogChanged);
                 }
-                Event::Plan { steps } => {
-                    let steps = steps
-                        .into_iter()
-                        .filter_map(|(text, status)| {
-                            let text = text.trim().to_string();
-                            (!text.is_empty()).then(|| PlanStep {
-                                text,
-                                status: PlanStatus::from_wire(&status),
-                            })
-                        })
-                        .collect::<Vec<_>>();
-                    if steps.is_empty() {
-                        self.session_control.plans.remove(&id);
-                    } else {
-                        self.session_control.plans.insert(id, steps);
+                event @ (Event::Plan { .. } | Event::Tasks(_)) => {
+                    if let Some(session) = self.session_mut(id) {
+                        apply_event_indexed(session, &prefix, event, &mut MessageIndex::default());
                     }
+                    self.session_control.changed(id);
+                    self.dirty = true;
                 }
                 Event::Usage(mut usage) => {
                     if let Some(run) = self.session_control.runs.get_mut(&id) {
@@ -411,6 +401,15 @@ impl ConduitApp {
                     let finished_run = self.session_control.runs.remove(&id);
                     if let Some(run) = &finished_run
                         && matches!(run.intent, crate::commands::RequestIntent::Message)
+                        && !cancelled
+                        && !run.runtime.is_cancelled()
+                    {
+                        cx.emit(super::encourager::PetFeedback {
+                            failed: error.is_some(),
+                        });
+                    }
+                    if let Some(run) = &finished_run
+                        && matches!(run.intent, crate::commands::RequestIntent::Message)
                     {
                         self.finish_ai_review(
                             id,
@@ -420,13 +419,13 @@ impl ConduitApp {
                         );
                     }
                     if let Some(run) = &finished_run
-                        && !matches!(run.intent, crate::commands::RequestIntent::Fork(_))
+                        && matches!(run.intent, crate::commands::RequestIntent::Message)
                     {
                         self.completion_automations(
                             id,
                             &run.usage_key,
                             error.is_some(),
-                            cancelled,
+                            cancelled || run.runtime.is_cancelled(),
                             cx,
                         );
                     }
@@ -642,7 +641,6 @@ impl ConduitApp {
                         ),
                     );
                     self.closing = false;
-                    self.message = Some(error.clone());
                     if let Some(session) = self.session_mut(id) {
                         crate::failure::record_failure(session, &prefix, &error, true);
                     }
@@ -865,7 +863,15 @@ impl ConduitApp {
             }
             self.sync_chat_rows();
             if structural_change {
-                self.scroll.remeasure_items(0..self.scroll.item_count());
+                // Structural changes stay within the turn that owns the event
+                // (approvals and `Finished` belong to the last turn), so rows
+                // before that turn keep their measured heights.
+                let count = self.scroll.item_count();
+                let start = self
+                    .chat_rows
+                    .turn_start_row(dirty_messages.iter().copied().min())
+                    .min(count);
+                self.scroll.remeasure_items(start..count);
             } else {
                 dirty_messages.sort_unstable();
                 dirty_messages.dedup();

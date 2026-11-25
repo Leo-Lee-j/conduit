@@ -13,24 +13,26 @@ impl Render for GithubCommentPanel {
         });
         let writable = self.writable(cx);
         let resolve = matches!(self.action, crate::github::write::Action::Resolve(_));
-        let mut content = v_flex().gap_3().child(
-            v_flex()
-                .gap_1()
-                .p_3()
-                .rounded_md()
-                .bg(rgb(palette().surface_strong))
-                .child(div().text_size(ui_text_size(13.)).child(format!(
-                    "{} · {}",
-                    self.expected.forge.request_name(self.expected.number),
-                    self.expected.title
-                )))
-                .child(
-                    div()
-                        .text_size(ui_text_size(11.))
-                        .text_color(rgb(palette().muted))
-                        .child(self.expected.url.clone()),
-                ),
-        );
+        let mut content = v_flex().gap_3().when(!self.inline, |content| {
+            content.child(
+                v_flex()
+                    .gap_1()
+                    .p_3()
+                    .rounded_md()
+                    .bg(rgb(palette().surface_strong))
+                    .child(div().text_size(ui_text_size(13.)).child(format!(
+                        "{} · {}",
+                        self.expected.forge.request_name(self.expected.number),
+                        self.expected.title
+                    )))
+                    .child(
+                        div()
+                            .text_size(ui_text_size(11.))
+                            .text_color(rgb(palette().muted))
+                            .child(self.expected.url.clone()),
+                    ),
+            )
+        });
         if let crate::github::write::Action::Reply { thread, .. }
         | crate::github::write::Action::Resolve(thread) = &self.action
         {
@@ -86,7 +88,9 @@ impl Render for GithubCommentPanel {
                     )
                     .child(label("github.write_success")),
             );
-        } else if let Some(editor) = &self.editor {
+        } else if !self.confirm_discard
+            && let Some(editor) = &self.editor
+        {
             content = content.child(
                 v_flex()
                     .gap_2()
@@ -99,7 +103,7 @@ impl Render for GithubCommentPanel {
                     ))
                     .child(
                         Textarea::new(editor)
-                            .h(px(180.))
+                            .h(px(if self.inline { 90. } else { 180. }))
                             .disabled(self.busy || self.uncertain),
                     )
                     .child(
@@ -136,7 +140,7 @@ impl Render for GithubCommentPanel {
                             ),
                     ),
             );
-        } else {
+        } else if resolve {
             content = content.child(label("github.resolve_hint"));
         }
         if let Some(error) = &self.error {
@@ -208,30 +212,47 @@ impl Render for GithubCommentPanel {
                                     .small()
                                     .ghost()
                                     .label(label("github.discard"))
-                                    .on_click(
-                                        cx.listener(|_, _, window, cx| window.close_dialog(cx)),
-                                    ),
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.close_form(window, cx)
+                                    })),
                             ),
                     ),
             );
         }
         let url = self.expected.url.clone();
+        if self.inline {
+            content = content.child(
+                div()
+                    .text_size(ui_text_size(11.))
+                    .text_color(rgb(palette().muted))
+                    .child(label("github.write_hint")),
+            );
+        }
         let mut actions = h_flex()
             .gap_2()
-            .flex_wrap()
+            .when(!self.inline, |actions| actions.flex_wrap())
             .justify_end()
             .items_center()
             .child(
                 Button::new("github-write-open")
                     .small()
                     .ghost()
-                    .label(label("github.open_pr"))
+                    .when(self.inline, |button| {
+                        button
+                            .icon(FullIconName::ExternalLink)
+                            .compact()
+                            .size(px(28.))
+                            .accessibility_label(label("github.open_pr"))
+                    })
+                    .when(!self.inline, |button| button.label(label("github.open_pr")))
+                    .tooltip(label("github.open_pr"))
                     .on_click(move |_, _, cx| cx.open_url(&url)),
             )
             .child(
                 Button::new("github-comment-cancel")
                     .small()
-                    .ghost()
+                    .when(self.inline, |button| button.h(px(28.)))
+                    .when(!self.inline, |button| button.ghost())
                     .label(label(if self.finished {
                         "github.back_to_pr"
                     } else {
@@ -240,7 +261,7 @@ impl Render for GithubCommentPanel {
                     .disabled(self.busy)
                     .on_click(cx.listener(|this, _, window, cx| {
                         if this.can_close(cx) {
-                            window.close_dialog(cx);
+                            this.close_form(window, cx);
                         }
                     })),
             );
@@ -249,6 +270,7 @@ impl Render for GithubCommentPanel {
                 Button::new("github-comment-submit")
                     .small()
                     .primary()
+                    .when(self.inline, |button| button.h(px(28.)))
                     .label(label(if self.busy {
                         "github.sending"
                     } else if resolve {
@@ -261,17 +283,32 @@ impl Render for GithubCommentPanel {
             );
         }
         v_flex()
-            .gap_3()
+            .when(!self.inline, |panel| panel.gap_3())
+            .w_full()
             .min_h_0()
             .child(
                 content
                     .id("github-comment-panel")
-                    .max_h(px(
+                    .when(self.inline, |content| {
+                        content
+                            .p_3()
+                            .border_t_1()
+                            .border_color(rgb(palette().border))
+                    })
+                    .max_h(px(if self.inline {
+                        170.
+                    } else {
                         (f32::from(window.viewport_size().height) - 280.).max(100.)
-                    ))
+                    }))
                     .overflow_y_scroll(),
             )
-            .child(
+            .child(if self.inline {
+                document_footer()
+                    .id("github-discussion-footer")
+                    .debug_selector(|| "github-discussion-footer".into())
+                    .child(actions.w_full())
+                    .into_any_element()
+            } else {
                 v_flex()
                     .gap_2()
                     .pt_3()
@@ -283,7 +320,22 @@ impl Render for GithubCommentPanel {
                             .text_color(rgb(palette().muted))
                             .child(label("github.write_hint")),
                     )
-                    .child(actions),
-            )
+                    .child(actions)
+                    .into_any_element()
+            })
+    }
+}
+
+impl GithubCommentPanel {
+    fn close_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.inline {
+            let url = self.expected.url.clone();
+            let _ = self.parent.update(cx, |parent, cx| {
+                parent.details.composers.remove(&url);
+                cx.notify();
+            });
+        } else {
+            window.close_dialog(cx);
+        }
     }
 }

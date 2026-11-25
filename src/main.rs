@@ -38,6 +38,7 @@ mod store;
 mod subagents;
 #[cfg(target_os = "windows")]
 mod system_notifications;
+mod task_list;
 mod terminal;
 mod transcript;
 mod usage_ledger;
@@ -54,12 +55,16 @@ use gpui_kit::component::TitleBar;
 use gpui_kit::*;
 
 fn main() {
+    // First, before anything can fail: release builds have no console, so
+    // this bounded file is the only trace a panic leaves on a user machine.
+    conduit::diagnostics::install_panic_hook();
     let _installation_lock = match std::env::current_exe()
         .map_err(anyhow::Error::from)
         .and_then(|exe| conduit::update::install::running_lock(&exe))
     {
         Ok(lock) => lock,
         Err(error) => {
+            conduit::diagnostics::record_crash("installation lock", &format!("{error:#}"));
             eprintln!("{error:#}");
             return;
         }
@@ -73,6 +78,7 @@ fn main() {
     let development_package = match development_args::parse(std::env::args_os().skip(1)) {
         Ok(package) => package,
         Err(error) => {
+            conduit::diagnostics::record_crash("development arguments", &format!("{error:#}"));
             eprintln!("{error:#}");
             std::process::exit(2);
         }
@@ -80,6 +86,7 @@ fn main() {
     let _instance = match single_instance() {
         Ok(instance) => instance,
         Err(error) => {
+            conduit::diagnostics::record_crash("single instance", &format!("{error:#}"));
             eprintln!("{error:#}");
             let text: Vec<u16> = format!("{error:#}").encode_utf16().chain(Some(0)).collect();
             let title: Vec<u16> = "Conduit".encode_utf16().chain(Some(0)).collect();

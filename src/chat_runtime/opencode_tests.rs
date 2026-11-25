@@ -284,6 +284,7 @@ fn run(
         native_id: native,
         model: Some("conduit-test/mock".into()),
         permission,
+        tool_policy: Default::default(),
         effort: Default::default(),
         route: route(root, server),
     })
@@ -325,6 +326,7 @@ fn installed_opencode_commands_discover_resume_and_execute_locally() {
             native_id: native,
             model: Some("conduit-test/mock".into()),
             permission: PermissionLevel::WorkspaceWrite,
+            tool_policy: Default::default(),
             effort: Default::default(),
             route,
         })

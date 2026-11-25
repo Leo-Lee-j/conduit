@@ -2,6 +2,12 @@
 use super::navigation::{PAGES, matches_search};
 use super::*;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(in crate::app) struct SettingsServiceTarget {
+    pub channel: ModelChannel,
+    pub model: Option<String>,
+}
+
 #[derive(Clone)]
 pub(in crate::app) struct SettingsResult {
     pub page: usize,
@@ -9,6 +15,7 @@ pub(in crate::app) struct SettingsResult {
     pub title: String,
     pub description: String,
     pub engine: Option<Provider>,
+    pub target: Option<SettingsServiceTarget>,
 }
 
 // Group indexes follow each page's visible information architecture. These
@@ -22,8 +29,8 @@ const ENTRIES: &[(usize, usize, &str, &str, &str)] = &[
         "权限 默认权限 默认会话权限 会话 工作区 permission default session workspace",
     ),
     (
-        1,
-        0,
+        SettingsRoute::Appearance.index(),
+        APPEARANCE_OPTIONS_GROUP,
         "自动将活跃工作空间排到前面",
         "优先显示有运行中会话的工作空间，再按最近会话活动时间排序。关闭后恢复手动顺序。",
         "工作区 侧栏 自动 排序 活跃 最近 workspace sidebar automatic sort active recent",
@@ -64,8 +71,8 @@ const ENTRIES: &[(usize, usize, &str, &str, &str)] = &[
         "tab 标签 限制",
     ),
     (
-        1,
-        0,
+        SettingsRoute::Appearance.index(),
+        APPEARANCE_OPTIONS_GROUP,
         "应用主题",
         "选择浅色、深色或跟随系统",
         "外观 theme dark light",
@@ -85,8 +92,8 @@ const ENTRIES: &[(usize, usize, &str, &str, &str)] = &[
         "文字 字体 字号 行高 font size",
     ),
     (
-        1,
-        0,
+        SettingsRoute::Appearance.index(),
+        APPEARANCE_OPTIONS_GROUP,
         "自动折叠非活跃工作空间",
         "自动折叠最近 3 天内没有会话活动的工作空间。当前工作空间和正在运行的会话保持可见，仍可手动展开任意工作空间。",
         "工作区 侧栏 自动 折叠 非活跃 3天 workspace sidebar automatic collapse inactive",
@@ -217,8 +224,35 @@ impl ConduitApp {
                 title: conduit::i18n::source(title).into(),
                 description: conduit::i18n::source(description).into(),
                 engine: None,
+                target: None,
             })
             .collect();
+        let archive_title = conduit::i18n::text_static("settings.sessions.auto_archive");
+        let archive_description =
+            conduit::i18n::text_static("settings.sessions.auto_archive_description");
+        let mut archive_search = format!(
+            "{archive_title} {archive_description} 自动归档 会话 时间 天 archive automatic sessions days 3 7 15 30"
+        );
+        for language in conduit::i18n::languages() {
+            let locale = language.id.clone().into();
+            for key in [
+                "settings.sessions.auto_archive",
+                "settings.sessions.auto_archive_description",
+            ] {
+                archive_search.push(' ');
+                archive_search.push_str(&conduit::i18n::text_for(&locale, key));
+            }
+        }
+        if matches_search(&archive_search, query) {
+            results.push(SettingsResult {
+                page: 10,
+                group: Some(5),
+                title: archive_title.into(),
+                description: archive_description.into(),
+                engine: None,
+                target: None,
+            });
+        }
         let notification_title =
             conduit::i18n::text_static("settings.general.system_notifications");
         let notification_description =
@@ -243,6 +277,7 @@ impl ConduitApp {
                 title: notification_title.into(),
                 description: notification_description.into(),
                 engine: None,
+                target: None,
             });
         }
         let fetch_title = conduit::i18n::text_static("settings.general.auto_fetch_incoming");
@@ -258,6 +293,7 @@ impl ConduitApp {
                 title: fetch_title.into(),
                 description: fetch_description.into(),
                 engine: None,
+                target: None,
             });
         }
         let background_title = conduit::i18n::text_static("wallpaper.title");
@@ -282,11 +318,12 @@ impl ConduitApp {
         }
         if matches_search(&background_search, query) {
             results.push(SettingsResult {
-                page: 1,
-                group: Some(2),
+                page: SettingsRoute::Appearance.index(),
+                group: Some(BACKGROUND_GROUP),
                 title: background_title.into(),
                 description: background_description.into(),
                 engine: None,
+                target: None,
             });
         }
         // Engine identity is explicit, independent of localized display labels.
@@ -324,6 +361,7 @@ impl ConduitApp {
                     title,
                     description,
                     engine: Some(engine),
+                    target: None,
                 });
             }
         }
@@ -344,19 +382,12 @@ impl ConduitApp {
                         &[("title", conduit::i18n::source(title).to_string())],
                     ),
                     engine: None,
+                    target: None,
                 });
             }
         }
         for provider in &self.store.providers {
-            if matches_search(
-                &format!(
-                    "{} {} {}",
-                    provider.name,
-                    provider.base_url,
-                    provider.models.join(" ")
-                ),
-                query,
-            ) {
+            if matches_search(&format!("{} {}", provider.name, provider.base_url), query) {
                 results.push(SettingsResult {
                     page: 8,
                     group: Some(0),
@@ -366,6 +397,45 @@ impl ConduitApp {
                         &[("arg0", provider.engine.label().to_string())],
                     ),
                     engine: Some(provider.engine),
+                    target: Some(SettingsServiceTarget {
+                        channel: ModelChannel::Provider(provider.id.clone()),
+                        model: None,
+                    }),
+                });
+            }
+            for model in provider
+                .catalog()
+                .into_iter()
+                .filter(|model| {
+                    matches_search(
+                        &format!(
+                            "{} {} {} {} {}",
+                            provider.name,
+                            provider.engine.label(),
+                            model.id,
+                            model.label,
+                            model.note
+                        ),
+                        query,
+                    )
+                })
+                .take(20)
+            {
+                results.push(SettingsResult {
+                    page: 8,
+                    group: None,
+                    title: model.label,
+                    description: format!(
+                        "{} · {} · {}",
+                        provider.engine.label(),
+                        provider.name,
+                        model.id
+                    ),
+                    engine: Some(provider.engine),
+                    target: Some(SettingsServiceTarget {
+                        channel: ModelChannel::Provider(provider.id.clone()),
+                        model: Some(model.id),
+                    }),
                 });
             }
         }
@@ -375,7 +445,13 @@ impl ConduitApp {
                 .into_iter()
                 .filter(|model| {
                     matches_search(
-                        &format!("{} {} {}", model.id, model.label, model.note),
+                        &format!(
+                            "{} {} {} {}",
+                            engine.label(),
+                            model.id,
+                            model.label,
+                            model.note
+                        ),
                         query,
                     )
                 })
@@ -397,10 +473,44 @@ impl ConduitApp {
                         ],
                     ),
                     engine: Some(engine),
+                    target: Some(SettingsServiceTarget {
+                        channel: ModelChannel::Cli,
+                        model: Some(model.id),
+                    }),
                 });
             }
         }
+        // Prefer exact named targets when Enter otherwise competes with a generic topic.
+        let exact = query.trim().to_lowercase();
+        results.sort_by_key(|result| {
+            !result.target.as_ref().is_some_and(|target| {
+                result.title.to_lowercase() == exact
+                    || target
+                        .model
+                        .as_ref()
+                        .is_some_and(|id| id.to_lowercase() == exact)
+            })
+        });
         results
+    }
+
+    pub(in crate::app) fn open_first_settings_result(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.settings_ui.open || window.has_active_dialog(cx) {
+            return;
+        }
+        let input = self.settings_ui.search.read(cx);
+        if input.focus_handle(cx).is_focused(window)
+            && let Some(result) = self
+                .settings_search_matches(&input.value())
+                .into_iter()
+                .next()
+        {
+            self.open_settings_result(result, window, cx);
+        }
     }
 
     pub(super) fn open_settings_result(
@@ -410,7 +520,7 @@ impl ConduitApp {
         cx: &mut Context<Self>,
     ) {
         if let Some(engine) = result.engine {
-            self.connection_settings.engine = engine;
+            self.select_settings_engine(engine, window, cx);
         }
         // Old naming search targets still resolve to the consolidated section.
         let page = if result.page == 5 { 10 } else { result.page };
@@ -433,9 +543,30 @@ impl ConduitApp {
         self.settings_ui.git_expanded |= result.page == 6;
         self.settings_ui.prompt_expanded |= result.page == 6 && group == Some(2);
         self.connection_settings.models_expanded |= result.page == 8;
+        self.connection_settings.path_help |= page == 3;
         self.select_settings_page(page, window, cx);
         self.settings_ui.group = group;
-        self.settings_ui.focus.focus(window, cx);
+        if let (Some(engine), Some(target)) = (result.engine, result.target) {
+            self.open_service_details(
+                engine,
+                target.channel,
+                super::services::DetailTab::Models,
+                window,
+                cx,
+            );
+            self.connection_settings
+                .model_search
+                .update(cx, |input, cx| {
+                    input.set_value(target.model.unwrap_or_default(), window, cx);
+                });
+            self.connection_settings
+                .model_search
+                .read(cx)
+                .focus_handle(cx)
+                .focus(window, cx);
+        } else {
+            self.settings_ui.focus.focus(window, cx);
+        }
     }
 
     pub(super) fn settings_search_results(&self, query: &str, view: Entity<Self>) -> AnyElement {
@@ -447,20 +578,15 @@ impl ConduitApp {
                 .justify_between()
                 .gap_3()
                 .child(
-                    v_flex()
-                        .gap_2()
-                        .child(div().text_size(ui_text_size(22.)).font_semibold().child(
-                            conduit::i18n::text_static("settings.search.search_settings"),
-                        ))
-                        .child(
-                            div()
-                                .text_size(ui_text_size(13.))
-                                .text_color(rgb(palette().muted))
-                                .child(conduit::i18n::format(
-                                    "settings.search.results_open_a_group_or_press_enter",
-                                    &[("count", format!("{}", count))],
-                                )),
-                        ),
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(ui_text_size(13.))
+                        .text_color(rgb(palette().muted))
+                        .child(conduit::i18n::format(
+                            "settings.search.results_open_a_group_or_press_enter",
+                            &[("count", format!("{}", count))],
+                        )),
                 )
                 .child(
                     Button::new("settings-search-clear")
@@ -481,10 +607,11 @@ impl ConduitApp {
                         }),
                 ),
         );
+        let mut matches = v_flex().refine_style(&settings_group_style()).gap_1().p_1();
         for (index, result) in results.into_iter().enumerate() {
             let select = view.clone();
             let (section, page, _) = PAGES[result.page];
-            body = body.child(
+            matches = matches.child(
                 Button::new(("settings-search-result", index))
                     .debug_selector(move || format!("settings-search-result-{index}"))
                     .accessibility_label(format!(
@@ -493,10 +620,10 @@ impl ConduitApp {
                         conduit::i18n::source(page),
                         result.title
                     ))
-                    .outline()
+                    .ghost()
                     .w_full()
                     .h_auto()
-                    .p_4()
+                    .p_3()
                     .justify_start()
                     .child(
                         v_flex()
@@ -533,7 +660,9 @@ impl ConduitApp {
                     }),
             );
         }
-        if count == 0 {
+        if count > 0 {
+            body = body.child(matches);
+        } else {
             body = body.child(
                 v_flex()
                     .py_6()
@@ -576,11 +705,7 @@ impl ConduitApp {
                     ),
             );
         }
-        div()
-            .id("settings-search-results")
-            .size_full()
-            .overflow_y_scroll()
-            .p_6()
+        settings_scroll_area("settings-search-results")
             .child(body)
             .into_any_element()
     }

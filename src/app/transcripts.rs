@@ -145,6 +145,7 @@ impl ConduitApp {
                 count += 1;
                 bytes += size;
                 if self.selected_session != Some(session.id)
+                    && self.reference_chat() != Some(session.id)
                     && visible_child != Some(session.id)
                     && !self.session_control.runs.contains_key(&session.id)
                     && !self.session_control.namings.contains_key(&session.id)

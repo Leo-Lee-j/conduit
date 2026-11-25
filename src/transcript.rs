@@ -36,7 +36,7 @@ fn leases() -> &'static Mutex<HashMap<PathBuf, Weak<Lease>>> {
     LEASES.get_or_init(Mutex::default)
 }
 fn acquire(path: PathBuf) -> Arc<Lease> {
-    let mut leases = leases().lock().unwrap();
+    let mut leases = leases().lock().unwrap_or_else(|e| e.into_inner());
     if let Some(lease) = leases.get(&path).and_then(Weak::upgrade) {
         return lease;
     }
@@ -53,7 +53,7 @@ fn manifests() -> &'static Mutex<HashMap<PathBuf, PathBuf>> {
 pub(crate) fn register_manifest(path: &Path) {
     manifests()
         .lock()
-        .unwrap()
+        .unwrap_or_else(|e| e.into_inner())
         .insert(directory(path), path.to_owned());
 }
 
@@ -75,7 +75,11 @@ fn committed_roots(directory: &Path) -> Result<Vec<PathBuf>> {
     struct Root {
         reference: Option<Reference>,
     }
-    let path = manifests().lock().unwrap().get(directory).cloned();
+    let path = manifests()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(directory)
+        .cloned();
     let Some(path) = path else {
         return Ok(Vec::new());
     };
@@ -100,7 +104,10 @@ fn committed_roots(directory: &Path) -> Result<Vec<PathBuf>> {
 pub(crate) fn collect_periodically(directory: &Path) {
     static LAST: OnceLock<Mutex<HashMap<PathBuf, std::time::Instant>>> = OnceLock::new();
     let now = std::time::Instant::now();
-    let mut last = LAST.get_or_init(Mutex::default).lock().unwrap();
+    let mut last = LAST
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if last
         .get(directory)
         .is_some_and(|time| time.elapsed() < std::time::Duration::from_secs(30))
@@ -118,7 +125,7 @@ pub(crate) fn collect_unreferenced(directory: &Path) {
     let Ok(entries) = fs::read_dir(directory) else {
         return;
     };
-    let mut leases = leases().lock().unwrap();
+    let mut leases = leases().lock().unwrap_or_else(|e| e.into_inner());
     let Ok(committed) = committed_roots(directory) else {
         return;
     };
@@ -148,7 +155,7 @@ pub(crate) fn collect_unreferenced(directory: &Path) {
 struct Receipt {
     reference: Reference,
     messages: Vec<Weak<ChatItemData>>,
-    parts: Vec<Arc<chunks::Message>>,
+    parts: Vec<Arc<chunks::Part>>,
     pages: Vec<String>,
 }
 impl Receipt {
@@ -207,7 +214,7 @@ impl Transcript {
         }
         self.receipt
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .as_ref()
             .filter(|receipt| receipt.matches(messages))
             .map(|receipt| receipt.reference.clone())
@@ -217,10 +224,10 @@ impl Transcript {
         &self,
         reference: Reference,
         messages: &[ChatItem],
-        parts: Vec<Arc<chunks::Message>>,
+        parts: Vec<Arc<chunks::Part>>,
         pages: Vec<String>,
     ) {
-        *self.receipt.lock().unwrap() = Some(Receipt {
+        *self.receipt.lock().unwrap_or_else(|e| e.into_inner()) = Some(Receipt {
             reference,
             messages: messages.iter().map(ChatItem::identity).collect(),
             parts,
@@ -310,7 +317,12 @@ pub(crate) fn save(session: &SessionRecord, directory: &Path) -> Result<Option<R
     if session.messages.is_empty() {
         return Ok(None);
     }
-    let previous = session.transcript.receipt.lock().unwrap().clone();
+    let previous = session
+        .transcript
+        .receipt
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     let prepared = chunks::prepare(session, directory, previous.as_ref())?;
     session.transcript.acknowledge(
         prepared.reference.clone(),

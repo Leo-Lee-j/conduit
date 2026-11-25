@@ -26,9 +26,10 @@ impl ConduitApp {
         engine: Provider,
         channel: ModelChannel,
         model: Option<String>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.writable || self.closing {
+        if !self.writable || self.closing || self.connection_settings.saving {
             return false;
         }
         match &channel {
@@ -48,10 +49,49 @@ impl ConduitApp {
             }
             ModelChannel::Ccs(_) => return false,
         }
+        let current = self.default_selection(engine);
+        if current.channel == channel && current.model == model {
+            return false;
+        }
+        let previous = self.store.session_defaults.get(&engine).cloned();
         self.store
             .session_defaults
             .insert(engine, crate::store::SessionDefaults { channel, model });
-        self.persist();
+        let receipt = self.persist_confirmed();
+        self.connection_settings.saving = true;
+        cx.spawn_in(window, async move |this, cx| {
+            let result = match receipt {
+                Ok(receipt) => receipt.wait(cx.background_executor()).await,
+                Err(error) => Err(error),
+            };
+            let _ = this.update_in(cx, |app, window, cx| {
+                app.connection_settings.saving = false;
+                match result {
+                    Ok(()) => window.push_notification(
+                        Notification::success(service_text("settings.services.default_saved")),
+                        cx,
+                    ),
+                    Err(error) => {
+                        if let Some(previous) = previous {
+                            app.store.session_defaults.insert(engine, previous);
+                        } else {
+                            app.store.session_defaults.remove(&engine);
+                        }
+                        app.dirty = true;
+                        window.push_notification(
+                            Notification::error(conduit::i18n::format(
+                                "notifications.save_failed",
+                                &[("error", error)],
+                            )),
+                            cx,
+                        );
+                    }
+                }
+                cx.emit(crate::providers::ProviderCatalogChanged);
+                cx.notify();
+            });
+        })
+        .detach();
         cx.notify();
         true
     }
@@ -59,6 +99,7 @@ impl ConduitApp {
     pub(super) fn delete_model_service(&mut self, id: &str, cx: &mut Context<Self>) -> bool {
         if !self.writable
             || self.closing
+            || self.connection_settings.saving
             || !self.provider_references(id).is_empty()
             || !self
                 .store
@@ -89,7 +130,7 @@ impl ConduitApp {
         width: f32,
         actions: AnyElement,
         view: Entity<Self>,
-    ) -> AnyElement {
+    ) -> SettingsContent {
         let engine = self.connection_settings.engine;
         let supports_services = engine.descriptor().capabilities.model_services;
         let sources = view.clone();
@@ -105,34 +146,25 @@ impl ConduitApp {
             .iter()
             .filter(|p| p.engine == engine)
             .count();
-        let body = v_flex()
-            .id("model-services-scroll")
+        let body = settings_scroll_area("model-services-scroll")
+            .pt_2()
+            .gap_2()
             .test_support()
-            .debug_selector(|| "model-services-scroll".into())
-            .flex_1()
-            .min_h_0()
-            .w_full()
-            .overflow_y_scroll()
             .track_scroll(if detail_only {
                 &self.connection_settings.service_detail_scroll
             } else {
                 &self.connection_settings.service_scroll
             })
-            .px(px(inset))
-            .pb_3()
-            .gap_3()
             .when(!detail_only, |body| {
                 body.child(self.service_default_summary(engine, view.clone()))
-            })
-            .child(
-                h_flex()
-                    .w_full()
-                    .justify_between()
-                    .gap_3()
-                    .flex_wrap()
                     .child(
-                        v_flex()
-                            .gap_1()
+                        h_flex()
+                            .debug_selector(|| "model-services-heading".into())
+                            .w_full()
+                            .mt_2()
+                            .gap_2()
+                            .justify_between()
+                            .flex_wrap()
                             .child(
                                 h_flex()
                                     .gap_2()
@@ -141,8 +173,8 @@ impl ConduitApp {
                                             service_text("settings.defaults.model_services"),
                                         ),
                                     )
-                                    .when(supports_services, |row| {
-                                        row.child(
+                                    .when(supports_services, |title| {
+                                        title.child(
                                             div()
                                                 .text_color(rgb(palette().muted))
                                                 .text_size(ui_text_size(12.))
@@ -150,15 +182,9 @@ impl ConduitApp {
                                         )
                                     }),
                             )
-                            .child(
-                                div()
-                                    .text_size(ui_text_size(12.))
-                                    .text_color(rgb(palette().muted))
-                                    .child(service_text("settings.services.new_sessions_only")),
-                            ),
+                            .child(actions),
                     )
-                    .child(actions),
-            )
+            })
             .when(supports_services, |body| {
                 body.child(
                     h_flex()
@@ -301,20 +327,7 @@ impl ConduitApp {
                     )
                 },
             );
-        v_flex()
-            .size_full()
-            .min_w_0()
-            .child(super::management::management_toolbar_inset(
-                engine,
-                false,
-                None,
-                width,
-                self.store.ui.ui_font_size,
-                view,
-                inset,
-            ))
-            .child(body)
-            .into_any_element()
+        SettingsContent::new(body).with_toolbar(management_toolbar(engine, false, None, None, view))
     }
 
     fn service_default_summary(&self, engine: Provider, view: Entity<Self>) -> AnyElement {
@@ -334,70 +347,67 @@ impl ConduitApp {
                     .flatten()
             })
             .unwrap_or_else(|| service_text("settings.defaults.use_service_default_model").into());
-        h_flex()
+        v_flex()
             .debug_selector(|| "service-default-summary".into())
             .w_full()
             .flex_shrink_0()
-            .flex_wrap()
-            .gap_3()
-            .justify_between()
-            .px_3()
-            .py_2()
+            .p_3()
             .rounded_lg()
-            .border_1()
-            .border_color(rgb(palette().border))
-            .bg(rgb(palette().surface))
+            .bg(rgb(palette().surface_strong))
+            .gap_2()
             .child(
-                v_flex()
-                    .flex_1()
-                    .min_w(px(160.))
-                    .gap_1()
+                h_flex()
+                    .w_full()
+                    .gap_2()
+                    .justify_between()
+                    .flex_wrap()
+                    .child(div().text_size(ui_text_size(14.)).font_semibold().child(
+                        conduit::i18n::format(
+                            "settings.services.default_for_engine",
+                            &[("engine", engine.label().into())],
+                        ),
+                    ))
                     .child(
-                        div()
-                            .text_size(ui_text_size(12.))
-                            .text_color(rgb(palette().muted))
-                            .child(conduit::i18n::format(
-                                "settings.services.default_for_engine",
-                                &[("engine", engine.label().into())],
-                            )),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .flex_wrap()
-                            .child(
-                                div()
-                                    .debug_selector(|| "services-default-name".into())
-                                    .font_semibold()
-                                    .text_size(ui_text_size(14.))
-                                    .child(label),
-                            )
-                            .child(
-                                div()
-                                    .text_size(ui_text_size(12.))
-                                    .text_color(rgb(palette().muted))
-                                    .child(model),
-                            ),
+                        Button::new("services-default-catalog")
+                            .debug_selector(|| "services-default-catalog".into())
+                            .small()
+                            .ghost()
+                            .label(service_text("settings.services.change_default"))
+                            .icon(FullIconName::ChevronRight)
+                            .on_click(move |_, window, cx| {
+                                view.update(cx, |app, cx| {
+                                    app.select_settings_page(10, window, cx);
+                                    app.settings_ui.group = Some(0);
+                                    app.settings_ui.focus.focus(window, cx);
+                                    cx.notify();
+                                })
+                            }),
                     ),
             )
             .child(
-                Button::new("services-default-catalog")
-                    .debug_selector(|| "services-default-catalog".into())
-                    .small()
-                    .outline()
-                    .label(service_text("settings.models.manage_model_catalog"))
-                    .icon(FullIconName::ChevronRight)
-                    .on_click(move |_, window, cx| {
-                        view.update(cx, |app, cx| {
-                            app.open_service_details(
-                                engine,
-                                channel.clone(),
-                                DetailTab::Models,
-                                window,
-                                cx,
-                            )
-                        })
-                    }),
+                h_flex()
+                    .w_full()
+                    .gap_2()
+                    .flex_wrap()
+                    .child(
+                        div()
+                            .debug_selector(|| "services-default-name".into())
+                            .min_w_0()
+                            .max_w_full()
+                            .truncate()
+                            .text_size(ui_text_size(13.))
+                            .font_medium()
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .max_w_full()
+                            .truncate()
+                            .text_size(ui_text_size(12.))
+                            .text_color(rgb(palette().muted))
+                            .child(model),
+                    ),
             )
             .into_any_element()
     }
@@ -432,7 +442,7 @@ impl ConduitApp {
 
     fn service_table(&self, engine: Provider, width: f32, view: Entity<Self>) -> AnyElement {
         let compact = width < 780. * (self.store.ui.ui_font_size / DEFAULT_UI_FONT_SIZE);
-        let disabled = !self.writable || self.closing;
+        let disabled = !self.writable || self.closing || self.connection_settings.saving;
         let defaults = self.default_selection(engine);
         let providers: Vec<_> = self
             .store
@@ -618,22 +628,16 @@ impl ConduitApp {
                             "settings.services.set_default"
                         }))
                         .disabled(disabled || current)
-                        .tooltip(service_text("settings.services.new_sessions_only"))
+                        .tooltip(service_text("settings.services.switch_default_hint"))
                         .on_click(move |_, window, cx| {
                             default_view.update(cx, |app, cx| {
-                                if app.set_service_default(
+                                app.set_service_default(
                                     engine,
                                     default_channel.clone(),
                                     None,
+                                    window,
                                     cx,
-                                ) {
-                                    window.push_notification(
-                                        Notification::success(service_text(
-                                            "settings.services.default_saved",
-                                        )),
-                                        cx,
-                                    );
-                                }
+                                );
                             })
                         }),
                 )
@@ -714,7 +718,7 @@ impl ConduitApp {
         table.into_any_element()
     }
 
-    fn open_service_details(
+    pub(super) fn open_service_details(
         &mut self,
         engine: Provider,
         channel: ModelChannel,
@@ -722,9 +726,12 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.select_settings_engine(engine, window, cx);
+        self.connection_settings
+            .model_search
+            .update(cx, |input, cx| input.set_value("", window, cx));
         self.connection_settings.models_expanded = true;
         self.connection_settings.sources_expanded = true;
-        self.connection_settings.engine = engine;
         if self.connection_settings.service_selection.as_ref() != Some(&(engine, channel.clone())) {
             self.connection_settings
                 .service_detail_scroll

@@ -2,11 +2,12 @@ use super::{Level, Lifecycle, Notice, Source};
 use crate::app::{ActiveRun, ChatRuntime, ConduitApp, Event, Store, Workspace, unix_now};
 use gpui_kit::component::Root;
 use gpui_kit::{
-    AppContext as _, Entity, Modifiers, MouseButton, TestAppContext, VisualTestContext,
-    base::test_support, px, size,
+    AppContext as _, Entity, Focusable as _, Modifiers, MouseButton, TestAppContext,
+    VisualTestContext, base::test_support, px, size,
 };
 
 mod approvals;
+mod auto_archive;
 
 #[gpui_kit::test]
 fn git_results_wait_for_toast_capacity_and_clear_progress(cx: &mut TestAppContext) {
@@ -116,6 +117,114 @@ fn git_results_wait_for_toast_capacity_and_clear_progress(cx: &mut TestAppContex
         draw(cx);
         assert!(cx.debug_bounds("git-operation-progress").is_none());
     }
+}
+
+#[gpui_kit::test]
+fn blocked_sends_notify_without_clearing_draft_or_changing_focus(cx: &mut TestAppContext) {
+    use crate::app::GitOperation;
+    use crate::git::OperationProbe;
+
+    let _locale = crate::test_support::chinese();
+    let (app, cx, root) = crate::app::queue::tests::fixture(cx, "blocked-send-notification");
+    let attachment = root.join("reference.txt");
+    std::fs::write(&attachment, "reference").unwrap();
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.input.update(cx, |input, cx| {
+                input.set_value("review current changes", window, cx)
+            });
+            app.attach_paths(&[attachment], window, cx);
+            app.input.read(cx).focus_handle(cx).focus(window, cx);
+            let references = app.current_files().unwrap().references.clone();
+            let target = app.session_notice_target(1);
+            let (sender, events) = std::sync::mpsc::channel();
+            let mut probe = OperationProbe::test_pending(root.clone());
+            probe.events = events;
+            app.git.operation = Some(GitOperation {
+                probe,
+                worktree: root,
+                draft: String::new(),
+                commit_push: None,
+                automatic_stage: false,
+                incoming_fetch: false,
+            });
+
+            for direct in [false, true] {
+                if direct {
+                    assert!(!app.send_text("another prompt".into(), true, window, cx));
+                } else {
+                    app.send_prompt(window, cx);
+                }
+                assert_eq!(app.input.read(cx).value(), "review current changes");
+                assert_eq!(app.current_files().unwrap().references, references);
+                assert!(app.input.read(cx).focus_handle(cx).is_focused(window));
+                assert_eq!(app.selected_workspace, Some(0));
+                assert_eq!(app.selected_session, Some(1));
+                assert!(app.session_control.runs.is_empty());
+                assert!(app.session(1).unwrap().messages.is_empty());
+                let notice = &app.notifications.center.records()[0];
+                assert_eq!(notice.source, Source::Session);
+                assert_eq!(notice.level, Level::Warning);
+                assert_eq!(notice.target, target);
+                assert_eq!(
+                    notice.message,
+                    conduit::i18n::text_static("runtime.a_git_operation_is_running_in_this")
+                );
+                let id = notice.id;
+                app.poll_notifications(window, cx);
+                assert!(app.notifications.visible.contains_key(&id));
+                assert!(app.notifications.banners.is_empty());
+            }
+
+            drop(sender);
+            app.poll_git_actions(window, cx);
+            assert!(app.git.operation.is_none());
+            assert!(app.send_blocked(true).is_none());
+            assert_eq!(app.input.read(cx).value(), "review current changes");
+            assert_eq!(app.current_files().unwrap().references, references);
+            app.switch(1, Some(2), window, cx);
+            assert!(
+                app.notifications
+                    .center
+                    .records()
+                    .iter()
+                    .any(|notice| { notice.source == Source::Session && notice.target == target })
+            );
+        });
+    });
+}
+
+#[gpui_kit::test]
+fn empty_session_cleanup_records_one_notification_per_nonempty_cleanup(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx) = fixture(cx, true);
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.store.ui.auto_cleanup_empty_sessions = true;
+            let created_at = unix_now().saturating_sub(2 * 24 * 60 * 60);
+            for workspace in &mut app.store.workspaces {
+                workspace.sessions[0].created_at = created_at;
+            }
+
+            app.cleanup_stale_empty_sessions(cx);
+
+            assert!(
+                app.store
+                    .workspaces
+                    .iter()
+                    .all(|workspace| workspace.sessions.is_empty())
+            );
+            let records = app.notifications.center.records();
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0].source, Source::App);
+            assert_eq!(records[0].level, Level::Success);
+            assert_eq!(records[0].title, "空会话清理完成");
+            assert_eq!(records[0].message, "已删除 2 个空会话。");
+
+            app.cleanup_stale_empty_sessions(cx);
+            assert_eq!(app.notifications.center.records().len(), 1);
+        });
+    });
 }
 
 fn fixture(

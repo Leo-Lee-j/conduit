@@ -20,7 +20,7 @@ impl ConduitApp {
         if self.closing || !self.writable {
             return None;
         }
-        let input = self.input.read(cx);
+        let input = self.composer_input().read(cx);
         Some((
             self.composer_target()?,
             file_search::query_at(&input.value(), input.selected_range())?,
@@ -61,6 +61,7 @@ impl ConduitApp {
             self.search_file_mentions(cx);
         } else if self.file_mentions.indexing.as_ref() != Some(&target.workspace) {
             self.file_mentions.indexing = Some(target.workspace.clone());
+            let binding = self.composer_binding();
             cx.spawn(async move |this, cx| {
                 let path = target.workspace.clone();
                 let index = cx
@@ -68,15 +69,17 @@ impl ConduitApp {
                     .spawn(async move { file_search::discover(&path) })
                     .await;
                 let _ = this.update(cx, |this, cx| {
-                    // A later workspace's load owns the cache now.
-                    if this.file_mentions.indexing.as_ref() != Some(&target.workspace) {
-                        return;
-                    }
-                    this.file_mentions.indexing = None;
-                    this.file_mentions.index =
-                        Some((target.workspace, Instant::now(), Arc::new(index)));
-                    this.search_file_mentions(cx);
-                    cx.notify();
+                    this.with_composer(binding.clone(), cx, |this, cx| {
+                        // A later workspace's load owns the cache now.
+                        if this.file_mentions.indexing.as_ref() != Some(&target.workspace) {
+                            return;
+                        }
+                        this.file_mentions.indexing = None;
+                        this.file_mentions.index =
+                            Some((target.workspace, Instant::now(), Arc::new(index)));
+                        this.search_file_mentions(cx);
+                        cx.notify();
+                    })
                 });
             })
             .detach();
@@ -96,13 +99,20 @@ impl ConduitApp {
         let index = index.clone();
         let sequence = self.file_mentions.sequence;
         self.file_mentions.searching = true;
+        let binding = self.composer_binding();
         cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(60))
                 .await;
             // Ignore superseded queries before doing any ranking work.
             let current = this
-                .update(cx, |this, _| this.file_mentions.sequence == sequence)
+                .update(cx, |this, cx| {
+                    this.with_composer(binding.clone(), cx, |this, _| {
+                        this.file_mentions.sequence == sequence
+                    })
+                })
+                .ok()
+                .flatten()
                 .unwrap_or(false);
             if !current {
                 return;
@@ -112,12 +122,14 @@ impl ConduitApp {
                 .spawn(async move { file_search::search(&index, &query.text) })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                if this.file_mentions.sequence != sequence {
-                    return;
-                }
-                this.file_mentions.results = results;
-                this.file_mentions.searching = false;
-                cx.notify();
+                this.with_composer(binding.clone(), cx, |this, cx| {
+                    if this.file_mentions.sequence != sequence {
+                        return;
+                    }
+                    this.file_mentions.results = results;
+                    this.file_mentions.searching = false;
+                    cx.notify();
+                })
             });
         })
         .detach();
@@ -133,7 +145,11 @@ impl ConduitApp {
     pub(super) fn file_mentions_open(&self, window: &Window, cx: &App) -> bool {
         self.file_mentions.active.is_some()
             && self.file_mentions.active == self.mention_query(cx)
-            && self.input.read(cx).focus_handle(cx).is_focused(window)
+            && self
+                .composer_input()
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
     }
 
     pub(super) fn composer_is_composing(
@@ -141,7 +157,7 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        self.input.update(cx, |input, cx| {
+        self.composer_input().update(cx, |input, cx| {
             input.marked_text_range(window, cx).is_some()
         })
     }
@@ -186,7 +202,7 @@ impl ConduitApp {
         let accepted = self.attach_paths(std::slice::from_ref(&path), window, cx);
         if accepted {
             self.dismiss_file_mentions(cx);
-            self.input.update(cx, |input, cx| {
+            self.composer_input().update(cx, |input, cx| {
                 input.set_selected_range(query.range, cx);
                 input.replace("", window, cx);
             });
@@ -237,7 +253,9 @@ impl ConduitApp {
                 window.prevent_default();
                 cx.stop_propagation();
             })
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| this.dismiss_file_mentions(cx)))
+            .on_mouse_down_out(
+                self.composer_listener(cx, |this, _, _, cx| this.dismiss_file_mentions(cx)),
+            )
             .child(
                 h_flex()
                     .px_2()
@@ -304,7 +322,7 @@ impl ConduitApp {
                         gpui_kit::component::tooltip::Tooltip::new(tooltip.clone())
                             .build(window, cx)
                     })
-                    .on_click(cx.listener(move |this, _, window, cx| {
+                    .on_click(self.composer_listener(cx, move |this, _, window, cx| {
                         cx.stop_propagation();
                         this.file_mentions.selected = index;
                         this.accept_file_mention(window, cx);
@@ -365,11 +383,11 @@ impl ConduitApp {
         // Deferred painting keeps this above the message list without resizing it.
         deferred(
             gpui_kit::base::Positioner::side(
-                self.input
+                self.composer_input()
                     .read(cx)
                     .cursor_layout()
                     .map(|(mut bounds, _)| {
-                        bounds.origin.y += self.input.read(cx).scroll_offset().y;
+                        bounds.origin.y += self.composer_input().read(cx).scroll_offset().y;
                         bounds
                     })
                     .unwrap_or_default(),

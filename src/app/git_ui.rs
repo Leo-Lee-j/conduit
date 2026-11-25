@@ -1009,7 +1009,13 @@ impl ConduitApp {
                             criterion.done = false;
                         }
                         if let Err(error) = self.store.workflow.save_task(task) {
-                            self.message = Some(error);
+                            self.notify_feedback(
+                                NoticeSource::Git,
+                                NoticeLevel::Error,
+                                error,
+                                Some(NoticeTarget::Workspace(created.clone())),
+                                cx,
+                            );
                         }
                         self.persist();
                     }

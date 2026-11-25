@@ -1,8 +1,10 @@
 //! Engine-independent contract between CLI integrations and the process runtime.
 mod builtin;
+mod gemini;
 mod opencode;
 mod qoder;
 pub use builtin::{claude, codex};
+pub use gemini::gemini;
 pub use opencode::COMMAND_SOURCE as OPENCODE_COMMANDS;
 pub use opencode::opencode;
 pub use qoder::qoder;
@@ -15,6 +17,24 @@ use crate::{
 use serde_json::Value;
 use std::{collections::BTreeMap, path::PathBuf};
 
+/// Automation restrictions belong to the run, independently of chat permissions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ToolPolicy {
+    #[default]
+    Chat,
+    Automation,
+}
+
+impl ToolPolicy {
+    pub fn permission(self, requested: PermissionLevel) -> PermissionLevel {
+        if self == Self::Automation {
+            PermissionLevel::ReadOnly
+        } else {
+            requested
+        }
+    }
+}
+
 pub struct AdapterRequest {
     pub intent: crate::commands::RequestIntent,
     pub cwd: PathBuf,
@@ -22,6 +42,7 @@ pub struct AdapterRequest {
     pub native_id: Option<String>,
     pub model: Option<String>,
     pub permission: PermissionLevel,
+    pub tool_policy: ToolPolicy,
     pub effort: ReasoningEffort,
     pub route: RuntimeRoute,
     pub text_only: bool,

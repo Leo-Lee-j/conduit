@@ -362,3 +362,46 @@ fn absent_releases_remain_no_update_but_failed_fallbacks_remain_errors() {
     let error = format!("{error:#}");
     assert!(error.contains("403") && error.contains("503"), "{error}");
 }
+
+#[test]
+fn prune_cache_keeps_newer_installers_and_the_latest_handoff() {
+    let _locale = crate::test_support::chinese();
+    let cache = std::env::temp_dir().join(format!("conduit-update-prune-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&cache);
+    fs::create_dir_all(&cache).unwrap();
+    for name in [
+        "Conduit-0.3.19-windows-x64-setup.exe",
+        "Conduit-0.3.20-windows-x64-setup.exe",
+        "Conduit-0.3.21-windows-x64-setup.exe",
+        "Conduit-0.3.21-windows-x64-setup.exe.4242.part",
+        "unrelated.txt",
+    ] {
+        fs::write(cache.join(name), b"12345").unwrap();
+    }
+    for name in ["handoff-1-100", "handoff-2-300", "handoff-3-200"] {
+        fs::create_dir_all(cache.join(name).join("backup")).unwrap();
+        fs::write(cache.join(name).join("backup").join("conduit.exe"), b"123").unwrap();
+    }
+    fs::create_dir(cache.join("other")).unwrap();
+    let freed = prune_cache(&cache, &semver::Version::new(0, 3, 20));
+    let mut left: Vec<_> = fs::read_dir(&cache)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    left.sort();
+    assert_eq!(
+        left,
+        [
+            "Conduit-0.3.21-windows-x64-setup.exe",
+            "handoff-2-300",
+            "other",
+            "unrelated.txt"
+        ]
+    );
+    assert_eq!(freed, 5 * 3 + 3 * 2);
+    assert_eq!(
+        prune_cache(&cache.join("missing"), &semver::Version::new(0, 3, 20)),
+        0
+    );
+    fs::remove_dir_all(&cache).unwrap();
+}

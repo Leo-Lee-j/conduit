@@ -1,0 +1,405 @@
+<style>
+#conduit-pr-layout {
+  --pr-canvas: light-dark(#f7f7f8, #0e0e10);
+  --pr-sidebar: light-dark(#f1f1f3, #131315);
+  --pr-tabbar: light-dark(#eaeaed, #1b1b1e);
+  --pr-surface: light-dark(#ffffff, #19191c);
+  --pr-hover: light-dark(#e9e9ee, #232327);
+  --pr-border: light-dark(#e4e4e9, #29292e);
+  --pr-text: light-dark(#1c1c20, #f3f3f4);
+  --pr-muted: light-dark(#5f5f68, #a1a1a8);
+  --pr-blue: light-dark(#2c5f9e, #8fb8e6);
+  --pr-green: light-dark(#1e6631, #9fdcab);
+  --pr-red: light-dark(#a43636, #e6a1a1);
+  --pr-warn: light-dark(#8a5b00, #e3b96b);
+  --pr-add: light-dark(#eaf5ec, #18251c);
+  --pr-remove: light-dark(#fbeeed, #2b1d1d);
+  --pr-files-width: 220px;
+  --pr-discussion-width: 300px;
+  width: 100%;
+  color: var(--pr-text);
+  font: 13px/1.55 "Segoe UI", "Microsoft YaHei", sans-serif;
+  background: var(--pr-canvas);
+  border: 1px solid var(--pr-border);
+  border-radius: 8px;
+  overflow: clip;
+  box-sizing: border-box;
+}
+#conduit-pr-layout *, #conduit-pr-layout *::before, #conduit-pr-layout *::after { box-sizing: border-box; }
+#conduit-pr-layout [hidden] { display: none !important; }
+#conduit-pr-layout button, #conduit-pr-layout input, #conduit-pr-layout textarea {
+  font: inherit; color: inherit;
+}
+#conduit-pr-layout button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  min-height: 28px; padding: 3px 8px; border: 1px solid transparent;
+  border-radius: 4px; background: transparent; cursor: default;
+}
+#conduit-pr-layout button:hover { background: var(--pr-hover); }
+#conduit-pr-layout button:focus-visible, #conduit-pr-layout summary:focus-visible,
+#conduit-pr-layout input:focus-visible, #conduit-pr-layout textarea:focus-visible {
+  outline: 2px solid var(--pr-blue); outline-offset: -2px;
+}
+#conduit-pr-layout button:disabled { opacity: .5; }
+#conduit-pr-layout .pr-solid { background: var(--pr-text); color: var(--pr-canvas); }
+#conduit-pr-layout .pr-solid:hover { background: var(--pr-muted); color: var(--pr-canvas); }
+#conduit-pr-layout .pr-icon { width: 28px; padding: 4px; flex-shrink: 0; }
+#conduit-pr-layout .pr-muted { color: var(--pr-muted); }
+#conduit-pr-layout .pr-green { color: var(--pr-green); }
+#conduit-pr-layout .pr-blue { color: var(--pr-blue); }
+#conduit-pr-layout .pr-warn { color: var(--pr-warn); }
+#conduit-pr-layout .pr-small { font-size: 12px; }
+#conduit-pr-layout .pr-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+#conduit-pr-layout .pr-spacer { flex: 1; }
+#conduit-pr-layout .pr-windowbar {
+  display: flex; align-items: center; gap: 8px; padding: 0 12px; min-height: 38px;
+  background: var(--pr-tabbar); border-bottom: 1px solid var(--pr-border);
+}
+#conduit-pr-layout .pr-brand { font-weight: 500; }
+#conduit-pr-layout .pr-document-tab {
+  align-self: stretch; display: flex; align-items: center; gap: 7px;
+  padding: 0 12px; background: var(--pr-canvas); border-bottom: 2px solid var(--pr-blue);
+  min-width: 0;
+}
+#conduit-pr-layout .pr-document-tab span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#conduit-pr-layout .pr-panes {
+  display: grid;
+  grid-template-columns: min(var(--pr-files-width), 26%) min(var(--pr-discussion-width), 33%) minmax(0, 1fr);
+  min-height: 600px;
+}
+#conduit-pr-layout[data-focus="true"] .pr-panes { grid-template-columns: min(var(--pr-files-width), 26%) minmax(0, 1fr); }
+#conduit-pr-layout[data-focus="true"] .pr-discussion { display: none; }
+#conduit-pr-layout[data-open="false"] .pr-panes { grid-template-columns: min(var(--pr-files-width), 30%) minmax(0, 1fr); }
+#conduit-pr-layout[data-open="false"] .pr-diff { display: none; }
+#conduit-pr-layout .pr-pane { min-width: 0; display: flex; flex-direction: column; }
+#conduit-pr-layout .pr-files { background: var(--pr-sidebar); }
+#conduit-pr-layout .pr-discussion, #conduit-pr-layout .pr-diff { border-left: 1px solid var(--pr-border); }
+#conduit-pr-layout .pr-pane-heading {
+  min-height: 43px; padding: 7px 12px; border-bottom: 1px solid var(--pr-border);
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+#conduit-pr-layout .pr-pane-heading strong { font-weight: 500; }
+#conduit-pr-layout .pr-meta { padding: 14px 12px 12px; display: grid; gap: 8px; }
+#conduit-pr-layout .pr-title { margin: 0; font-size: 15px; font-weight: 500; line-height: 1.6; overflow-wrap: anywhere; }
+#conduit-pr-layout .pr-state { color: var(--pr-green); display: inline-flex; gap: 4px; align-items: center; }
+#conduit-pr-layout .pr-branch { color: var(--pr-muted); font-size: 12px; overflow-wrap: anywhere; }
+#conduit-pr-layout .pr-divider { margin: 0; border: 0; border-top: 1px solid var(--pr-border); }
+#conduit-pr-layout .pr-filetools { padding: 10px 12px; display: grid; gap: 9px; }
+#conduit-pr-layout .pr-search {
+  width: 100%; background: var(--pr-canvas); border: 1px solid var(--pr-border);
+  border-radius: 4px; padding: 5px 8px; min-width: 0;
+}
+#conduit-pr-layout .pr-tree { padding: 0 6px 12px; }
+#conduit-pr-layout .pr-tree details { padding-left: 8px; }
+#conduit-pr-layout .pr-tree summary { padding: 4px 0; color: var(--pr-muted); overflow-wrap: anywhere; }
+#conduit-pr-layout .pr-tree summary > span { display: inline-flex; align-items: center; gap: 5px; }
+#conduit-pr-layout .pr-file {
+  width: 100%; justify-content: flex-start; text-align: left; gap: 6px; padding: 3px 5px;
+}
+#conduit-pr-layout .pr-file[aria-pressed="true"] { background: var(--pr-hover); }
+#conduit-pr-layout .pr-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#conduit-pr-layout .pr-file-tag { color: var(--pr-green); font-size: 11px; font-family: Consolas, monospace; }
+#conduit-pr-layout .pr-file-tag[data-kind="A"] { color: var(--pr-blue); }
+#conduit-pr-layout .pr-files-footer {
+  margin-top: auto; padding: 12px; border-top: 1px solid var(--pr-border); display: grid; gap: 8px;
+}
+#conduit-pr-layout .pr-tabs { display: flex; padding: 8px 12px; gap: 5px; border-bottom: 1px solid var(--pr-border); flex-wrap: wrap; }
+#conduit-pr-layout .pr-tabs button[aria-selected="true"] { background: var(--pr-hover); font-weight: 500; }
+#conduit-pr-layout .pr-timeline { padding: 16px 13px; display: grid; gap: 23px; }
+#conduit-pr-layout .pr-event { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 9px; }
+#conduit-pr-layout .pr-avatar {
+  width: 26px; height: 26px; border-radius: 50%; background: var(--pr-hover); color: var(--pr-blue);
+  display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 500;
+}
+#conduit-pr-layout .pr-event-meta { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 6px; }
+#conduit-pr-layout .pr-event-meta strong { font-weight: 500; }
+#conduit-pr-layout .pr-event p { margin: 5px 0; overflow-wrap: anywhere; }
+#conduit-pr-layout .pr-event ul { margin: 8px 0 0; padding-left: 18px; }
+#conduit-pr-layout .pr-event li { margin-bottom: 5px; }
+#conduit-pr-layout .pr-event code { font-family: Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; color: var(--pr-green); }
+#conduit-pr-layout .pr-thread { border-left: 2px solid var(--pr-warn); padding-left: 10px; }
+#conduit-pr-layout .pr-file-link { padding: 0 2px; color: var(--pr-blue); max-width: 100%; }
+#conduit-pr-layout .pr-file-link span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#conduit-pr-layout .pr-event-actions { display: flex; gap: 3px; flex-wrap: wrap; margin-top: 7px; }
+#conduit-pr-layout .pr-event-actions button { color: var(--pr-muted); font-size: 12px; padding: 2px 6px; }
+#conduit-pr-layout .pr-checks { padding: 15px 13px; }
+#conduit-pr-layout .pr-check { padding: 13px 0; border-bottom: 1px solid var(--pr-border); }
+#conduit-pr-layout .pr-check strong { font-weight: 500; }
+#conduit-pr-layout .pr-composer { margin-top: auto; padding: 13px; border-top: 1px solid var(--pr-border); }
+#conduit-pr-layout .pr-composer label { display: block; color: var(--pr-muted); margin-bottom: 7px; }
+#conduit-pr-layout .pr-composer textarea {
+  resize: vertical; width: 100%; min-height: 72px; padding: 8px;
+  background: var(--pr-canvas); border: 1px solid var(--pr-border); border-radius: 4px;
+}
+#conduit-pr-layout .pr-composer .pr-row { margin-top: 8px; }
+#conduit-pr-layout .pr-diff-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+#conduit-pr-layout .pr-diff-tools { padding: 8px 12px; border-bottom: 1px solid var(--pr-border); }
+#conduit-pr-layout .pr-diff-tools button[aria-pressed="true"] { background: var(--pr-hover); }
+#conduit-pr-layout .pr-version { padding: 7px 13px; color: var(--pr-muted); background: var(--pr-surface); border-bottom: 1px solid var(--pr-border); font-size: 12px; }
+#conduit-pr-layout .pr-hunk { padding: 7px 12px; color: var(--pr-blue); background: var(--pr-surface); font-family: Consolas, monospace; font-size: 12px; }
+#conduit-pr-layout .pr-code { font: 12px/1.8 Consolas, "Microsoft YaHei", monospace; padding: 8px 0; }
+#conduit-pr-layout .pr-code-line { display: grid; grid-template-columns: 30px 30px 16px minmax(0, 1fr); padding: 2px 12px 2px 3px; }
+#conduit-pr-layout .pr-line-number { color: var(--pr-muted); text-align: right; padding-right: 5px; user-select: none; }
+#conduit-pr-layout .pr-line-sign { text-align: center; color: var(--pr-muted); user-select: none; }
+#conduit-pr-layout .pr-line-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+#conduit-pr-layout .pr-code-line[data-kind="add"], #conduit-pr-layout .pr-split-cell[data-kind="add"] { background: var(--pr-add); }
+#conduit-pr-layout .pr-code-line[data-kind="remove"], #conduit-pr-layout .pr-split-cell[data-kind="remove"] { background: var(--pr-remove); }
+#conduit-pr-layout .pr-code-line[data-kind="add"] .pr-line-sign { color: var(--pr-green); }
+#conduit-pr-layout .pr-code-line[data-kind="remove"] .pr-line-sign { color: var(--pr-red); }
+#conduit-pr-layout .pr-split-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+#conduit-pr-layout .pr-split-cell { min-width: 0; display: grid; grid-template-columns: 26px minmax(0, 1fr); padding: 2px 7px 2px 0; }
+#conduit-pr-layout .pr-split-cell + .pr-split-cell { border-left: 1px solid var(--pr-border); }
+#conduit-pr-layout .pr-diff-footer { margin-top: auto; padding: 9px 12px; border-top: 1px solid var(--pr-border); font-size: 12px; color: var(--pr-muted); display: flex; flex-wrap: wrap; gap: 8px; }
+#conduit-pr-layout .pr-empty-search { padding: 12px; color: var(--pr-muted); }
+@media (max-width: 760px) {
+  #conduit-pr-layout .pr-panes { grid-template-columns: min(var(--pr-files-width), 34%) minmax(0, 1fr); min-height: 0; }
+  #conduit-pr-layout .pr-diff { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--pr-border); min-height: 300px; }
+  #conduit-pr-layout[data-focus="true"] .pr-diff { grid-column: auto; border-left: 1px solid var(--pr-border); border-top: 0; }
+}
+@media (max-width: 480px) {
+  #conduit-pr-layout .pr-panes, #conduit-pr-layout[data-open="false"] .pr-panes,
+  #conduit-pr-layout[data-focus="true"] .pr-panes { display: flex; flex-direction: column; }
+  #conduit-pr-layout .pr-discussion, #conduit-pr-layout .pr-diff { border-left: 0; border-top: 1px solid var(--pr-border); }
+  #conduit-pr-layout .pr-brand { display: none; }
+  #conduit-pr-layout .pr-files-footer { margin-top: 0; }
+  #conduit-pr-layout .pr-document-tab { padding: 0 6px; }
+  #conduit-pr-layout .pr-code { font-size: 12px; }
+}
+@media (pointer: coarse) {
+  #conduit-pr-layout button, #conduit-pr-layout summary { min-height: 44px; }
+  #conduit-pr-layout .pr-icon { width: 44px; }
+  #conduit-pr-layout input, #conduit-pr-layout textarea { font-size: 16px; }
+}
+</style>
+<div id="conduit-pr-layout" data-open="true" data-focus="false" aria-label="Conduit PR/MR 三列布局预览">
+  <div class="pr-windowbar">
+    <span class="pr-brand">Conduit</span>
+    <div class="pr-document-tab"><i data-lucide="git-pull-request" aria-hidden="true"></i><span>MR !119 · jupiter-back-end</span></div>
+    <span class="pr-spacer"></span>
+    <span class="pr-muted pr-small">布局预览</span>
+  </div>
+  <div class="pr-panes">
+    <aside class="pr-pane pr-files" aria-label="变更文件">
+      <div class="pr-meta">
+        <div class="pr-row"><span class="pr-state"><i data-lucide="git-pull-request" aria-hidden="true"></i>打开</span><span class="pr-spacer"></span><span class="pr-muted">!119</span></div>
+        <h2 class="pr-title">feat(x): 添加X帖子批创＆素材上传功能</h2>
+        <div class="pr-small pr-muted">Leo Li · 11 月 20 日</div>
+        <div class="pr-branch">feat/x_posts_1020_lhj<br>→ master</div>
+        <div class="pr-row pr-small"><span class="pr-warn">CI · 1 失败</span><span class="pr-muted">审查 · 待处理</span></div>
+      </div>
+      <hr class="pr-divider">
+      <div class="pr-filetools">
+        <div class="pr-row pr-small"><strong>全部变更</strong><span class="pr-spacer"></span><span class="pr-muted">17 次提交</span></div>
+        <input class="pr-search" aria-label="筛选变更文件" placeholder="筛选文件…" type="search">
+        <div class="pr-row pr-small"><span class="pr-muted">52 个文件</span><span class="pr-spacer"></span><span class="pr-green">+486</span><span style="color:var(--pr-red)">−92</span></div>
+      </div>
+      <nav class="pr-tree" aria-label="MR 变更文件树">
+        <details open><summary><span><i data-lucide="folder" aria-hidden="true"></i>ad-api-server</span></summary>
+          <details open><summary><span>src/main · api/server</span></summary>
+            <details open><summary><span>entity / mapper / pojo</span></summary>
+              <button type="button" class="pr-file" data-file="AuthConfig.java" aria-pressed="false"><i data-lucide="file-code-2" aria-hidden="true"></i><span class="pr-file-name" data-tooltip="entity/AuthConfig.java">AuthConfig.java</span><span class="pr-file-tag">M</span></button>
+              <button type="button" class="pr-file" data-file="XAuthCredentialMapper.java" aria-pressed="false"><i data-lucide="file-code-2" aria-hidden="true"></i><span class="pr-file-name" data-tooltip="mapper/XAuthCredentialMapper.java">XAuthCredentialMapper.java</span><span class="pr-file-tag">M</span></button>
+              <button type="button" class="pr-file" data-file="MediaAccountSelectVO.java" aria-pressed="false"><i data-lucide="file-code-2" aria-hidden="true"></i><span class="pr-file-name" data-tooltip="pojo/vo/MediaAccountSelectVO.java">MediaAccountSelectVO.java</span><span class="pr-file-tag">M</span></button>
+            </details>
+            <details open><summary><span>sdk/x / api</span></summary>
+              <button type="button" class="pr-file" data-file="AbstractApiRequest.java" aria-pressed="true"><i data-lucide="file-code-2" aria-hidden="true"></i><span class="pr-file-name" data-tooltip="sdk/x/api/AbstractApiRequest.java">AbstractApiRequest.java</span><span class="pr-file-tag">M</span></button>
+              <button type="button" class="pr-file" data-file="ApiContext.java" aria-pressed="false"><i data-lucide="file-code-2" aria-hidden="true"></i><span class="pr-file-name">ApiContext.java</span><span class="pr-file-tag" data-kind="A">A</span></button>
+              <button type="button" class="pr-file" data-file="ApiExecutor.java" aria-pressed="false"><i data-lucide="file-code-2" aria-hidden="true"></i><span class="pr-file-name">ApiExecutor.java</span><span class="pr-file-tag">M</span></button>
+              <button type="button" class="pr-file" data-file="ApiResponse.java" aria-pressed="false"><i data-lucide="file-code-2" aria-hidden="true"></i><span class="pr-file-name">ApiResponse.java</span><span class="pr-file-tag">M</span></button>
+              <button type="button" class="pr-file" data-file="XApiException.java" aria-pressed="false"><i data-lucide="file-code-2" aria-hidden="true"></i><span class="pr-file-name">XApiException.java</span><span class="pr-file-tag" data-kind="A">A</span></button>
+            </details>
+          </details>
+        </details>
+        <div class="pr-empty-search" hidden>没有匹配的文件</div>
+      </nav>
+      <div class="pr-files-footer">
+        <span class="pr-small pr-muted">双击文件或按 Enter 打开 diff</span>
+        <button type="button" class="pr-review-filter"><i data-lucide="message-square" aria-hidden="true"></i>待处理讨论 · 1</button>
+      </div>
+    </aside>
+    <section class="pr-pane pr-discussion" aria-label="概览与讨论">
+      <div class="pr-pane-heading"><strong>概览与讨论</strong><span class="pr-spacer"></span><button type="button" class="pr-icon pr-focus-toggle" aria-label="收起讨论，聚焦 diff" data-tooltip="收起讨论，聚焦 diff"><i data-lucide="panel-left-close" aria-hidden="true"></i></button></div>
+      <div class="pr-tabs" role="tablist" aria-label="详情内容">
+        <button type="button" role="tab" id="pr-activity-tab" aria-controls="pr-activity" aria-selected="true" data-tab="activity">活动</button>
+        <button type="button" role="tab" id="pr-checks-tab" aria-controls="pr-checks" aria-selected="false" data-tab="checks">检查 · 3</button>
+      </div>
+      <div id="pr-activity" role="tabpanel" aria-labelledby="pr-activity-tab">
+        <div class="pr-timeline">
+          <article class="pr-event pr-general-event">
+            <div class="pr-avatar" aria-hidden="true">LL</div>
+            <div>
+              <div class="pr-event-meta"><strong>Leo Li</strong><span class="pr-muted pr-small">描述</span></div>
+              <p>新增 X 帖子批创与素材上传能力。</p>
+              <ul><li>补充认证与账户信息。</li><li>统一接口请求与异常处理。</li><li>增加 <code>platformCreateTime</code> 与 <code>localCreateTime</code> 字段。</li></ul>
+            </div>
+          </article>
+          <article class="pr-event pr-general-event">
+            <div class="pr-avatar" aria-hidden="true">LL</div>
+            <div><div class="pr-event-meta"><strong>Leo Li</strong><span class="pr-muted pr-small">11/20 17:48</span></div><p class="pr-muted">指派给 <span class="pr-blue">@LeoLi</span></p></div>
+          </article>
+          <article class="pr-event" id="pr-review-thread">
+            <div class="pr-avatar" aria-hidden="true">LW</div>
+            <div class="pr-thread">
+              <div class="pr-event-meta"><strong>L. Wang</strong><span class="pr-warn pr-small">未解决</span></div>
+              <button type="button" class="pr-file-link" data-open-file="AbstractApiRequest.java" data-tooltip="打开 AbstractApiRequest.java 第 42 行"><i data-lucide="file-code-2" aria-hidden="true"></i><span>AbstractApiRequest.java:42</span></button>
+              <p>这里可以补充空响应检查吗？</p>
+              <div class="pr-event-actions"><button type="button" class="pr-reply">回复</button><button type="button" class="pr-attach">带入会话</button></div>
+              <div class="pr-attach-status pr-small pr-blue" hidden aria-live="polite">已选为会话上下文 · 预览</div>
+            </div>
+          </article>
+        </div>
+      </div>
+      <div id="pr-checks" class="pr-checks" role="tabpanel" aria-labelledby="pr-checks-tab" hidden>
+        <div class="pr-check"><div class="pr-row"><strong>unit-test</strong><span class="pr-spacer"></span><span style="color:var(--pr-red)">失败</span></div><p class="pr-muted pr-small">ApiRequestTest · 空响应处理</p><button type="button" class="pr-attach">带入会话</button><span class="pr-attach-status pr-small pr-blue" hidden>已选为会话上下文 · 预览</span></div>
+        <div class="pr-check"><div class="pr-row"><strong>build</strong><span class="pr-spacer"></span><span class="pr-green">通过</span></div></div>
+        <div class="pr-check"><div class="pr-row"><strong>lint</strong><span class="pr-spacer"></span><span class="pr-green">通过</span></div></div>
+      </div>
+      <form class="pr-composer">
+        <label for="pr-comment-draft">评论</label>
+        <textarea id="pr-comment-draft" placeholder="写一条评论…"></textarea>
+        <div class="pr-row"><span class="pr-muted pr-small">Markdown</span><span class="pr-spacer"></span><button type="submit" class="pr-solid" disabled>预览评论</button></div>
+      </form>
+    </section>
+    <section class="pr-pane pr-diff" aria-label="文件差异" aria-live="polite">
+      <div class="pr-pane-heading"><span class="pr-diff-path" data-tooltip="sdk/x/api/AbstractApiRequest.java">AbstractApiRequest.java</span><button type="button" class="pr-icon pr-diff-close" aria-label="关闭 diff" data-tooltip="关闭 diff"><i data-lucide="x" aria-hidden="true"></i></button></div>
+      <div class="pr-diff-tools pr-row">
+        <button type="button" class="pr-mode" data-mode="unified" aria-pressed="true">统一</button><button type="button" class="pr-mode" data-mode="split" aria-pressed="false">并排</button><span class="pr-spacer"></span><button type="button" class="pr-focus-toggle"><i data-lucide="panel-left-close" aria-hidden="true"></i><span class="pr-focus-label">聚焦 diff</span></button>
+      </div>
+      <div class="pr-version">master · base → feat/x_posts_1020_lhj · head</div>
+      <div class="pr-hunk">@@ −39,7 +39,10 @@</div>
+      <div class="pr-code"></div>
+      <div class="pr-diff-footer"><span>PR/MR 远端版本 · 只读</span><span class="pr-spacer"></span><span>1 个变更块</span></div>
+    </section>
+  </div>
+</div>
+<script>
+(() => {
+  const root = document.getElementById('conduit-pr-layout');
+  const state = { file: 'AbstractApiRequest.java', selected: 'AbstractApiRequest.java', open: true, focused: false, mode: 'unified', tab: 'activity', unresolvedOnly: false, filesWidth: 220, discussionWidth: 300 };
+  const code = root.querySelector('.pr-code');
+  const textarea = root.querySelector('#pr-comment-draft');
+  const sample = {
+    'AbstractApiRequest.java': { path: 'sdk/x/api/AbstractApiRequest.java', start: 39, rows: [
+      ['    public T execute() {', '    public T execute() {'],
+      ['        ApiResponse<T> response = send();', '        ApiResponse<T> response = send();'],
+      [null, '        if (response == null) {'],
+      [null, '            throw new XApiException("Empty response");'],
+      [null, '        }'],
+      ['        return response.getData();', '        return response.getData();'],
+      ['    }', '    }']
+    ] },
+    'MediaAccountSelectVO.java': { path: 'pojo/vo/MediaAccountSelectVO.java', start: 21, rows: [
+      ['public class MediaAccountSelectVO {', 'public class MediaAccountSelectVO {'],
+      ['    private String accountName;', '    private String accountName;'],
+      [null, '    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")'],
+      [null, '    private LocalDateTime platformCreateTime;'],
+      [null, '    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")'],
+      [null, '    private LocalDateTime localCreateTime;'],
+      ['}', '}']
+    ] },
+    'AuthConfig.java': { path: 'entity/AuthConfig.java', start: 12, rows: [
+      ['public class AuthConfig {', 'public class AuthConfig {'],
+      ['    private String token;', '    private String token;'],
+      [null, '    private String accountId;'],
+      [null, '    private String apiBaseUrl;'],
+      ['}', '}']
+    ] }
+  };
+  const fallback = (name) => ({ path: 'sdk/x/api/' + name, start: 8, rows: [
+    ['public class ' + name.replace('.java', '') + ' {', 'public class ' + name.replace('.java', '') + ' {'],
+    [null, '    private final ApiContext context;'],
+    [null, '    // X API request support'],
+    ['}', '}']
+  ] });
+  function span(className, value) {
+    const el = document.createElement('span');
+    el.className = className; el.textContent = value == null ? '' : String(value);
+    return el;
+  }
+  function renderCode() {
+    const file = sample[state.file] || fallback(state.file);
+    const path = root.querySelector('.pr-diff-path');
+    path.textContent = state.file; path.setAttribute('data-tooltip', file.path);
+    code.replaceChildren();
+    let oldNumber = file.start, newNumber = file.start;
+    const addLine = (before, after, text, kind) => {
+      const line = document.createElement('div');
+      line.className = 'pr-code-line'; line.dataset.kind = kind;
+      line.append(span('pr-line-number', before), span('pr-line-number', after), span('pr-line-sign', kind === 'add' ? '+' : kind === 'remove' ? '−' : ''), span('pr-line-text', text));
+      code.append(line);
+    };
+    file.rows.forEach(([before, after]) => {
+      const oldLine = before == null ? '' : oldNumber++;
+      const newLine = after == null ? '' : newNumber++;
+      if (state.mode === 'split') {
+        const row = document.createElement('div'); row.className = 'pr-split-row';
+        for (const [text, number, kind] of [[before, oldLine, before !== after && before != null ? 'remove' : 'context'], [after, newLine, before !== after && after != null ? 'add' : 'context']]) {
+          const cell = document.createElement('div'); cell.className = 'pr-split-cell'; cell.dataset.kind = kind;
+          cell.append(span('pr-line-number', number), span('pr-line-text', text)); row.append(cell);
+        }
+        code.append(row);
+      } else if (before === after) { addLine(oldLine, newLine, before, 'context'); }
+      else {
+        if (before != null) addLine(oldLine, '', before, 'remove');
+        if (after != null) addLine('', newLine, after, 'add');
+      }
+    });
+    root.querySelector('.pr-hunk').textContent = '@@ −' + file.start + ',' + (oldNumber - file.start) + ' +' + file.start + ',' + (newNumber - file.start) + ' @@';
+    root.querySelector('.pr-version').textContent = state.mode === 'split' ? '左：master · base    右：feat/x_posts_1020_lhj · head' : 'master · base → feat/x_posts_1020_lhj · head';
+  }
+  function render() {
+    root.dataset.open = String(state.open); root.dataset.focus = String(state.focused && state.open);
+    root.style.setProperty('--pr-files-width', state.filesWidth + 'px');
+    root.style.setProperty('--pr-discussion-width', state.discussionWidth + 'px');
+    root.querySelectorAll('.pr-file').forEach(el => el.setAttribute('aria-pressed', String(el.dataset.file === state.selected)));
+    root.querySelectorAll('.pr-mode').forEach(el => el.setAttribute('aria-pressed', String(el.dataset.mode === state.mode)));
+    root.querySelectorAll('[data-tab]').forEach(el => el.setAttribute('aria-selected', String(el.dataset.tab === state.tab)));
+    root.querySelector('#pr-activity').hidden = state.tab !== 'activity';
+    root.querySelector('#pr-checks').hidden = state.tab !== 'checks';
+    root.querySelectorAll('.pr-general-event').forEach(el => el.hidden = state.unresolvedOnly);
+    root.querySelector('.pr-review-filter').setAttribute('aria-pressed', String(state.unresolvedOnly));
+    root.querySelector('.pr-focus-label').textContent = state.focused ? '显示讨论' : '聚焦 diff';
+    root.querySelector('.pr-discussion .pr-focus-toggle').disabled = !state.open;
+    renderCode();
+  }
+  function openFile(file) { state.file = file; state.selected = file; state.open = true; render(); }
+  root.querySelectorAll('.pr-file').forEach(el => {
+    el.addEventListener('click', () => { state.selected = el.dataset.file; render(); });
+    el.addEventListener('dblclick', () => openFile(el.dataset.file));
+    el.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); openFile(el.dataset.file); } });
+  });
+  root.querySelectorAll('[data-open-file]').forEach(el => el.addEventListener('click', () => openFile(el.dataset.openFile)));
+  root.querySelectorAll('.pr-focus-toggle').forEach(el => el.addEventListener('click', () => { state.focused = !state.focused; render(); }));
+  root.querySelector('.pr-diff-close').addEventListener('click', () => { state.open = false; state.focused = false; render(); });
+  root.querySelectorAll('.pr-mode').forEach(el => el.addEventListener('click', () => { state.mode = el.dataset.mode; render(); }));
+  root.querySelectorAll('[data-tab]').forEach(el => el.addEventListener('click', () => { state.tab = el.dataset.tab; state.unresolvedOnly = false; render(); }));
+  root.querySelector('.pr-review-filter').addEventListener('click', () => { state.tab = 'activity'; state.focused = false; state.unresolvedOnly = !state.unresolvedOnly; render(); });
+  root.querySelector('.pr-search').addEventListener('input', e => {
+    const query = e.target.value.trim().toLowerCase(); let count = 0;
+    root.querySelectorAll('.pr-file').forEach(el => { el.hidden = !el.dataset.file.toLowerCase().includes(query); if (!el.hidden) count++; });
+    root.querySelector('.pr-empty-search').hidden = count > 0;
+    if (query) root.querySelectorAll('.pr-tree details').forEach(el => el.open = true);
+  });
+  root.querySelector('.pr-reply').addEventListener('click', () => { textarea.value = '@L. Wang '; textarea.dispatchEvent(new Event('input')); textarea.focus(); });
+  root.querySelectorAll('.pr-attach').forEach(el => el.addEventListener('click', () => {
+    const status = el.parentElement.parentElement.querySelector('.pr-attach-status') || el.parentElement.querySelector('.pr-attach-status');
+    if (status) status.hidden = !status.hidden;
+  }));
+  textarea.addEventListener('input', () => root.querySelector('.pr-composer button[type="submit"]').disabled = !textarea.value.trim());
+  root.querySelector('.pr-composer').addEventListener('submit', e => {
+    e.preventDefault(); const text = textarea.value.trim(); if (!text) return;
+    state.tab = 'activity'; state.unresolvedOnly = false;
+    const article = document.createElement('article'); article.className = 'pr-event pr-general-event';
+    const avatar = document.createElement('div'); avatar.className = 'pr-avatar'; avatar.textContent = 'LL'; avatar.setAttribute('aria-hidden', 'true');
+    const content = document.createElement('div'); const meta = document.createElement('div'); meta.className = 'pr-event-meta'; meta.append(span('', 'Leo Li'), span('pr-muted pr-small', '评论预览'));
+    const body = document.createElement('p'); body.textContent = text; content.append(meta, body); article.append(avatar, content);
+    root.querySelector('.pr-timeline').append(article); textarea.value = ''; textarea.dispatchEvent(new Event('input')); render();
+  });
+  render();
+  if (globalThis.Tweak) {
+    const tweak = new Tweak({ container: root, onChange: render });
+    tweak.addSlider(state, 'filesWidth', { label: '文件列宽度', min: 180, max: 280, step: 10, unit: 'px' });
+    tweak.addSlider(state, 'discussionWidth', { label: '讨论列宽度', min: 240, max: 420, step: 10, unit: 'px' });
+  }
+})();
+</script>

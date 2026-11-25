@@ -111,6 +111,75 @@ fn migration_backs_up_legacy_state_and_starts_with_summaries() {
 }
 
 #[test]
+fn task_list_survives_disk_save_cold_transcripts_and_explicit_clear() {
+    let fixture = Fixture::new();
+    let mut state = fixture.store(1);
+    crate::task_list::apply(
+        &mut state.workspaces[0].sessions[0],
+        crate::task_list::Change::Upsert(crate::task_list::Task {
+            id: "7".into(),
+            text: "Persist native tasks".into(),
+            ..Default::default()
+        }),
+    );
+    state.save_to(&fixture.state).unwrap();
+    let mut restored = Store::load_from(&fixture.state).unwrap();
+    let session = &mut restored.workspaces[0].sessions[0];
+    assert!(!session.transcript.loaded);
+    assert_eq!(
+        session
+            .task_list
+            .as_ref()
+            .unwrap()
+            .visible(session)
+            .unwrap()[0]
+            .id,
+        "7"
+    );
+    crate::task_list::apply(
+        session,
+        crate::task_list::Change::Replace {
+            steps: vec![],
+            persistent: true,
+        },
+    );
+    restored.save_to(&fixture.state).unwrap();
+    let cleared = Store::load_from(&fixture.state).unwrap();
+    assert!(
+        cleared.workspaces[0].sessions[0]
+            .task_list
+            .as_ref()
+            .unwrap()
+            .steps
+            .is_empty()
+    );
+    let session = &mut state.workspaces[0].sessions[0];
+    crate::task_list::apply(
+        session,
+        crate::task_list::wire_plan(vec![("Saved Codex plan".into(), "inProgress".into())]),
+    );
+    state.save_to(&fixture.state).unwrap();
+    let cold = Store::load_from(&fixture.state).unwrap();
+    let session = &cold.workspaces[0].sessions[0];
+    assert!(!session.transcript.loaded);
+    assert_eq!(
+        session
+            .task_list
+            .as_ref()
+            .unwrap()
+            .visible(session)
+            .unwrap()[0]
+            .text,
+        "Saved Codex plan"
+    );
+    let loaded = load(session.clone()).unwrap();
+    assert_eq!(
+        loaded.task_list.as_ref().unwrap().visible(&loaded).unwrap()[0].text,
+        "Saved Codex plan"
+    );
+}
+
+#[test]
 fn unloaded_save_preserves_body_and_attachment_reachability() {
     let _locale = crate::test_support::chinese();
     let fixture = Fixture::new();
@@ -317,6 +386,17 @@ fn pages_reuse_unchanged_messages_and_legacy_v3_roots_still_load() {
         expected
     );
     let mut shortened = load(session.clone()).unwrap();
+    // Short bodies live only in the messages; the receipt does not copy them.
+    let receipt = shortened
+        .transcript
+        .receipt
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap();
+    assert_eq!(receipt.parts.len(), 200);
+    assert!(receipt.parts.iter().all(|part| part.chunked_fields() == 0));
+    drop(receipt);
     shortened.messages.truncate(130);
     save(&shortened, &directory).unwrap();
     assert!(unload(&mut shortened));
@@ -376,6 +456,8 @@ fn cold_history_merge_preserves_local_messages_and_remains_cold() {
     state.save_to(&fixture.state).unwrap();
     let cold = Store::load_from(&fixture.state).unwrap();
     let incoming = crate::history::ImportedSession {
+        usage: Default::default(),
+        task_list: None,
         is_subagent: false,
         provider: cold.workspaces[0].sessions[0].provider,
         native_id: "native-1".into(),

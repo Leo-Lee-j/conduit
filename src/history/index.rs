@@ -3,8 +3,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 
-// Reparse native metadata so earlier child imports can be hidden without losing history.
-const PARSER_VERSION: u32 = 7;
+// Reparse old rollouts to recover task lists and native usage snapshots.
+const PARSER_VERSION: u32 = 10;
 const MAX_ENTRY_BYTES: usize = 32 * 1024 * 1024;
 const MAX_INDEX_BYTES: i64 = 256 * 1024 * 1024;
 
@@ -28,6 +28,26 @@ impl Stamp {
             modified: nanos(metadata.modified()),
             created: nanos(metadata.created()),
         })
+    }
+}
+
+impl From<Stamp> for crate::domain::HistoryFileStamp {
+    fn from(stamp: Stamp) -> Self {
+        Self {
+            len: stamp.len,
+            modified: stamp.modified,
+            created: stamp.created,
+        }
+    }
+}
+
+impl From<crate::domain::HistoryFileStamp> for Stamp {
+    fn from(stamp: crate::domain::HistoryFileStamp) -> Self {
+        Self {
+            len: stamp.len,
+            modified: stamp.modified,
+            created: stamp.created,
+        }
     }
 }
 
@@ -168,5 +188,19 @@ impl Index {
             Ok(())
         };
         save().map_err(|error| error.to_string())
+    }
+    /// Updates the `touched` timestamp for cache eviction without reading or rewriting parser state.
+    pub fn touch(&mut self, path: &Path) -> Result<(), String> {
+        let touch = || -> anyhow::Result<()> {
+            let touched = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_millis() as i64;
+            self.0.execute(
+                "UPDATE history_files SET touched=?1 WHERE path=?2",
+                params![touched, path.to_string_lossy().as_ref()],
+            )?;
+            Ok(())
+        };
+        touch().map_err(|error| error.to_string())
     }
 }

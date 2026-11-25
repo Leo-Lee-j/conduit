@@ -24,6 +24,8 @@ python scripts/screenshot-demo.py --root D:\Conduit-Demo
 
 首次生成三个工作空间、八组对话与三个本地 Git 仓库；再次启动保留演示里的编辑与界面设置。默认目录是 `target/screenshot-demo`。已有非演示目录会被拒绝，脚本不会重置或删除数据。
 
+新生成的演示还包含本月和上月的虚构用量记录，用于展示每日趋势、等天数同期对比与模型排行。旧演示不会自动补写数据；使用 `--fresh` 生成新演示即可获得这些记录。统计值由脚本构造，没有调用模型或读取真实 CLI 用量。
+
 生成后，也可以双击演示根目录下的 `Start-Conduit-Demo.cmd` 再次启动。启动器引用当前仓库脚本，移动仓库后请从新位置重新运行上述命令。
 
 ```powershell
@@ -64,5 +66,8 @@ python scripts/screenshot-demo.py --prepare-only
 3. **文档预览**：打开 `docs/design-notes.md`，展示 Markdown 标题和表格。
 4. **项目成果**：打开 Orbit 网页，展示完整看板；再点击任务卡片拍摄详情。
 5. **外观**：在演示实例设置中切换深浅主题，生成不同风格的宣传素材。
+6. **用量洞察**：选择 orbit-web，点击左侧底部统计图标，展示每日趋势、同期对比和模型排行。
 
 对外说明这些是示例项目与演示数据，避免将预置会话误标为真实模型性能或运行结果。
+
+README 使用的原生截图放在 [assets/screenshots/](../../assets/screenshots/README.md)。主图展示聊天与旁边的代码；Git 审阅和用量洞察放在折叠区，中英文首页共用图片。统一窗口尺寸和主题，PNG 保留原始像素，仅裁去窗口外的桌面边缘；不要用 Orbit 网页或设置 HTML 原型替代原生应用截图。`docs/screenshots/` 被 Git 忽略，不用于提交首页图片。

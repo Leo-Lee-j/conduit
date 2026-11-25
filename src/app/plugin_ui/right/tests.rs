@@ -70,6 +70,43 @@ fn copied(cx: &mut VisualTestContext) -> String {
 }
 
 #[gpui_kit::test]
+fn session_data_restores_native_usage_cards_after_restart(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let disk = crate::transcript::tests::Fixture::new();
+    let mut store = disk.store(0);
+    let imported = serde_json::from_value(serde_json::json!({
+        "provider":"Codex", "native_id":"native-usage", "created_at":1,
+        "title":"Imported usage", "model":null, "subagents":[], "is_subagent":false,
+        "messages":[{"key":"import-user","kind":"User","text":"hello"}],
+        "usage":{
+            "history":{"input":1000,"cached":800,"cache_write":null,"output":100},
+            "input_tokens_known":true,"cached_input_tokens_known":true,"output_tokens_known":true,
+            "input_tokens":5000,"cached_input_tokens":4000,"output_tokens":500,
+            "total_tokens":5500,"context_tokens":1100,"context_window":200000
+        }
+    }))
+    .unwrap();
+    crate::history::merge_imported(&mut store.workspaces[0], &mut 1, vec![imported]);
+    store.save_to(&disk.state).unwrap();
+    let restored = Store::load_from(&disk.state).unwrap();
+    assert!(!restored.workspaces[0].sessions[0].transcript.loaded);
+    assert!(restored.usage_ledger.observations.is_empty());
+    let (app, cx) = fixture(cx, restored, PluginUi::new());
+    cx.simulate_resize(gpui_kit::size(px(1100.), px(1600.)));
+    draw(cx);
+    assert!(cx.element_bounds("session-data-context-card").is_some());
+    assert!(cx.element_bounds("session-data-usage-summary").is_some());
+    assert!(cx.element_bounds("session-data-empty-state").is_none());
+    app.read_with(cx, |app, _| {
+        let usage = app.session(1).unwrap().usage;
+        assert_eq!(usage.context_ratio(), Some(0.0055));
+        assert_eq!(usage.history.unwrap().input, Some(1000));
+        assert_eq!(usage.input_tokens, 5000);
+        assert!(app.store.usage_ledger.observations.is_empty());
+    });
+}
+
+#[gpui_kit::test]
 fn session_data_opens_on_session_entry_and_respects_manual_changes(cx: &mut TestAppContext) {
     let _locale = crate::test_support::chinese();
     let mut store = tool_store();
@@ -87,6 +124,7 @@ fn session_data_opens_on_session_entry_and_respects_manual_changes(cx: &mut Test
             finished_at: 1,
             input: Some(1_000),
             cached: Some(800),
+            cache_write: Some(100),
             output: Some(100),
             elapsed_ms: 1_000,
             incomplete: false,
@@ -101,11 +139,24 @@ fn session_data_opens_on_session_entry_and_respects_manual_changes(cx: &mut Test
         cx.labeled_bounds(Role::Group, "API 连接质量 · 连接顺畅")
             .is_some()
     );
+    let quality_card = cx.element_bounds("session-data-api-quality-card").unwrap();
+    let quality_chart = cx.element_bounds("session-data-api-quality-chart").unwrap();
+    assert!(quality_chart.size.height >= quality_card.size.height - px(2.));
+    let quality_bar = cx.element_bounds("session-data-api-quality-bar-0").unwrap();
+    assert!(quality_bar.size.height > px(30.));
+    assert!(quality_bar.origin.y >= quality_card.origin.y);
+    assert!(quality_bar.bottom() <= quality_card.bottom());
+    assert!(
+        cx.labeled_bounds(Role::Group, "连接顺畅 · 首响应：1.0s")
+            .is_some()
+    );
     assert!(cx.element_bounds("session-data-usage-summary").is_some());
-    assert!(cx.element_bounds("session-data-token-details").is_some());
-    click_labeled(cx, Role::Button, "Token 明细");
-    draw(cx);
+    assert!(cx.element_bounds("session-data-token-toggle").is_none());
     assert!(cx.element_bounds("session-data-token-details").is_none());
+    assert!(cx.element_bounds("session-data-tool-details").is_some());
+    click_labeled(cx, Role::Button, "工具与子代理");
+    draw(cx);
+    assert!(cx.element_bounds("session-data-tool-details").is_none());
     cx.update(|window, cx| app.update(cx, |app, cx| app.open_usage(window, cx)));
     draw(cx);
     assert!(cx.element_bounds("session-data-panel").is_none());
@@ -149,7 +200,7 @@ fn session_data_opens_on_session_entry_and_respects_manual_changes(cx: &mut Test
     cx.update(|window, cx| app.update(cx, |app, cx| app.switch(1, Some(2), window, cx)));
     draw(cx);
     assert!(cx.element_bounds("session-data-panel").is_some());
-    assert!(cx.element_bounds("session-data-token-details").is_some());
+    assert!(cx.element_bounds("session-data-tool-details").is_some());
     cx.update(|_, cx| assert!(app.read(cx).plugins.right_is(builtins::SESSION_DATA)));
     assert!(cx.element_bounds("session-data-empty-state").is_some());
     assert!(
@@ -157,10 +208,164 @@ fn session_data_opens_on_session_entry_and_respects_manual_changes(cx: &mut Test
             .is_some()
     );
     assert!(cx.element_bounds("session-data-usage-summary").is_none());
+    assert!(
+        cx.element_bounds("session-data-api-quality-bar-0")
+            .is_none()
+    );
     cx.update(|window, cx| app.update(cx, |app, cx| app.switch(0, Some(1), window, cx)));
     draw(cx);
     assert!(cx.element_bounds("session-data-panel").is_some());
-    assert!(cx.element_bounds("session-data-token-details").is_none());
+    assert!(cx.element_bounds("session-data-tool-details").is_none());
+    assert!(cx.element_bounds("session-data-usage-summary").is_some());
+}
+
+#[gpui_kit::test]
+fn session_data_api_quality_tracks_live_replies_completion_and_session_switches(
+    cx: &mut TestAppContext,
+) {
+    use crate::app::{Event, queue::tests::running};
+    use crate::usage_ledger::{ApiRequestOutcome, Ledger};
+    use std::time::Instant;
+
+    let _locale = crate::test_support::chinese();
+    let (app, cx) = fixture(cx, store(), PluginUi::new());
+    cx.simulate_resize(gpui_kit::size(px(1100.), px(1600.)));
+    let sender = cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.store.ui.auto_rename = false;
+            let sender = running(app, 1);
+            app.session_control
+                .runs
+                .get_mut(&1)
+                .unwrap()
+                .api_request_started = Some(Instant::now());
+            cx.notify();
+            sender
+        })
+    });
+    draw(cx);
+    assert!(
+        cx.element_bounds("session-data-api-quality-bar-0")
+            .is_none()
+    );
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            sender
+                .send(Event::Delta {
+                    key: "reply".into(),
+                    text: "First response".into(),
+                })
+                .unwrap();
+            app.poll_streams(window, cx);
+            assert!(app.session_control.runs[&1].api_first_response_ms.is_some());
+            assert!(app.store.usage_ledger.observations.is_empty());
+        })
+    });
+    draw(cx);
+    assert!(
+        cx.element_bounds("session-data-api-quality-bar-0")
+            .is_some(),
+        "the first live reply must appear before the CLI finishes"
+    );
+    assert!(
+        cx.element_bounds("session-data-api-quality-bar-1")
+            .is_none()
+    );
+
+    cx.update(|window, cx| app.update(cx, |app, cx| app.switch(1, Some(2), window, cx)));
+    draw(cx);
+    assert!(
+        cx.element_bounds("session-data-api-quality-bar-0")
+            .is_none()
+    );
+    cx.update(|window, cx| app.update(cx, |app, cx| app.switch(0, Some(1), window, cx)));
+    draw(cx);
+    assert!(
+        cx.element_bounds("session-data-api-quality-bar-0")
+            .is_some()
+    );
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            let response_ms = app.session_control.runs[&1].api_first_response_ms;
+            sender
+                .send(Event::Finished {
+                    error: None,
+                    cancelled: false,
+                })
+                .unwrap();
+            app.poll_streams(window, cx);
+            assert!(!app.session_control.runs.contains_key(&1));
+            let ledger: Ledger =
+                serde_json::from_str(&serde_json::to_string(&app.store.usage_ledger).unwrap())
+                    .unwrap();
+            assert_eq!(ledger.observations.len(), 1);
+            assert_eq!(ledger.observations[0].session, 1);
+            assert_eq!(ledger.observations[0].api_first_response_ms, response_ms);
+            assert_eq!(
+                ledger.observations[0].api_request_outcome,
+                Some(ApiRequestOutcome::Succeeded)
+            );
+            app.store.usage_ledger = ledger;
+            cx.notify();
+        })
+    });
+    draw(cx);
+    assert!(
+        cx.element_bounds("session-data-api-quality-bar-0")
+            .is_some()
+    );
+    assert!(
+        cx.element_bounds("session-data-api-quality-bar-1")
+            .is_none()
+    );
+
+    let cancelled_sender = cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            let sender = running(app, 1);
+            app.session_control
+                .runs
+                .get_mut(&1)
+                .unwrap()
+                .api_request_started = Some(Instant::now());
+            sender
+                .send(Event::Delta {
+                    key: "next-reply".into(),
+                    text: "Next response".into(),
+                })
+                .unwrap();
+            app.poll_streams(window, cx);
+            sender
+        })
+    });
+    draw(cx);
+    assert!(
+        cx.element_bounds("session-data-api-quality-bar-1")
+            .is_some()
+    );
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.session_control.runs.get_mut(&1).unwrap().cancel();
+            cx.notify();
+            cancelled_sender
+                .send(Event::Finished {
+                    error: None,
+                    cancelled: true,
+                })
+                .unwrap();
+            app.poll_streams(window, cx);
+        })
+    });
+    draw(cx);
+    assert!(
+        cx.element_bounds("session-data-api-quality-bar-0")
+            .is_some()
+    );
+    assert!(
+        cx.element_bounds("session-data-api-quality-bar-1")
+            .is_none()
+    );
 }
 
 #[gpui_kit::test]
@@ -238,18 +443,12 @@ fn session_data_plan_stays_visible_without_usage_or_timing_details(cx: &mut Test
     cx.simulate_resize(gpui_kit::size(px(1100.), px(1600.)));
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
-            app.session_control.plans.insert(
-                1,
-                vec![
-                    crate::app::state::PlanStep {
-                        text: "读取 CLI 配置".into(),
-                        status: crate::app::state::PlanStatus::Completed,
-                    },
-                    crate::app::state::PlanStep {
-                        text: "更新会话数据面板".into(),
-                        status: crate::app::state::PlanStatus::InProgress,
-                    },
-                ],
+            crate::task_list::apply(
+                app.session_mut(1).unwrap(),
+                crate::task_list::wire_plan(vec![
+                    ("Inspect".into(), "completed".into()),
+                    ("Verify".into(), "in_progress".into()),
+                ]),
             );
             cx.notify();
         })
@@ -261,6 +460,93 @@ fn session_data_plan_stays_visible_without_usage_or_timing_details(cx: &mut Test
     click_labeled(cx, Role::Button, "耗时与轮次");
     assert!(cx.element_bounds("session-data-plan-list").is_some());
     assert!(cx.element_bounds("session-data-timing-toggle").is_some());
+}
+
+#[gpui_kit::test]
+fn task_list_restores_wraps_clears_and_stays_scoped_to_its_session(cx: &mut TestAppContext) {
+    use crate::task_list::{Change, Snapshot, Status, Task};
+    let _locale = crate::test_support::chinese();
+    let mut store = tool_store();
+    let long = "检查命令行任务列表在长标题、会话恢复与实时更新时是否显示完整。".repeat(3);
+    let first = &mut store.workspaces[0].sessions[0];
+    first.task_list = Some(Snapshot {
+        persistent: true,
+        steps: vec![
+            Task {
+                id: "1".into(),
+                text: long.clone(),
+                owner: "worker".into(),
+                ..Default::default()
+            },
+            Task {
+                id: "2".into(),
+                text: "执行测试".into(),
+                blocked_by: vec!["1".into()],
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    });
+    // A prior TodoWrite must not reappear after a newer empty TaskList.
+    first.messages.push(serde_json::from_value(serde_json::json!({"key":"old-todo","kind":"Tool","text":"TodoWrite","status":"已完成","input":"{\"todos\":[{\"content\":\"old task\",\"status\":\"pending\"}]}"})).unwrap());
+    let store = serde_json::from_str(&serde_json::to_string(&store).unwrap()).unwrap();
+    let (app, cx) = fixture(cx, store, PluginUi::new());
+    cx.simulate_resize(gpui_kit::size(px(1100.), px(1600.)));
+    draw(cx);
+    assert!(cx.element_bounds("session-data-plan-list").is_some());
+    assert!(
+        cx.element_bounds("session-data-task-0")
+            .unwrap()
+            .size
+            .height
+            > px(40.)
+    );
+    assert!(
+        cx.labeled_bounds(Role::Group, "#2 执行测试 等待任务：#1")
+            .is_some()
+    );
+    click(cx, "turn-stats");
+    draw(cx);
+    assert!(cx.element_bounds("turn-stats-details").is_some());
+    assert!(cx.element_bounds("task-row-0").unwrap().size.height > px(40.));
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            let session = app.session_mut(1).unwrap();
+            session.task_list.as_mut().unwrap().steps[0].status = Status::Completed;
+            cx.notify();
+        })
+    });
+    draw(cx);
+    // Both surfaces must refresh while the popover stays open.
+    assert!(cx.element_bounds("task-row-1").is_some());
+    let refreshed = cx.update(|window, _| {
+        gpui_kit::base::test_support::snapshots(window)
+            .into_iter()
+            .filter(|element| {
+                element.visible()
+                    && element.role() == Some(Role::Group)
+                    && element.label() == Some("#2 执行测试")
+            })
+            .count()
+    });
+    assert_eq!(refreshed, 2);
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            crate::task_list::apply(
+                app.session_mut(1).unwrap(),
+                Change::Replace {
+                    steps: vec![],
+                    persistent: true,
+                },
+            );
+            assert!(app.turn_stats_tags(1, cx).is_none());
+            assert!(app.turn_stats_tags(2, cx).is_none());
+            assert!(crate::app::state::plan_from_messages(app.session(1).unwrap()).is_empty());
+            cx.notify();
+        })
+    });
+    draw(cx);
+    assert!(cx.element_bounds("session-data-plan-list").is_none());
 }
 
 #[gpui_kit::test]
@@ -307,7 +593,9 @@ fn tool_state_isolated_across_sessions_workspaces_and_stale_clicks(cx: &mut Test
             let version = app.plugins.snapshot.version();
             let source = app.store.workspaces[0].path.clone();
             let target = app.store.workspaces[1].path.clone();
+            app.store.ui.auto_sort_workspaces = false;
             app.reorder_workspace(&source, &target, cx);
+            assert_eq!(app.store.workspaces[0].path, target);
             app.sync_plugin_context();
             assert_eq!(app.plugins.right_key(), Some(&key));
             assert_eq!(app.plugins.snapshot.version(), version);

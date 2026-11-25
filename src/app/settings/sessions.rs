@@ -1,10 +1,11 @@
 //! Conversation preferences grouped by their scope of effect.
 
 use super::*;
+use gpui_kit::component::switch::Switch;
 
 impl ConduitApp {
     /// Stable route 10 groups: defaults, permission, chat display, automatic naming.
-    /// The host renders the shared management engine selector above this page.
+    /// The defaults group owns its engine selector; permission and display are global.
     pub(in crate::app) fn settings_conversation_page(
         &self,
         disabled: bool,
@@ -19,16 +20,114 @@ impl ConduitApp {
             self.settings_conversation_permission_group(disabled, view.clone()),
             self.settings_conversation_display_group(disabled, view.clone()),
             settings_section(conduit::i18n::text_static(
-                "settings.defaults.automatic_naming",
+                "settings.sessions.naming_section",
             ))
             .items(self.settings_automatic_naming_items(disabled, view.clone()))
-            .items(self.settings_naming_model_items(disabled, view))
+            .items(self.settings_naming_model_items(disabled, view.clone()))
             .footer(|_, _| {
                 conduit::i18n::text_static(
                     "settings.general.naming_runs_in_the_background_failures_keep",
                 )
             }),
+            self.settings_empty_session_cleanup_group(disabled, view.clone()),
+            self.settings_auto_archive_group(disabled, view),
         ])
+    }
+
+    fn settings_auto_archive_group(&self, disabled: bool, view: Entity<Self>) -> SettingGroup {
+        let enabled_view = view.clone();
+        let enabled = SettingField::render(move |_, _, cx| {
+            let view = enabled_view.clone();
+            Switch::new("session-auto-archive-enabled")
+                .checked(view.read(cx).store.ui.auto_archive.enabled)
+                .accessibility_label(conduit::i18n::text_static(
+                    "settings.sessions.auto_archive_enabled",
+                ))
+                .disabled(disabled)
+                .on_click(move |enabled, _, cx| {
+                    view.update(cx, |app, cx| app.set_auto_archive_enabled(*enabled, cx));
+                })
+        });
+        let period = SettingField::render(move |_, _, cx| {
+            let view = view.clone();
+            let policy = &view.read(cx).store.ui.auto_archive;
+            let selected = policy.after;
+            Button::new("session-auto-archive-days")
+                .debug_selector(|| "session-auto-archive-days".into())
+                .outline()
+                .w(px(160.))
+                .justify_between()
+                .label(selected.label())
+                .icon(FullIconName::ChevronDown)
+                .accessibility_label(conduit::i18n::text_static(
+                    "settings.sessions.auto_archive_after",
+                ))
+                .disabled(disabled)
+                .dropdown_menu(move |mut menu, _, _| {
+                    for after in crate::store::AutoArchiveDays::ALL {
+                        let view = view.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(after.label())
+                                .checked(after == selected)
+                                .on_click(move |_, _, cx| {
+                                    view.update(cx, |app, cx| app.set_auto_archive_days(after, cx));
+                                }),
+                        );
+                    }
+                    menu
+                })
+        });
+        settings_section(conduit::i18n::text_static("settings.sessions.auto_archive"))
+            .items(vec![
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.sessions.auto_archive_enabled"),
+                    enabled,
+                )
+                .disabled(disabled),
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.sessions.auto_archive_after"),
+                    period,
+                )
+                .disabled(disabled),
+            ])
+            .footer(|_, _| conduit::i18n::text_static("settings.sessions.auto_archive_scope"))
+    }
+
+    fn settings_empty_session_cleanup_group(
+        &self,
+        disabled: bool,
+        view: Entity<Self>,
+    ) -> SettingGroup {
+        let read_view = view.clone();
+        let cleanup_empty_sessions = SettingField::switch(
+            move |cx: &App| read_view.read(cx).store.ui.auto_cleanup_empty_sessions,
+            move |value, cx| {
+                view.update(cx, |this, cx| {
+                    if !this.writable || this.closing {
+                        return;
+                    }
+                    this.store.ui.auto_cleanup_empty_sessions = value;
+                    if value {
+                        this.cleanup_stale_empty_sessions(cx);
+                    }
+                    this.persist();
+                    cx.notify();
+                });
+            },
+        );
+        settings_section(conduit::i18n::text_static(
+            "settings.sessions.empty_cleanup",
+        ))
+        .items(vec![
+            SettingItem::new(
+                conduit::i18n::text_static("settings.sessions.auto_cleanup_empty_sessions"),
+                cleanup_empty_sessions,
+            )
+            .disabled(disabled),
+        ])
+        .footer(|_, _| {
+            conduit::i18n::text_static("settings.sessions.auto_cleanup_empty_sessions_scope")
+        })
     }
 
     fn settings_conversation_permission_group(
@@ -54,8 +153,12 @@ impl ConduitApp {
                         PermissionLevel::FullAccess,
                     ] {
                         let view = view.clone();
-                        menu = menu.item(PopupMenuItem::new(option.label()).on_click(
-                            move |_, _, cx| {
+                        menu = menu.item(
+                            PopupMenuItem::element(move |_, _| {
+                                Self::permission_option_content(option, option == permission)
+                                    .w(px(220.))
+                            })
+                            .on_click(move |_, _, cx| {
                                 view.update(cx, |app, cx| {
                                     if !app.writable || app.closing {
                                         return;
@@ -65,23 +168,20 @@ impl ConduitApp {
                                     app.persist();
                                     cx.notify();
                                 });
-                            },
-                        ));
+                            }),
+                        );
                     }
                     menu
                 })
         });
         settings_section(conduit::i18n::text_static(
-            "settings.general.default_session_permission",
+            "settings.sessions.permission_section",
         ))
         .item(
             SettingItem::new(
                 conduit::i18n::text_static("settings.general.default_session_permission"),
                 permission_field,
             )
-            .description(settings_description(conduit::i18n::text_static(
-                "settings.sessions.permission_scope",
-            )))
             .disabled(disabled),
         )
         .footer(|_, _| conduit::i18n::text_static("settings.sessions.permission_risk"))
@@ -102,26 +202,22 @@ impl ConduitApp {
             |app| app.store.ui.auto_collapse_question_history,
             ConduitApp::set_question_history_collapsed,
         );
-        settings_section(conduit::i18n::text_static("settings.sessions.chat_display"))
-            .items(vec![
-                SettingItem::new(
-                    conduit::i18n::text_static("settings.general.collapse_reasoning"),
-                    collapse_reasoning,
-                )
-                .description(settings_description(conduit::i18n::text_static(
-                    "settings.general.collapse_reasoning_description",
-                )))
-                .disabled(disabled),
-                SettingItem::new(
-                    conduit::i18n::text_static("settings.general.auto_collapse_question_history"),
-                    collapse_questions,
-                )
-                .description(settings_description(conduit::i18n::text_static(
-                    "settings.general.auto_collapse_question_history_description",
-                )))
-                .disabled(disabled),
-            ])
-            .footer(|_, _| conduit::i18n::text_static("settings.sessions.chat_display_scope"))
+        settings_section(conduit::i18n::text_static(
+            "settings.sessions.display_section",
+        ))
+        .items(vec![
+            SettingItem::new(
+                conduit::i18n::text_static("settings.general.collapse_reasoning"),
+                collapse_reasoning,
+            )
+            .disabled(disabled),
+            SettingItem::new(
+                conduit::i18n::text_static("settings.general.auto_collapse_question_history"),
+                collapse_questions,
+            )
+            .disabled(disabled),
+        ])
+        .footer(|_, _| conduit::i18n::text_static("settings.sessions.chat_display_scope"))
     }
 
     /// Compatibility route 5 retains group 0 for the switch/trigger and group 1
@@ -146,7 +242,7 @@ impl ConduitApp {
                 )
             }),
             settings_section(conduit::i18n::text_static("settings.general.naming_model"))
-                .items(self.settings_naming_model_items(disabled, view))
+                .items(self.settings_naming_model_items(disabled, view.clone()))
                 .footer(|_, _| conduit::i18n::text_static("settings.sessions.naming_model_scope")),
         ])
     }
@@ -193,14 +289,8 @@ impl ConduitApp {
                 conduit::i18n::text_static("settings.defaults.automatic_naming"),
                 auto_rename,
             )
-            .description(settings_description(conduit::i18n::text_static(
-                "settings.general.manual_ai_renaming_remains_available_when_disabled",
-            )))
             .disabled(disabled),
             SettingItem::new(conduit::i18n::text_static("settings.general.trigger"), mode)
-                .description(settings_description(conduit::i18n::text_static(
-                    "settings.sessions.naming_trigger_scope",
-                )))
                 .disabled(disabled),
         ]
     }
@@ -224,18 +314,15 @@ impl ConduitApp {
                 .read(cx)
                 .naming_model_picker(model_view.clone(), disabled)
         });
-        let mut items = vec![self.generation_disclosure(true, view)];
-        if self.settings_ui.naming_expanded {
-            // These pickers also serve manual AI renaming: only the trigger is
-            // disabled when automatic naming is off, not this configuration.
-            items.extend([
+        // The pickers also serve manual renaming when automatic naming is off.
+        vec![self.generation_disclosure(
+            true,
+            view,
+            vec![
                 SettingItem::new(
                     conduit::i18n::text_static("settings.general.naming_engine"),
                     provider,
                 )
-                .description(settings_description(conduit::i18n::text_static(
-                    "settings.sessions.naming_model_scope",
-                )))
                 .disabled(disabled),
                 SettingItem::new(
                     conduit::i18n::text_static("settings.general.naming_service"),
@@ -247,8 +334,7 @@ impl ConduitApp {
                     model,
                 )
                 .disabled(disabled),
-            ]);
-        }
-        items
+],
+        )]
     }
 }

@@ -8,6 +8,7 @@ fn request() -> AdapterRequest {
         native_id: None,
         model: None,
         permission: PermissionLevel::WorkspaceWrite,
+        tool_policy: Default::default(),
         effort: ReasoningEffort::Default,
         route: RuntimeRoute::default(),
         text_only: false,
@@ -142,6 +143,21 @@ fn qoder_launch_preserves_cwd_and_never_puts_prompt_or_secret_on_command_line() 
 }
 
 #[test]
+fn qoder_follow_default_never_sends_an_unpublished_synthetic_variant() {
+    for variant in [None, Some("default")] {
+        let mut req = request();
+        req.route.acp_variant = variant.map(str::to_owned);
+        let (_, writes) = ready(req, true);
+        assert_eq!(writes.last().unwrap()["method"], "session/prompt");
+        assert!(
+            writes
+                .iter()
+                .all(|write| write["params"]["value"] != "default")
+        );
+    }
+}
+
+#[test]
 fn qoder_new_resume_and_load_configure_model_and_effort_before_prompt() {
     for (native, resume) in [
         (None, true),
@@ -273,12 +289,13 @@ fn qoder_streams_merge_tools_filter_sessions_and_display_thinking() {
             Event::Delta { .. }
         ]
     ));
-    let done=adapter.accept(json!({"id":writes.last().unwrap()["id"],"result":{"stopReason":"end_turn","usage":{"inputTokens":100,"outputTokens":10,"totalTokens":110}}}));
+    let done=adapter.accept(json!({"id":writes.last().unwrap()["id"],"result":{"stopReason":"end_turn","usage":{"inputTokens":100,"outputTokens":10,"cachedReadTokens":40,"cachedWriteTokens":20,"totalTokens":110}}}));
     assert!(matches!(
         &done.events[0],
         Event::Usage(Usage {
             context_tokens: Some(250),
             total_tokens: 110,
+            cache_write_input_tokens: Some(20),
             ..
         })
     ));
@@ -439,6 +456,24 @@ fn qoder_mcp_tools_bypass_every_chat_permission_and_preserve_helper_restrictions
 }
 
 #[test]
+fn qoder_workspace_web_tools_use_native_identity_and_keep_other_requests_gated() {
+    let (mut adapter, _) = ready(request(), true);
+    for tool in ["WebSearch", "WebFetch", "Bash", "Write", ""] {
+        let mut request = permission("original");
+        request["params"]["toolCall"]["title"] = json!("WebSearch");
+        request["params"]["toolCall"]["_meta"] = json!({"qoder":{"toolName":tool}});
+        let step = adapter.accept(request);
+        let Event::Approval(approval) = &step.events[0] else {
+            panic!("missing approval")
+        };
+        assert_eq!(
+            adapter.automatic_approval(approval),
+            crate::protocol::is_web_tool_name(tool).then_some(true)
+        );
+    }
+}
+
+#[test]
 fn qoder_elicitation_supports_choices_multi_select_validation_and_cancellation() {
     let mut req = request();
     req.permission = PermissionLevel::FullAccess;
@@ -515,6 +550,7 @@ fn qoder_native_modes_catalog_refresh_and_non_success_stops_are_checked() {
     assert_eq!(step.writes[0]["params"]["modeId"], "yolo");
     let mut refreshed = catalog();
     refreshed[1]["options"] = json!([{"value":"medium","name":"Medium"}]);
+    refreshed[1]["currentValue"] = json!("medium");
     refreshed[0]["_meta"] = json!({"secret":"never persisted"});
     adapter.accept(notification(
         "original",

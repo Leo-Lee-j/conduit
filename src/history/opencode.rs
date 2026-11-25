@@ -63,6 +63,8 @@ impl Scanner {
                 sessions.push_back(Session {
                     cwd,
                     record: ImportedSession {
+                        usage: Default::default(),
+                        task_list: None,
                         is_subagent: false,
                         provider: Provider::OpenCode,
                         native_id: row.get(0)?,
@@ -189,9 +191,10 @@ fn read_parts(
         let part_id: String = row.get(3)?;
         if pending.message_id != message_id {
             let data: String = row.get(2)?;
-            batch.bytes_read += data.len() as u64;
+            batch.add_opencode_bytes(data.len() as u64);
             pending.message = serde_json::from_str(&data)?;
             pending.message_id = message_id.clone();
+            super::usage::opencode(&mut pending.session.record.usage, &pending.message);
             let model = pending.message.get("model").unwrap_or(&pending.message);
             if let (Some(provider), Some(model)) =
                 (model["providerID"].as_str(), model["modelID"].as_str())
@@ -200,7 +203,7 @@ fn read_parts(
             }
         }
         if let Some(data) = row.get::<_, Option<String>>(4)? {
-            batch.bytes_read += data.len() as u64;
+            batch.add_opencode_bytes(data.len() as u64);
             let part = serde_json::from_str(&data)?;
             let timestamp: i64 = row.get::<_, Option<i64>>(5)?.unwrap_or(created);
             if let Some(item) = part_item(&part_id, &pending.message, part, timestamp) {

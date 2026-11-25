@@ -5,6 +5,23 @@ use super::*;
 mod app_logo;
 pub(super) use app_logo::app_icon;
 
+/// A fixed action/status row for the panes of a document.
+pub(super) fn document_footer() -> Div {
+    h_flex()
+        .w_full()
+        .h(px(48.))
+        .flex_shrink_0()
+        .min_w_0()
+        .items_center()
+        .px_3()
+        .gap_2()
+        .border_t_1()
+        .border_color(rgb(palette().border))
+        .bg(rgb(palette().surface_strong))
+        .text_size(ui_text_size(11.))
+        .text_color(rgb(palette().muted))
+}
+
 /// Share the same status appearance between sidebar and tabs, with separate
 /// element/animation keys so both can be mounted for the same session.
 pub(super) fn session_activity_dot(scope: &'static str, id: u64, running: bool) -> AnyElement {
@@ -18,6 +35,8 @@ pub(super) fn session_activity_dot(scope: &'static str, id: u64, running: bool) 
         .rounded_full()
         .bg(rgb(if running {
             palette().activity_running
+        } else if palette().restrained_projects {
+            palette().muted
         } else {
             palette().activity_completed
         }))
@@ -126,7 +145,7 @@ static BRAND_IMAGES: std::sync::LazyLock<std::sync::Mutex<BrandImageCache>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
 fn brand_render(name: &'static str, dark: bool, width: i32, height: i32) -> Arc<RenderImage> {
-    let mut cache = BRAND_IMAGES.lock().expect("brand image cache");
+    let mut cache = BRAND_IMAGES.lock().unwrap_or_else(|e| e.into_inner());
     cache
         .entry((name, dark, width, height))
         .or_insert_with(|| {
@@ -174,6 +193,7 @@ pub(super) fn provider_icon(provider: Provider) -> Div {
         Provider::Codex => "codex",
         Provider::OpenCode => "opencode",
         Provider::Qoder => "qoder",
+        Provider::Gemini => "gemini",
     })
 }
 
@@ -241,7 +261,7 @@ pub(super) fn menu_popover_style() -> StyleRefinement {
 pub(super) fn session_menu_button(
     id: (&'static str, u64),
     label: &'static str,
-    icon: IconName,
+    icon: impl Into<Icon>,
 ) -> Button {
     Button::new(id)
         .ghost()
@@ -255,7 +275,7 @@ pub(super) fn session_menu_button(
                 .w_full()
                 .gap_2()
                 .items_center()
-                .child(Icon::new(icon).small().text_color(rgb(palette().faint)))
+                .child(icon.into().small().text_color(rgb(palette().faint)))
                 .child(
                     div()
                         .text_size(ui_text_size(12.))

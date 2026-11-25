@@ -218,6 +218,22 @@ pub(crate) fn failure_repeats(item: &ChatItem) -> u64 {
         .max(1)
 }
 
+/// Whether a later visible response confirms that this turn recovered from a failure.
+pub(crate) fn recovered(messages: &[ChatItem], index: usize) -> bool {
+    if index >= messages.len() {
+        return false;
+    }
+    messages[index + 1..]
+        .iter()
+        .take_while(|item| item.kind != ItemKind::User)
+        .any(|item| {
+            matches!(
+                item.kind,
+                ItemKind::Assistant | ItemKind::Reasoning | ItemKind::Tool
+            ) && !item.text.trim().is_empty()
+        })
+}
+
 fn fingerprint(error: &str) -> String {
     // Group retries by their original cause, not by a translated generic label.
     let friendly = diagnostics::fingerprint(error);

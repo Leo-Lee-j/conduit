@@ -1,4 +1,5 @@
 use super::{ConduitApp, Store};
+use gpui_kit::Focusable as _;
 use gpui_kit::{
     AppContext as _, Entity, Modifiers, MouseButton, ScrollDelta, ScrollWheelEvent, TestAppContext,
     VisualTestContext, point, px, size,
@@ -33,6 +34,19 @@ fn draw(cx: &mut VisualTestContext) {
     });
 }
 
+fn settle_ai_save(app: &Entity<ConduitApp>, cx: &mut VisualTestContext) {
+    for _ in 0..200 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(20));
+        draw(cx);
+        if !app.read_with(cx, |app, _| app.connection_settings.saving) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    panic!("AI settings save did not complete");
+}
+
 #[gpui_kit::test]
 fn settings_engine_management_is_readonly_and_disabled_launches_preserve_history(
     cx: &mut TestAppContext,
@@ -53,12 +67,12 @@ fn settings_engine_management_is_readonly_and_disabled_launches_preserve_history
     });
     draw(cx);
     assert!(cx.debug_bounds("engine-enabled-1").is_some());
-    cx.update(|window, cx| {
+    cx.update(|_, cx| {
         app.update(cx, |app, cx| {
             app.writable = true;
             app.store.cli.set_enabled(Provider::Codex, false);
             app.new_session_provider = Provider::Claude;
-            app.select_engine(Provider::Codex, window, cx);
+            app.select_composer_engine(Provider::Codex, cx);
             assert_eq!(app.new_session_provider, Provider::Claude);
             app.store.workspaces.push(crate::domain::Workspace {
                 path: std::env::temp_dir(),
@@ -167,6 +181,7 @@ fn settings_cli_updates_report_versions_errors_and_discard_changed_paths(cx: &mu
                 Provider::Codex => "settings-check-updates-1",
                 Provider::OpenCode => "settings-check-updates-2",
                 Provider::Qoder => "settings-check-updates-3",
+                Provider::Gemini => "settings-check-updates-4",
             })
             .is_some()
         );
@@ -324,6 +339,15 @@ fn settings_plugins_manage_icon_theme_lifecycle_and_readonly_state(cx: &mut Test
         cx.simulate_resize(size(px(width), px(height)));
         draw(cx);
         let bounds = cx.debug_bounds("settings-content").unwrap();
+        let search = cx.debug_bounds("settings-search-bar").unwrap();
+        assert_eq!(search.left(), bounds.left());
+        assert_eq!(search.right(), bounds.right());
+        assert_eq!(search.bottom(), bounds.top());
+        assert!(cx.debug_bounds("settings-workspace-header").is_none());
+        if let Some(rail) = cx.debug_bounds("settings-navigation-scroll") {
+            assert!(rail.right() <= search.left());
+            assert_eq!(rail.top(), search.top());
+        }
         for selector in ["plugin-install", "plugin-refresh", "plugin-default-icons"] {
             let control = cx.debug_bounds(selector).unwrap();
             assert!(control.left() >= bounds.left() && control.right() <= bounds.right());
@@ -345,12 +369,14 @@ fn settings_plugins_manage_icon_theme_lifecycle_and_readonly_state(cx: &mut Test
     });
     draw(cx);
     let viewport = cx.debug_bounds("settings-plugins-list").unwrap();
+    let search = cx.debug_bounds("settings-search-bar").unwrap();
     cx.simulate_event(ScrollWheelEvent {
         position: viewport.center(),
         delta: ScrollDelta::Pixels(point(px(0.), px(-1200.))),
         ..Default::default()
     });
     draw(cx);
+    assert_eq!(cx.debug_bounds("settings-search-bar"), Some(search));
     let select = cx
         .debug_bounds("plugin-use-example.outline-icons")
         .unwrap()
@@ -527,7 +553,7 @@ fn settings_service_actions_keep_history_and_revalidate_routes(cx: &mut TestAppC
             app.store.providers = vec![provider.clone()];
             app.persistence = crate::persistence::Persistence::with_writer(|_| Ok(()));
             app.select_settings_page(8, window, cx);
-            assert!(!app.set_service_default(Provider::Codex, route.clone(), None, cx));
+            assert!(!app.set_service_default(Provider::Codex, route.clone(), None, window, cx));
             assert!(!app.delete_model_service(&provider.id, cx));
             app.writable = true;
             let mut session = crate::app::tests::session();
@@ -557,6 +583,7 @@ fn settings_service_actions_keep_history_and_revalidate_routes(cx: &mut TestAppC
     cx.simulate_mouse_down(control, MouseButton::Left, Modifiers::default());
     cx.simulate_mouse_up(control, MouseButton::Left, Modifiers::default());
     draw(cx);
+    settle_ai_save(&app, cx);
     cx.update(|_, cx| {
         app.read_with(cx, |app, _| {
             assert_eq!(app.store.session_defaults[&Provider::Codex].channel, route);
@@ -575,23 +602,26 @@ fn settings_service_actions_keep_history_and_revalidate_routes(cx: &mut TestAppC
         assert!(!window.has_active_sheet(cx), "service details are inline");
         app.update(cx, |app, cx| {
             let history = serde_json::to_value(&app.store.workspaces).unwrap();
-            assert!(!app.set_service_default(Provider::Claude, route.clone(), None, cx));
+            assert!(!app.set_service_default(Provider::Claude, route.clone(), None, window, cx));
             assert!(!app.set_service_default(
                 Provider::Codex,
                 ModelChannel::Provider("missing".into()),
                 None,
+                window,
                 cx
             ));
             assert!(!app.set_service_default(
                 Provider::Codex,
                 route.clone(),
                 Some("missing-model".into()),
+                window,
                 cx
             ));
             assert!(app.set_service_default(
                 Provider::Codex,
                 route.clone(),
                 Some("model-a".into()),
+                window,
                 cx
             ));
             assert_eq!(
@@ -599,7 +629,21 @@ fn settings_service_actions_keep_history_and_revalidate_routes(cx: &mut TestAppC
                 history
             );
             assert!(!app.delete_model_service(&provider.id, cx));
-            assert!(app.set_service_default(Provider::Codex, ModelChannel::Cli, None, cx));
+            assert!(
+                !app.set_service_default(Provider::Codex, ModelChannel::Cli, None, window, cx),
+                "overlapping saves are blocked"
+            );
+        })
+    });
+    settle_ai_save(&app, cx);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            assert!(app.set_service_default(Provider::Codex, ModelChannel::Cli, None, window, cx));
+        })
+    });
+    settle_ai_save(&app, cx);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
             assert!(
                 !app.delete_model_service(&provider.id, cx),
                 "history still references the service"
@@ -613,7 +657,6 @@ fn settings_service_actions_keep_history_and_revalidate_routes(cx: &mut TestAppC
             app.store.git.generation_channel = None;
             app.store.providers[0].source = ProviderSource::Ccs {
                 id: "external".into(),
-                protected_route: None,
             };
             assert!(
                 !app.delete_model_service(&provider.id, cx),
@@ -621,12 +664,12 @@ fn settings_service_actions_keep_history_and_revalidate_routes(cx: &mut TestAppC
             );
             app.store.providers[0].source = ProviderSource::Local;
             app.writable = false;
-            assert!(!app.set_service_default(Provider::Codex, route.clone(), None, cx));
+            assert!(!app.set_service_default(Provider::Codex, route.clone(), None, window, cx));
             assert!(!app.delete_model_service(&provider.id, cx));
             app.writable = true;
             assert!(app.delete_model_service(&provider.id, cx));
             assert!(
-                !app.set_service_default(Provider::Codex, route.clone(), None, cx),
+                !app.set_service_default(Provider::Codex, route.clone(), None, window, cx),
                 "stale controls cannot restore a removed route"
             );
             app.persistence.flush();
@@ -649,8 +692,8 @@ fn settings_service_actions_keep_history_and_revalidate_routes(cx: &mut TestAppC
     cx.simulate_mouse_up(control, MouseButton::Left, Modifiers::default());
     draw(cx);
     assert!(
-        cx.debug_bounds("service-details").is_some(),
-        "native catalog remains reachable"
+        cx.debug_bounds("default-channel-1").is_some(),
+        "default controls remain reachable"
     );
 }
 
@@ -671,7 +714,6 @@ fn settings_services_inline_selection_resizes_without_changing_defaults(cx: &mut
     second.name = "Imported service".into();
     second.source = ProviderSource::Ccs {
         id: "external".into(),
-        protected_route: None,
     };
     let route = ModelChannel::Provider(first.id.clone());
     cx.simulate_resize(size(px(1500.), px(850.)));
@@ -685,12 +727,14 @@ fn settings_services_inline_selection_resizes_without_changing_defaults(cx: &mut
                 Provider::Codex,
                 route.clone(),
                 Some("model-a".into()),
+                window,
                 cx
             ));
             app.select_settings_page(8, window, cx);
         })
     });
     draw(cx);
+    settle_ai_save(&app, cx);
     let list = cx.debug_bounds("service-list").expect("inline list");
     let detail = cx.debug_bounds("service-details").expect("inline detail");
     assert!(
@@ -708,11 +752,10 @@ fn settings_services_inline_selection_resizes_without_changing_defaults(cx: &mut
         engines.left() - engine_bar.left(),
         "engine tabs have matching top and left padding"
     );
-    assert_eq!(engine_bar.bottom() - engines.bottom(), px(16.));
     assert_eq!(
         summary.top() - engines.bottom(),
-        px(16.),
-        "content does not add another top inset"
+        px(8.),
+        "default summary sits close to the engine selector"
     );
     assert_eq!(
         engines.left(),
@@ -777,13 +820,13 @@ fn settings_services_inline_selection_resizes_without_changing_defaults(cx: &mut
     let engine_bar = cx.debug_bounds("management-engine-bar").unwrap();
     assert_eq!(engines.left() - engine_bar.left(), px(16.));
     assert_eq!(engines.top() - engine_bar.top(), px(16.));
-    assert_eq!(engine_bar.bottom() - engines.bottom(), px(16.));
     click(cx, "service-detail-back");
     assert!(cx.debug_bounds("service-list").is_some());
     assert!(cx.debug_bounds("service-details").is_none());
     click(cx, "service-row-0");
     assert!(cx.debug_bounds("service-edit-local").is_some());
     click(cx, "service-model-default-1");
+    settle_ai_save(&app, cx);
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
             assert_eq!(app.store.session_defaults[&Provider::Codex].channel, route);
@@ -827,65 +870,288 @@ fn settings_services_inline_selection_resizes_without_changing_defaults(cx: &mut
     assert!(cx.debug_bounds("service-details").is_none());
 }
 
-#[gpui_kit::test]
-fn cached_cli_models_survive_app_start_settings_and_new_sessions(cx: &mut TestAppContext) {
-    use crate::{
-        domain::Provider,
-        models::{ModelCatalog, ModelOption},
-        providers::ModelChannel,
-    };
-    let _locale = crate::test_support::chinese();
-    cx.update(gpui_kit::init);
-    let expected = vec![
-        ModelOption {
-            id: "cached-default".into(),
-            label: "Cached default".into(),
-            note: "Imported model".into(),
-            context_window: Some(256000),
-        },
-        ModelOption {
-            id: "cached-secondary".into(),
-            label: "Cached secondary".into(),
-            note: String::new(),
-            context_window: Some(1000000),
-        },
-    ];
-    let mut store = Store {
-        ccs_catalog: Some(Default::default()),
-        ..Default::default()
-    };
-    for engine in [Provider::Claude, Provider::Codex] {
-        store.cache_model_catalog(
-            engine,
-            ModelCatalog {
-                current: Some("cached-default".into()),
-                models: expected.clone(),
-                ..Default::default()
-            },
-        );
+fn ai_service(id: &str) -> crate::providers::ModelProvider {
+    crate::providers::ModelProvider {
+        id: id.into(),
+        name: id.into(),
+        engine: crate::domain::Provider::Codex,
+        base_url: "https://example.invalid/v1".into(),
+        api_key_env: String::new(),
+        protected_api_key: None,
+        models: vec!["exact-model".into(), "other-model".into()],
+        source: Default::default(),
+        model_metadata: vec![],
+        claude_models: None,
     }
-    let restored = serde_json::from_str(&serde_json::to_string(&store).unwrap()).unwrap();
-    let (app, cx) = cx.add_window_view(|window, cx| {
-        let mut app = ConduitApp::with_store(window, cx, Ok(restored), false, false);
-        app.startup = None;
-        app.writable = false;
-        app
-    });
+}
+
+#[gpui_kit::test]
+fn settings_reselecting_default_service_preserves_model_and_does_not_write(
+    cx: &mut TestAppContext,
+) {
+    let _locale = crate::test_support::chinese();
+    use crate::{domain::Provider, providers::ModelChannel, store::SessionDefaults};
+    let (app, cx) = fixture(cx);
+    let writes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let recorded = writes.clone();
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
-            for engine in [Provider::Claude, Provider::Codex] {
-                assert_eq!(app.channel_models(engine, &ModelChannel::Cli).1, expected);
-                let session = app.prepare_session_with_defaults(engine, false);
-                assert_eq!(session.model.as_deref(), Some("cached-default"));
-                assert_eq!(app.channel_models(engine, &ModelChannel::Cli).1, expected);
-            }
-            app.reload_all_models_async(false, window, cx);
-            assert!(!app.connection_settings.syncing);
-            assert_eq!(
-                app.channel_models(Provider::Codex, &ModelChannel::Cli).1,
-                expected
+            app.writable = true;
+            app.persistence = crate::persistence::Persistence::with_writer(move |_| {
+                recorded.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            });
+            app.store.providers.push(ai_service("retain-default"));
+            let channel = ModelChannel::Provider("retain-default".into());
+            app.store.session_defaults.insert(
+                Provider::Codex,
+                SessionDefaults {
+                    channel: channel.clone(),
+                    model: Some("exact-model".into()),
+                },
             );
-            assert!(app.store.providers.is_empty());
+            assert!(!app.set_default_channel(Provider::Codex, channel, window, cx));
+            assert_eq!(
+                app.store.session_defaults[&Provider::Codex]
+                    .model
+                    .as_deref(),
+                Some("exact-model")
+            );
+            assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 0);
+            assert!(app.set_default_channel(Provider::Codex, ModelChannel::Cli, window, cx));
+            assert!(app.connection_settings.saving);
         })
+    });
+    settle_ai_save(&app, cx);
+    app.read_with(cx, |app, _| {
+        let default = &app.store.session_defaults[&Provider::Codex];
+        assert_eq!(default.channel, ModelChannel::Cli);
+        assert!(default.model.is_none());
+    });
+    assert_eq!(writes.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[gpui_kit::test]
+fn settings_failed_default_save_restores_prior_selection_and_allows_retry(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    use crate::{domain::Provider, providers::ModelChannel, store::SessionDefaults};
+    let (app, cx) = fixture(cx);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.writable = true;
+            app.store.providers.push(ai_service("failed-default"));
+            app.store.session_defaults.insert(
+                Provider::Codex,
+                SessionDefaults {
+                    channel: ModelChannel::Cli,
+                    model: Some("original-model".into()),
+                },
+            );
+            app.persistence = crate::persistence::Persistence::with_writer(|_| {
+                Err("synthetic disk failure".into())
+            });
+            assert!(app.set_service_default(
+                Provider::Codex,
+                ModelChannel::Provider("failed-default".into()),
+                Some("exact-model".into()),
+                window,
+                cx
+            ));
+            assert!(app.connection_settings.saving);
+            // Independent settings must survive the rollback.
+            app.store.ui.default_session_permission = crate::domain::PermissionLevel::ReadOnly;
+        })
+    });
+    settle_ai_save(&app, cx);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            assert_eq!(
+                app.store.session_defaults[&Provider::Codex].channel,
+                ModelChannel::Cli
+            );
+            assert_eq!(
+                app.store.session_defaults[&Provider::Codex]
+                    .model
+                    .as_deref(),
+                Some("original-model")
+            );
+            assert_eq!(
+                app.store.ui.default_session_permission,
+                crate::domain::PermissionLevel::ReadOnly
+            );
+            app.persistence = crate::persistence::Persistence::with_writer(|_| Ok(()));
+            assert!(app.set_service_default(
+                Provider::Codex,
+                ModelChannel::Provider("failed-default".into()),
+                Some("exact-model".into()),
+                window,
+                cx
+            ));
+        })
+    });
+    settle_ai_save(&app, cx);
+    assert_eq!(
+        app.read_with(cx, |app, _| app.store.session_defaults[&Provider::Codex]
+            .model
+            .clone()),
+        Some("exact-model".into())
+    );
+}
+
+#[gpui_kit::test]
+fn settings_search_opens_exact_service_and_model_with_keyboard_focus(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    use crate::{domain::Provider, providers::ModelChannel};
+    let (app, cx) = fixture(cx);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.store.providers = vec![ai_service("search-first"), ai_service("search-second")];
+            let before = serde_json::to_value(&app.store.session_defaults).unwrap();
+            let qualified = app.settings_search_matches("search-second exact-model");
+            assert_eq!(
+                qualified.len(),
+                1,
+                "service-qualified model search remains supported"
+            );
+            let matches = app.settings_search_matches("exact-model");
+            let result = matches
+                .into_iter()
+                .find(|r| {
+                    r.target.as_ref().is_some_and(|target| {
+                        target.channel == ModelChannel::Provider("search-second".into())
+                    })
+                })
+                .unwrap();
+            app.open_settings_result(result, window, cx);
+            assert_eq!(
+                app.connection_settings.service_selection,
+                Some((
+                    Provider::Codex,
+                    ModelChannel::Provider("search-second".into())
+                ))
+            );
+            assert_eq!(
+                app.connection_settings
+                    .model_search
+                    .read(cx)
+                    .value()
+                    .as_str(),
+                "exact-model"
+            );
+            assert!(
+                app.connection_settings
+                    .model_search
+                    .read(cx)
+                    .focus_handle(cx)
+                    .is_focused(window)
+            );
+            assert_eq!(
+                serde_json::to_value(&app.store.session_defaults).unwrap(),
+                before
+            );
+        })
+    });
+    draw(cx);
+    assert!(cx.debug_bounds("service-model-search").is_some());
+    assert!(cx.debug_bounds("service-model-row-0").is_some());
+    assert!(cx.debug_bounds("service-model-row-1").is_none());
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.settings_ui
+                .search
+                .update(cx, |input, cx| input.set_value("search-first", window, cx));
+            app.settings_ui
+                .search
+                .read(cx)
+                .focus_handle(cx)
+                .focus(window, cx);
+        })
+    });
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    app.read_with(cx, |app, cx| {
+        assert_eq!(
+            app.connection_settings.service_selection,
+            Some((
+                Provider::Codex,
+                ModelChannel::Provider("search-first".into())
+            ))
+        );
+        assert_eq!(
+            app.connection_settings
+                .model_search
+                .read(cx)
+                .value()
+                .as_str(),
+            ""
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn settings_change_defaults_opens_new_session_controls(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx) = fixture(cx);
+    cx.update(|window, cx| app.update(cx, |app, cx| app.select_settings_page(8, window, cx)));
+    draw(cx);
+    let button = cx
+        .debug_bounds("services-default-catalog")
+        .unwrap()
+        .center();
+    cx.simulate_mouse_down(button, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(button, MouseButton::Left, Modifiers::default());
+    draw(cx);
+    app.read_with(cx, |app, _| {
+        assert_eq!((app.settings_ui.page, app.settings_ui.group), (10, Some(0)))
+    });
+    assert!(cx.debug_bounds("management-engines").is_some());
+    assert!(
+        cx.debug_bounds("default-channel-0").is_some()
+            || cx.debug_bounds("default-channel-1").is_some()
+    );
+
+    // Search and confirm through the real picker: the model ID is persisted for
+    // new sessions, and an unavailable saved ID survives merely opening it.
+    cx.simulate_resize(size(px(1200.), px(800.)));
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.writable = true;
+            app.persistence = crate::persistence::Persistence::with_writer(|_| Ok(()));
+            app.store.providers.push(ai_service("search-default"));
+            app.store.session_defaults.insert(
+                crate::domain::Provider::Codex,
+                crate::store::SessionDefaults {
+                    channel: crate::providers::ModelChannel::Provider("search-default".into()),
+                    model: Some("unlisted-saved-model".into()),
+                },
+            );
+            app.select_settings_engine(crate::domain::Provider::Codex, window, cx);
+        })
+    });
+    draw(cx);
+    let picker = cx.debug_bounds("default-model-1").unwrap().center();
+    cx.simulate_mouse_down(picker, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(picker, MouseButton::Left, Modifiers::default());
+    draw(cx);
+    app.read_with(cx, |app, _| {
+        assert_eq!(
+            app.store.session_defaults[&crate::domain::Provider::Codex]
+                .model
+                .as_deref(),
+            Some("unlisted-saved-model")
+        );
+    });
+    cx.simulate_input("other-model");
+    draw(cx);
+    cx.simulate_keystrokes("enter");
+    draw(cx);
+    settle_ai_save(&app, cx);
+    app.read_with(cx, |app, _| {
+        let defaults = &app.store.session_defaults[&crate::domain::Provider::Codex];
+        assert_eq!(
+            defaults.channel,
+            crate::providers::ModelChannel::Provider("search-default".into())
+        );
+        assert_eq!(defaults.model.as_deref(), Some("other-model"));
     });
 }

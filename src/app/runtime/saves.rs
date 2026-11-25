@@ -8,6 +8,7 @@ mod tests;
 #[derive(Clone)]
 pub(in crate::app) struct SentComposer {
     pub(in crate::app) preserve: bool,
+    binding: composer::ComposerBinding,
     target: ComposerTarget,
     text: String,
     references: Vec<FileReference>,
@@ -35,8 +36,9 @@ impl ConduitApp {
     pub(in crate::app) fn sent_composer(&self, cx: &Context<Self>) -> Option<SentComposer> {
         Some(SentComposer {
             preserve: false,
+            binding: self.composer_binding(),
             target: self.composer_target()?,
-            text: self.input.read(cx).value().to_string(),
+            text: self.composer_input().read(cx).value().to_string(),
             references: self
                 .current_files()
                 .map(|files| files.references.clone())
@@ -82,11 +84,11 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let current = self.composer_target().as_ref() == Some(&sent.target);
+        let binding = self.live_composer_for_target(&sent.target);
         // Edits and navigation during a slow save belong to the user. Never
         // clear another draft, or new text/attachments entered while waiting.
-        let text_matches = if current {
-            self.input.read(cx).value().as_ref() == sent.text
+        let text_matches = if let Some(binding) = &binding {
+            binding.input.read(cx).value().as_ref() == sent.text
         } else if let Some(id) = sent.target.session {
             self.drafts.get(&id) == Some(&sent.text)
         } else {
@@ -104,10 +106,12 @@ impl ConduitApp {
         if sent.preserve {
             return true;
         }
-        if current {
-            self.input
-                .update(cx, |input, cx| input.set_value("", window, cx));
-            self.prompt_history = None;
+        if let Some(binding) = binding {
+            self.with_composer(binding, cx, |this, cx| {
+                this.composer_input()
+                    .update(cx, |input, cx| input.set_value("", window, cx));
+                this.prompt_history = None;
+            });
         }
         self.composer_files.remove(&sent.target);
         if let Some(id) = sent.target.session {
@@ -125,17 +129,17 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.selected_session == Some(id)
-            && self.composer_target().as_ref() == Some(&sent.target)
-            && self.input.read(cx).value().is_empty()
+        if let Some(binding) = self.live_composer_for_target(&sent.target)
+            && binding.input.read(cx).value().is_empty()
             && self
-                .current_files()
+                .composer_files
+                .get(&sent.target)
                 .is_none_or(|files| files.references.is_empty())
         {
-            self.input.update(cx, |input, cx| {
+            binding.input.update(cx, |input, cx| {
                 input.set_value(sent.text.clone(), window, cx)
             });
-        } else if self.selected_session != Some(id)
+        } else if self.live_composer_for_target(&sent.target).is_none()
             && self.drafts.get(&id).is_none_or(String::is_empty)
         {
             self.drafts.insert(id, sent.text.clone());
@@ -255,14 +259,55 @@ impl ConduitApp {
                     if let Some(sent) = &pending.child_composer {
                         self.clear_child_draft(sent, window, cx);
                     }
-                    self.session_control.plans.remove(&id);
                     self.session_control.unread_completed.remove(&id);
                     let composer_cleared = pending
                         .composer
                         .as_ref()
                         .is_some_and(|sent| self.clear_saved_composer(sent, window, cx));
                     if let Some(selection) = pending.selection.take() {
+                        let reference = pending
+                            .composer
+                            .as_ref()
+                            .is_some_and(|sent| sent.binding.pane == files::Pane::Reference);
+                        if reference
+                            && composer_cleared
+                            && let Some(sent) = pending.composer.as_ref()
+                            && self.composer_binding_live(&sent.binding)
+                            && self.reference_chat() == sent.target.session
+                            && self.composer_provider_for(&sent.binding) == selection.engine
+                            && {
+                                let choice = self.composer_selection_for(&sent.binding);
+                                choice.channel == selection.channel
+                                    && choice.model == selection.model
+                                    && choice.effort == selection.effort
+                                    && choice.opencode.variant == selection.opencode.variant
+                                    && choice.opencode.options == selection.opencode.options
+                            }
+                        {
+                            // Creation follows the sending pane. In particular this must
+                            // never select the new session in the main conversation.
+                            if sent.preserve {
+                                sent.binding
+                                    .input
+                                    .update(cx, |input, cx| input.set_value("", window, cx));
+                                self.drafts.insert(id, sent.text.clone());
+                                if let Some(files) = self.composer_files.remove(&sent.target) {
+                                    self.composer_files.insert(
+                                        ComposerTarget {
+                                            workspace: sent.target.workspace.clone(),
+                                            session: Some(id),
+                                        },
+                                        files,
+                                    );
+                                }
+                                if let Some(old) = sent.target.session {
+                                    self.drafts.remove(&old);
+                                }
+                            }
+                            self.show_chat_beside(id, window, cx);
+                        }
                         let current = composer_cleared
+                            && !reference
                             && !self.viewing_subagent()
                             && pending.composer.as_ref().is_some_and(|sent| {
                                 self.composer_target().as_ref() == Some(&sent.target)

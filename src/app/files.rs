@@ -3,6 +3,7 @@ use super::file_preview::FilePreview;
 use super::*;
 use crate::workspace_files::{self, Entry, FileKey, Stamp};
 use conduit::plugins::{builtins, ids::ViewId};
+use gpui_kit::component::{tag::Tag, tooltip::Tooltip};
 use std::ops::Range;
 
 mod observations;
@@ -494,6 +495,7 @@ impl ConduitApp {
             tab,
             DocumentTab::Settings | DocumentTab::Usage(_) | DocumentTab::PullRequest(_)
         );
+        let overlay_return = self.content_overlay_return();
         if overlay {
             self.remember_content_overlay();
         } else {
@@ -522,10 +524,23 @@ impl ConduitApp {
                 .search
                 .update(cx, |input, cx| input.set_value("", window, cx));
         }
+        // A reference tab may be selected directly from the sidebar while a
+        // full-page document covers Main. Restore Main before revealing it.
+        if self.document_pane(tab) == Pane::Reference
+            && let Some(previous) = overlay_return
+        {
+            self.select_document(previous, window, cx);
+        }
         if let DocumentTab::File(id) = tab
             && self.document_pane(tab) == Pane::Reference
         {
             self.select_reference_file(id, window, cx);
+            return;
+        }
+        if let DocumentTab::Chat(id) = tab
+            && self.document_pane(tab) == Pane::Reference
+        {
+            self.select_reference_chat(id, window, cx);
             return;
         }
         if !overlay {
@@ -718,13 +733,27 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        for tab in tabs {
+            if let DocumentTab::PullRequest(id) = tab
+                && let Some(panel) = self.github_ui.panels.get(id).cloned()
+                && !panel.update(cx, |panel, cx| panel.can_close(cx))
+            {
+                self.select_document(*tab, window, cx);
+                return;
+            }
+        }
         let overlay_return = self.content_overlay_return();
         let overlay_pane = self.files.panes.overlay.map(|(_, _, pane)| pane);
         let closing_reference = self
             .files
             .panes
             .active
-            .is_some_and(|id| tabs.contains(&DocumentTab::File(id)));
+            .is_some_and(|id| tabs.contains(&DocumentTab::File(id)))
+            || self
+                .files
+                .panes
+                .chat
+                .is_some_and(|id| tabs.contains(&DocumentTab::Chat(id)));
         let reference_focused = self.files.panes.last == Pane::Reference;
         let active = self.active_document();
         let closing_active = active.is_some_and(|tab| tabs.contains(&tab));
@@ -788,6 +817,9 @@ impl ConduitApp {
                     self.files.preview = None;
                 }
             }
+            if let DocumentTab::Chat(id) = tab {
+                self.detach_reference_chat(*id, cx);
+            }
         }
         self.repair_reference_pane();
         // Settings can cover another full-page document. Preserve that page's
@@ -821,6 +853,7 @@ impl ConduitApp {
             let sessions = &self.store.workspaces[workspace].sessions;
             let available = |id: &u64| {
                 !tabs.contains(&DocumentTab::Chat(*id))
+                    && self.document_pane(DocumentTab::Chat(*id)) == Pane::Main
                     && sessions
                         .iter()
                         .any(|s| s.id == *id && !s.archived && !s.is_subagent)
@@ -890,13 +923,20 @@ impl ConduitApp {
                 self.input.read(cx).focus_handle(cx).focus(window, cx);
             }
         }
-        if closing_reference && reference_focused && !closing_active {
-            if let Some(id) = self.files.panes.active {
-                self.files.documents[&id]
-                    .preview
-                    .read(cx)
-                    .focus_handle(cx)
-                    .focus(window, cx);
+        if closing_active
+            && overlay_pane == Some(Pane::Reference)
+            && !self.content_overlay_open()
+            && self.pane_document(Pane::Reference).is_some()
+        {
+            self.leave_content_overlay();
+            self.show_content_pane(Pane::Reference, window, cx);
+        } else if closing_reference
+            && reference_focused
+            && !closing_active
+            && !self.content_overlay_open()
+        {
+            if self.pane_document(Pane::Reference).is_some() {
+                self.show_content_pane(Pane::Reference, window, cx);
             } else {
                 self.focus_main_content(window, cx);
             }
@@ -2312,6 +2352,8 @@ impl ConduitApp {
             .track_scroll(self.pane_tab_scroll(pane))
             .with_size(Size::Medium)
             .h(px(TAB_BAR_HEIGHT))
+            .min_h(px(TAB_BAR_HEIGHT))
+            .flex_shrink_0()
             .pr(px(8.))
             .when_some(selected, |bar, i| bar.selected_index(i));
         let mut previous_workspace = None;
@@ -2361,7 +2403,7 @@ impl ConduitApp {
                     let Some(s) = self.session(id) else {
                         continue;
                     };
-                    let title = single_line_title(if s.title.is_empty() {
+                    let title = single_line_title(if s.title.trim().is_empty() {
                         conduit::i18n::text_static("files.new_session")
                     } else {
                         &s.title
@@ -2448,6 +2490,10 @@ impl ConduitApp {
                     )
                 }
             };
+            // Session titles can be pasted SQL, including tabs and Unicode
+            // line separators. Keep the label and overflow-menu entry on one
+            // line; TabBar's max_width applies the label's ellipsis.
+            let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
             let selector_close = match tab {
                 DocumentTab::Settings => "settings-tab-close".to_owned(),
                 DocumentTab::Usage(id) => format!("usage-tab-close-{id}"),
@@ -2457,6 +2503,15 @@ impl ConduitApp {
                 DocumentTab::Diff(id) => format!("diff-tab-close-{id}"),
             };
             let workspace = self.tab_workspace(&tab);
+            let workspace_color = match tab {
+                DocumentTab::Chat(_) => workspace.as_ref().and_then(|path| {
+                    super::theme::project_marker_color(
+                        path,
+                        self.store.ui.workspace_colors.get(path).copied(),
+                    )
+                }),
+                _ => None,
+            };
             let starts_group =
                 self.store.ui.group_tabs && workspace.is_some() && workspace != previous_workspace;
             previous_workspace = workspace.clone();
@@ -2511,7 +2566,10 @@ impl ConduitApp {
                 .prefix(icon)
                 .label(title)
                 .text_size(ui_text_size(12.))
-                .when(preview, |style| style.italic());
+                .when(preview, |style| style.italic())
+                .when_some(workspace_color, |item, color| {
+                    item.folder_border_color(gpui_kit::rgba(color))
+                });
             if let DocumentTab::Chat(id) = tab
                 && (running || unread)
             {
@@ -2573,6 +2631,7 @@ impl ConduitApp {
             })
             .relative()
             .h(px(TAB_BAR_HEIGHT))
+            .min_h(px(TAB_BAR_HEIGHT))
             .min_w_0()
             .flex_shrink_0()
             .on_prepaint(move |bounds, window, cx| {
@@ -2611,6 +2670,7 @@ impl ConduitApp {
                 let all = app.clone();
                 let pin = app.clone();
                 let move_view = app.clone();
+                let move_chat = app.clone();
                 menu.when(matches!(target, DocumentTab::File(_)), |menu| {
                     menu.item(
                         PopupMenuItem::new(conduit::i18n::text_static("files.pin_file_tab"))
@@ -2644,6 +2704,26 @@ impl ConduitApp {
                                         window,
                                         cx,
                                     )
+                                });
+                            }
+                        }),
+                    )
+                })
+                .when(matches!(target, DocumentTab::Chat(_)), |menu| {
+                    menu.item(
+                        PopupMenuItem::new(conduit::i18n::text_static(if pane == Pane::Main {
+                            "files.show_beside"
+                        } else {
+                            "files.show_full"
+                        }))
+                        .on_click(move |_, window, cx| {
+                            if let DocumentTab::Chat(id) = target {
+                                move_chat.update(cx, |this, cx| {
+                                    if pane == Pane::Main {
+                                        this.show_chat_beside(id, window, cx);
+                                    } else {
+                                        this.move_chat_to_main(id, window, cx);
+                                    }
                                 });
                             }
                         }),
@@ -3121,6 +3201,21 @@ impl ConduitApp {
                 .child(conduit::i18n::text_static("files.diff_tab_closed"))
                 .into_any_element();
         };
+        let workspace_name = self
+            .store
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.path == document.workspace)
+            .map(Workspace::name)
+            .unwrap_or_else(|| {
+                document
+                    .workspace
+                    .file_name()
+                    .unwrap_or(document.workspace.as_os_str())
+                    .to_string_lossy()
+                    .into_owned()
+            });
+        let workspace_path = workspace_files::display_path(&document.workspace);
         v_flex()
             .id("git-diff-document")
             .debug_selector(|| "git-diff-document".into())
@@ -3140,12 +3235,21 @@ impl ConduitApp {
                     .gap_2()
                     .child(
                         div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(ui_text_size(11.))
-                            .child(document.workspace.display().to_string()),
+                            .id("diff-workspace-tag")
+                            .debug_selector(|| "diff-workspace-tag".into())
+                            .tooltip(move |window, cx| {
+                                Tooltip::new(workspace_path.clone()).build(window, cx)
+                            })
+                            .child(
+                                Tag::secondary()
+                                    .small()
+                                    .text_size(ui_text_size(11.))
+                                    .max_w(px(220.))
+                                    .overflow_hidden()
+                                    .child(div().truncate().child(workspace_name)),
+                            ),
                     )
+                    .child(div().flex_1())
                     .child(
                         Button::new("diff-return-chat")
                             .ghost()
@@ -3365,7 +3469,6 @@ mod tests {
                         "{link}"
                     );
                     assert_eq!(app.store.workspaces.len(), 2);
-                    assert!(app.message.is_none());
                     assert_eq!(app.notifications.center.records().len(), notices);
                 });
             });
@@ -3399,7 +3502,6 @@ mod tests {
                     if !registered {
                         assert_eq!(app.input.read(cx).value(), "draft alpha");
                     }
-                    assert!(app.message.is_none());
                     assert_eq!(app.notifications.center.records().len(), notices);
                 });
             });

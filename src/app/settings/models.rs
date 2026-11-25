@@ -1,7 +1,6 @@
 //! Models settings.
 
 use super::*;
-use gpui_kit::component::collapsible::Collapsible;
 #[path = "models/editor_models.rs"]
 mod editor_models;
 use editor_models::{FetchModels, ModelsChanged, ProviderModels};
@@ -17,6 +16,8 @@ struct ProviderEditor {
     protected_key: Option<String>,
     env_auth: bool,
     probing: bool,
+    saving: bool,
+    probe_task: Option<Task<()>>,
     feedback: Option<String>,
     subscriptions: Vec<Subscription>,
     initial: ([String; 3], Provider, bool, Option<String>),
@@ -99,6 +100,8 @@ impl ProviderEditor {
             protected_key: provider.as_ref().and_then(|p| p.protected_api_key.clone()),
             env_auth: provider.as_ref().is_some_and(|p| !p.api_key_env.is_empty()),
             probing: false,
+            saving: false,
+            probe_task: None,
             feedback: None,
             subscriptions,
             app,
@@ -111,9 +114,10 @@ impl ProviderEditor {
     }
 
     fn can_close(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.probing {
+        if self.saving {
             return false;
         }
+        self.stop_discovery(cx);
         let dirty = self
             .fields
             .iter()
@@ -132,7 +136,16 @@ impl ProviderEditor {
     }
 
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.probing {
+        if self.probing || self.saving {
+            return;
+        }
+        let app = self.app.read(cx);
+        if !app.writable || app.closing || app.connection_settings.saving {
+            self.error = Some(
+                conduit::i18n::text_static("settings.models.save_failed_check_storage_status")
+                    .into(),
+            );
+            cx.notify();
             return;
         }
         let protected_key = if self.env_auth {
@@ -194,35 +207,87 @@ impl ProviderEditor {
             cx.notify();
             return;
         }
-        let saved = self.app.update(cx, |app, cx| {
-            if !app.writable || app.closing {
-                return false;
-            }
+        let id = provider.id.clone();
+        let previous = self
+            .app
+            .read(cx)
+            .store
+            .providers
+            .iter()
+            .enumerate()
+            .find(|(_, p)| p.id == id)
+            .map(|(index, provider)| (index, provider.clone()));
+        let receipt = self.app.update(cx, |app, cx| {
             if let Some(current) = app.store.providers.iter_mut().find(|p| p.id == provider.id) {
                 *current = provider;
             } else {
                 app.store.providers.push(provider);
             }
-            cx.emit(crate::providers::ProviderCatalogChanged);
-            let saved = app.persist();
+            app.connection_settings.saving = true;
+            let receipt = app.persist_confirmed();
             cx.notify();
-            saved
+            receipt
         });
-        if saved {
-            window.close_dialog(cx);
-        } else {
-            self.error = Some(
-                conduit::i18n::text_static("settings.models.save_failed_check_storage_status")
-                    .into(),
-            );
+        // Keep the dialog and its draft alive until this exact snapshot is durable.
+        self.saving = true;
+        self.error = None;
+        self.models.update(cx, |models, cx| {
+            models.disabled = true;
             cx.notify();
-        }
+        });
+        let app = self.app.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = match receipt {
+                Ok(receipt) => receipt.wait(cx.background_executor()).await,
+                Err(error) => Err(error),
+            };
+            let failed = result.is_err();
+            let _ = cx.update(|_, cx| {
+                app.update(cx, |app, cx| {
+                    app.connection_settings.saving = false;
+                    if failed {
+                        // Roll back only this service; preserve unrelated concurrent edits.
+                        app.store.providers.retain(|p| p.id != id);
+                        if let Some((index, previous)) = previous {
+                            app.store
+                                .providers
+                                .insert(index.min(app.store.providers.len()), previous);
+                        }
+                        app.dirty = true;
+                    }
+                    cx.emit(crate::providers::ProviderCatalogChanged);
+                    cx.notify();
+                })
+            });
+            let _ = this.update_in(cx, |editor, window, cx| {
+                editor.saving = false;
+                editor.models.update(cx, |models, cx| {
+                    models.disabled = false;
+                    cx.notify();
+                });
+                match result {
+                    Ok(()) => {
+                        window.close_dialog(cx);
+                    }
+                    Err(error) => {
+                        editor.error = Some(conduit::i18n::format(
+                            "notifications.save_failed",
+                            &[("error", error)],
+                        ));
+                        editor.fields[0].read(cx).focus_handle(cx).focus(window, cx);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
     }
 }
 
 impl ProviderEditor {
     fn discover(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.probing {
+        if self.probing || self.saving {
             return;
         }
         let key = if self.env_auth {
@@ -268,7 +333,7 @@ impl ProviderEditor {
         self.error = None;
         self.feedback = None;
         cx.notify();
-        cx.spawn_in(window, async move |this, cx| {
+        self.probe_task = Some(cx.spawn_in(window, async move |this, cx| {
             let result =
                 cx.background_executor()
                     .spawn(async move {
@@ -276,6 +341,7 @@ impl ProviderEditor {
                     })
                     .await;
             let _ = this.update_in(cx, |editor, window, cx| {
+                editor.probe_task = None;
                 editor.probing = false;
                 editor.models.update(cx, |models, cx| {
                     models.disabled = false;
@@ -296,8 +362,22 @@ impl ProviderEditor {
                 }
                 cx.notify();
             });
-        })
-        .detach();
+        }));
+    }
+
+    fn stop_discovery(&mut self, cx: &mut Context<Self>) {
+        if !self.probing {
+            return;
+        }
+        self.probe_task = None;
+        self.probing = false;
+        self.models.update(cx, |models, cx| {
+            models.disabled = false;
+            cx.notify();
+        });
+        self.feedback =
+            Some(conduit::i18n::text_static("settings.models.discovery_stopped").into());
+        cx.notify();
     }
 }
 
@@ -327,12 +407,12 @@ impl ProviderEditor {
             .child(provider_field_label(label, false))
             .child(if env_auth {
                 Input::new(&self.fields[2])
-                    .disabled(self.probing)
+                    .disabled(self.probing || self.saving)
                     .aria_label(label)
             } else {
                 Input::new(&self.key)
                     .mask_toggle()
-                    .disabled(self.probing)
+                    .disabled(self.probing || self.saving)
                     .aria_label(label)
             })
             .child(
@@ -361,7 +441,7 @@ impl ProviderEditor {
                         .label(conduit::i18n::text_static(
                             "settings.models.remove_saved_credentials",
                         ))
-                        .disabled(self.probing)
+                        .disabled(self.probing || self.saving)
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.protected_key = None;
                             this.key.update(cx, |key, cx| key.set_value("", window, cx));
@@ -379,7 +459,7 @@ impl ProviderEditor {
                     .outline()
                     .small()
                     .label(engine.label())
-                    .disabled(self.id.is_some() || self.probing)
+                    .disabled(self.id.is_some() || self.probing || self.saving)
                     .selected(self.engine == engine)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.engine = engine;
@@ -407,7 +487,7 @@ impl ProviderEditor {
                     .outline()
                     .label(label)
                     .selected(self.env_auth == env_auth)
-                    .disabled(self.probing)
+                    .disabled(self.probing || self.saving)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.env_auth = env_auth;
                         this.feedback = None;
@@ -415,79 +495,64 @@ impl ProviderEditor {
                     })),
             );
         }
-        Collapsible::new()
-            .w_full()
-            .open(self.advanced_open)
-            .rounded_lg()
-            .border_1()
-            .border_color(rgb(palette().border))
-            .child(
-                Button::new("provider-advanced-toggle")
-                    .debug_selector(|| "provider-advanced-toggle".into())
-                    .ghost()
-                    .w_full()
-                    .justify_start()
-                    .icon(if self.advanced_open {
-                        FullIconName::ChevronDown
-                    } else {
-                        FullIconName::ChevronRight
-                    })
-                    .label(conduit::i18n::text_static(
-                        "settings.models.advanced_options",
-                    ))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.advanced_open = !this.advanced_open;
-                        cx.notify();
-                    })),
-            )
-            .content(
-                v_flex()
-                    .debug_selector(|| "provider-advanced-fields".into())
-                    .w_full()
-                    .p_4()
-                    .gap_4()
-                    .child(
-                        h_flex()
-                            .items_start()
-                            .flex_wrap()
-                            .gap_4()
-                            .child(
-                                v_flex()
-                                    .flex_1()
-                                    .min_w(px(180.))
-                                    .gap_2()
-                                    .child(provider_field_label(
-                                        conduit::i18n::text_static(
-                                            "settings.models.service_engine",
-                                        ),
-                                        false,
-                                    ))
-                                    .child(engines),
-                            )
-                            .child(
-                                v_flex()
-                                    .flex_1()
-                                    .min_w(px(180.))
-                                    .gap_2()
-                                    .child(provider_field_label(
-                                        conduit::i18n::text_static(
-                                            "settings.models.authentication",
-                                        ),
-                                        false,
-                                    ))
-                                    .child(authentication),
-                            ),
-                    )
-                    .child(
-                        v_flex()
-                            .debug_selector(|| "provider-editor-field-3".into())
-                            .border_t_1()
-                            .border_color(rgb(palette().border))
-                            .pt_4()
-                            .gap_2()
-                            .child(self.models.clone()),
-                    ),
-            )
+        let editor = cx.entity();
+        settings_accordion(
+            "provider-advanced-toggle",
+            div()
+                .debug_selector(|| "provider-advanced-toggle".into())
+                .child(conduit::i18n::text_static(
+                    "settings.models.advanced_options",
+                )),
+            self.advanced_open,
+            v_flex()
+                .debug_selector(|| "provider-advanced-fields".into())
+                .w_full()
+                .p_4()
+                .gap_4()
+                .child(
+                    h_flex()
+                        .items_start()
+                        .flex_wrap()
+                        .gap_4()
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w(px(180.))
+                                .gap_2()
+                                .child(provider_field_label(
+                                    conduit::i18n::text_static("settings.models.service_engine"),
+                                    false,
+                                ))
+                                .child(engines),
+                        )
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w(px(180.))
+                                .gap_2()
+                                .child(provider_field_label(
+                                    conduit::i18n::text_static("settings.models.authentication"),
+                                    false,
+                                ))
+                                .child(authentication),
+                        ),
+                )
+                .child(
+                    v_flex()
+                        .debug_selector(|| "provider-editor-field-3".into())
+                        .border_t_1()
+                        .border_color(rgb(palette().border))
+                        .pt_4()
+                        .gap_2()
+                        .child(self.models.clone()),
+                ),
+            move |open, _, cx| {
+                editor.update(cx, |editor, cx| {
+                    editor.advanced_open = open;
+                    cx.notify();
+                })
+            },
+        )
     }
 }
 
@@ -571,7 +636,7 @@ impl Render for ProviderEditor {
                             .child(
                                 div().flex_1().min_w_0().child(
                                     Input::new(&self.fields[0])
-                                        .disabled(self.probing)
+                                        .disabled(self.probing || self.saving)
                                         .aria_label(name_label),
                                 ),
                             ),
@@ -585,7 +650,7 @@ impl Render for ProviderEditor {
                     .child(provider_field_label(endpoint_label, true))
                     .child(
                         Input::new(&self.fields[1])
-                            .disabled(self.probing)
+                            .disabled(self.probing || self.saving)
                             .aria_label(endpoint_label),
                     )
                     .child(
@@ -629,7 +694,7 @@ impl Render for ProviderEditor {
                         } else {
                             conduit::i18n::text_static("git_branches.cancel")
                         })
-                        .disabled(self.probing)
+                        .disabled(self.saving)
                         .on_click(cx.listener(|this, _, window, cx| {
                             if this.confirm_discard {
                                 this.confirm_discard = false;
@@ -640,6 +705,16 @@ impl Render for ProviderEditor {
                             }
                         })),
                 )
+                .when(self.probing, |row| {
+                    row.child(
+                        Button::new("custom-provider-stop-discovery")
+                            .debug_selector(|| "custom-provider-stop-discovery".into())
+                            .ghost()
+                            .small()
+                            .label(conduit::i18n::text_static("settings.models.stop_waiting"))
+                            .on_click(cx.listener(|this, _, _, cx| this.stop_discovery(cx))),
+                    )
+                })
                 .when(self.confirm_discard, |row| {
                     row.child(
                         Button::new("custom-provider-discard")
@@ -655,12 +730,13 @@ impl Render for ProviderEditor {
                     Button::new("custom-provider-save")
                         .primary()
                         .small()
+                        .loading(self.saving)
                         .label(conduit::i18n::text_static(if shared {
                             "settings.models.save_shared_configuration"
                         } else {
                             "settings.models.save_service"
                         }))
-                        .disabled(self.probing)
+                        .disabled(self.probing || self.saving)
                         .on_click(cx.listener(|this, _, w, cx| this.save(w, cx))),
                 ),
         )
@@ -674,7 +750,7 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.writable || self.closing {
+        if !self.writable || self.closing || self.connection_settings.saving {
             return;
         }
         let title = if provider.is_some() {
@@ -690,13 +766,13 @@ impl ConduitApp {
             let width = (f32::from(window.viewport_size().width) - 48.).clamp(0., 860.);
             let editor = editor.clone();
             let dismiss = editor.clone();
-            let probing = editor.read(cx).probing;
+            let saving = editor.read(cx).saving;
             dialog
                 .w(px(width))
                 .centered()
                 .overlay_closable(false)
-                .keyboard(!probing)
-                .close_button(!probing)
+                .keyboard(!saving)
+                .close_button(!saving)
                 .on_cancel(move |_, _, cx| dismiss.update(cx, |editor, cx| editor.can_close(cx)))
                 .title(title)
                 .content(move |content, _, _| content.child(editor.clone()))
@@ -709,7 +785,7 @@ impl ConduitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.closing || self.connection_settings.syncing {
+        if self.closing || self.connection_settings.syncing || self.connection_settings.saving {
             return;
         }
         self.ensure_opencode_models(refresh, cx);
@@ -777,40 +853,46 @@ impl ConduitApp {
                 ("arg1", format!("{}", ccs_model_count)),
             ],
         );
-        let toggle = SettingItem::render(move |_, _, _| {
-            let toggle_view = view.clone();
-            Button::new("settings-models-sources")
-                .label(if expanded {
-                    conduit::i18n::text_static("settings.models.hide_configuration_sources")
-                } else {
-                    conduit::i18n::text_static("settings.models.view_configuration_sources")
-                })
-                .small()
-                .ghost()
-                .cursor_pointer()
-                .on_click(move |_, _, cx| {
-                    toggle_view.update(cx, |this, cx| {
-                        this.connection_settings.sources_expanded = !expanded;
+        let mut fields = vec![
+            value_item(engine.label(), config_path),
+            value_item("cc-switch", display_path(&self.ccs.database_path)),
+            value_item(
+                conduit::i18n::text_static("settings.models.loaded"),
+                ccs_summary,
+            ),
+        ];
+        if self.ccs.error.is_none()
+            && let Some(note) = self.ccs.note.clone()
+        {
+            fields.push(
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.models.description"),
+                    paragraph_field(note),
+                )
+                .layout(Axis::Vertical),
+            );
+        }
+        let sources = SettingItem::render(move |options, window, cx| {
+            let view = view.clone();
+            settings_accordion(
+                "settings-models-sources",
+                conduit::i18n::text_static("settings.models.view_configuration_sources"),
+                expanded,
+                accordion_fields(&fields, options, window, cx),
+                move |open, _, cx| {
+                    view.update(cx, |app, cx| {
+                        app.connection_settings.sources_expanded = open;
                         cx.notify();
-                    });
-                })
+                    })
+                },
+            )
         })
         .keywords([
             conduit::i18n::text_static("settings.models.configuration_sources"),
             "CCS",
             "cc-switch",
         ]);
-        let mut items = vec![toggle];
-        if expanded {
-            items.extend(vec![
-                value_item(engine.label(), config_path),
-                value_item("cc-switch", display_path(&self.ccs.database_path)),
-                value_item(
-                    conduit::i18n::text_static("settings.models.loaded"),
-                    ccs_summary,
-                ),
-            ]);
-        }
+        let mut items = vec![sources];
         if let Some(error) = self.ccs.error.clone() {
             items.push(
                 SettingItem::new(
@@ -819,15 +901,6 @@ impl ConduitApp {
                 )
                 .layout(Axis::Vertical)
                 .keywords([conduit::i18n::text_static("settings.models.error")]),
-            );
-        } else if let Some(note) = self.ccs.note.clone().filter(|_| expanded) {
-            items.push(
-                SettingItem::new(
-                    conduit::i18n::text_static("settings.models.description"),
-                    paragraph_field(note),
-                )
-                .layout(Axis::Vertical)
-                .keywords([conduit::i18n::text_static("settings.models.description")]),
             );
         }
         SettingGroup::new()
@@ -855,64 +928,80 @@ impl ConduitApp {
         let note = catalog.and_then(|catalog| catalog.note.clone());
         let expanded = self.connection_settings.models_expanded;
         let closing = self.closing;
-        let summary_view = view.clone();
-        let summary = SettingItem::render(move |_, _, _| {
-            let toggle_view = summary_view.clone();
-            let refresh_view = summary_view.clone();
-            h_flex()
-                .w_full()
-                .justify_between()
-                .gap_2()
-                .flex_wrap()
-                .child(
-                    div()
-                        .text_size(ui_text_size(12.))
-                        .text_color(rgb(palette().muted))
-                        .child(conduit::i18n::format(
-                            "settings.models.model_definitions_generation_not_verified",
-                            &[("model_count", format!("{}", model_count))],
-                        )),
-                )
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .when(provider == Provider::OpenCode, |row| {
-                            row.child(
-                                Button::new("settings-opencode-refresh")
-                                    .ghost()
-                                    .small()
-                                    .label(conduit::i18n::text_static(
-                                        "settings.models.refresh_models",
-                                    ))
-                                    .disabled(closing)
-                                    .cursor_pointer()
-                                    .on_click(move |_, _, cx| {
-                                        refresh_view.update(cx, |app, cx| {
-                                            app.ensure_opencode_models(true, cx)
-                                        })
-                                    }),
-                            )
-                        })
-                        .child(
-                            Button::new("settings-models-expand")
+        let mut fields = vec![value_item(
+            conduit::i18n::text_static("settings.general.configuration_file"),
+            config_path,
+        )];
+        if let Some(path) = catalog.and_then(|catalog| catalog.catalog_path.as_deref()) {
+            fields.push(value_item(
+                conduit::i18n::text_static("settings.models.model_catalog"),
+                display_path(path),
+            ));
+        }
+        if let Some(endpoint) = catalog.and_then(|catalog| catalog.endpoint.clone()) {
+            fields.push(value_item(
+                conduit::i18n::text_static("settings.models.interface"),
+                endpoint,
+            ));
+        }
+        if let Some(detail) = catalog.and_then(|catalog| catalog.detail.clone()) {
+            fields.push(value_item(
+                conduit::i18n::text_static("settings.models.additional_configuration"),
+                detail,
+            ));
+        }
+        fields.push(
+            SettingItem::new(
+                conduit::i18n::text_static("settings.models.model_list"),
+                self.managed_models_field(provider, view.clone()),
+            )
+            .layout(Axis::Vertical),
+        );
+        let summary = SettingItem::render(move |options, window, cx| {
+            let toggle = view.clone();
+            let refresh = view.clone();
+            let fields = accordion_fields(&fields, options, window, cx);
+            settings_accordion(
+                "settings-models-expand",
+                v_flex()
+                    .min_w_0()
+                    .gap_1()
+                    .child(conduit::i18n::text_static(
+                        "settings.models.manage_model_catalog",
+                    ))
+                    .child(
+                        div()
+                            .text_size(ui_text_size(12.))
+                            .text_color(rgb(palette().muted))
+                            .child(conduit::i18n::format(
+                                "settings.models.model_definitions_generation_not_verified",
+                                &[("model_count", model_count.to_string())],
+                            )),
+                    ),
+                expanded,
+                v_flex()
+                    .gap_2()
+                    .when(provider == Provider::OpenCode, |panel| {
+                        panel.child(
+                            Button::new("settings-opencode-refresh")
                                 .ghost()
                                 .small()
-                                .label(if expanded {
-                                    conduit::i18n::text_static("settings.models.hide_model_catalog")
-                                } else {
-                                    conduit::i18n::text_static(
-                                        "settings.models.manage_model_catalog",
-                                    )
-                                })
-                                .cursor_pointer()
+                                .label(conduit::i18n::text_static("settings.models.refresh_models"))
+                                .disabled(closing)
                                 .on_click(move |_, _, cx| {
-                                    toggle_view.update(cx, |app, cx| {
-                                        app.connection_settings.models_expanded = !expanded;
-                                        cx.notify();
-                                    })
+                                    refresh
+                                        .update(cx, |app, cx| app.ensure_opencode_models(true, cx))
                                 }),
-                        ),
-                )
+                        )
+                    })
+                    .child(fields),
+                move |open, _, cx| {
+                    toggle.update(cx, |app, cx| {
+                        app.connection_settings.models_expanded = open;
+                        cx.notify();
+                    })
+                },
+            )
         })
         .keywords([
             conduit::i18n::text_static("settings.models.model_list"),
@@ -926,37 +1015,6 @@ impl ConduitApp {
             ),
             summary,
         ];
-        if expanded {
-            items.push(value_item(
-                conduit::i18n::text_static("settings.general.configuration_file"),
-                config_path,
-            ));
-            if let Some(path) = catalog.and_then(|catalog| catalog.catalog_path.as_deref()) {
-                items.push(value_item(
-                    conduit::i18n::text_static("settings.models.model_catalog"),
-                    display_path(path),
-                ));
-            }
-            if let Some(endpoint) = catalog.and_then(|catalog| catalog.endpoint.clone()) {
-                items.push(value_item(
-                    conduit::i18n::text_static("settings.models.interface"),
-                    endpoint,
-                ));
-            }
-            if let Some(detail) = catalog.and_then(|catalog| catalog.detail.clone()) {
-                items.push(value_item(
-                    conduit::i18n::text_static("settings.models.additional_configuration"),
-                    detail,
-                ));
-            }
-            items.extend(vec![
-                SettingItem::new(
-                    conduit::i18n::text_static("settings.models.model_list"),
-                    self.managed_models_field(provider, view.clone()),
-                )
-                .layout(Axis::Vertical),
-            ]);
-        }
         if let Some(error) = error {
             items.push(
                 SettingItem::new(
@@ -967,13 +1025,13 @@ impl ConduitApp {
                 .keywords([conduit::i18n::text_static("settings.models.error")]),
             );
         }
-        let group = settings_section(if provider == Provider::OpenCode {
-            conduit::i18n::text_static("settings.models.opencode_native_models")
-        } else {
-            conduit::i18n::text_static("settings.models.cli_defaults")
-        })
-        .variant(GroupBoxVariant::Outline)
-        .items(items);
+        let group = SettingGroup::new()
+            .title(if provider == Provider::OpenCode {
+                conduit::i18n::text_static("settings.models.opencode_native_models")
+            } else {
+                conduit::i18n::text_static("settings.models.cli_defaults")
+            })
+            .items(items);
         if let Some(note) = note {
             group.footer(move |_, _| note.clone())
         } else {
@@ -1031,6 +1089,157 @@ mod tests {
                 assert_eq!(app.read(cx).store.providers.len(), provider_count);
             });
             gpui_kit::component::Root::new(app, window, cx)
+        });
+    }
+
+    fn settle_editor(
+        editor: &gpui_kit::Entity<ProviderEditor>,
+        cx: &mut gpui_kit::VisualTestContext,
+    ) {
+        for _ in 0..200 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(20));
+            cx.run_until_parked();
+            if !editor.read_with(cx, |editor, _| editor.saving) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("service editor save did not complete");
+    }
+
+    #[gpui_kit::test]
+    fn provider_editor_waits_for_disk_and_preserves_draft_for_retry(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let _locale = crate::test_support::chinese();
+        cx.update(gpui_kit::init);
+        let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let output = slot.clone();
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let mut store = Store::default();
+            let provider = super::ModelProvider {
+                id: "durable-editor".into(),
+                name: "Original service".into(),
+                engine: super::Provider::Codex,
+                base_url: "https://example.invalid/v1".into(),
+                api_key_env: String::new(),
+                protected_api_key: None,
+                models: vec!["fixture-model".into()],
+                source: Default::default(),
+                model_metadata: vec![],
+                claude_models: None,
+            };
+            store.providers.push(provider.clone());
+            let app = cx.new(|cx| {
+                let mut app = ConduitApp::with_store(window, cx, Ok(store), false, false);
+                app.startup = None;
+                app.persistence = crate::persistence::Persistence::with_writer(|_| {
+                    Err("synthetic write failure".into())
+                });
+                app
+            });
+            let editor = cx.new(|cx| {
+                ProviderEditor::new(
+                    app.clone(),
+                    Some(provider),
+                    super::Provider::Codex,
+                    window,
+                    cx,
+                )
+            });
+            *output.borrow_mut() = Some((app.clone(), editor));
+            gpui_kit::component::Root::new(app, window, cx)
+        });
+        let (app, editor) = slot.borrow().clone().unwrap();
+        cx.update(|window, cx| {
+            editor.update(cx, |editor, cx| {
+                editor.fields[0]
+                    .update(cx, |input, cx| input.set_value("Draft service", window, cx));
+                editor.save(window, cx);
+                assert!(editor.saving, "enqueue is not a completed save");
+                assert!(!editor.can_close(cx), "save must keep the draft alive");
+            })
+        });
+        settle_editor(&editor, cx);
+        cx.update(|window, cx| {
+            assert_eq!(app.read(cx).store.providers[0].name, "Original service");
+            editor.update(cx, |editor, cx| {
+                assert!(
+                    editor
+                        .error
+                        .as_ref()
+                        .is_some_and(|error| error.contains("synthetic write failure"))
+                );
+                assert_eq!(editor.fields[0].read(cx).value().as_str(), "Draft service");
+            });
+            app.update(cx, |app, _| {
+                app.persistence = crate::persistence::Persistence::with_writer(|_| Ok(()))
+            });
+            editor.update(cx, |editor, cx| editor.save(window, cx));
+        });
+        settle_editor(&editor, cx);
+        assert_eq!(
+            app.read_with(cx, |app, _| app.store.providers[0].name.clone()),
+            "Draft service"
+        );
+        assert!(editor.read_with(cx, |editor, _| editor.error.is_none()));
+    }
+
+    #[gpui_kit::test]
+    fn provider_editor_stops_waiting_without_losing_fields_or_accepting_stale_results(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let _locale = crate::test_support::chinese();
+        cx.update(gpui_kit::init);
+        let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let output = slot.clone();
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let app =
+                cx.new(|cx| ConduitApp::with_store(window, cx, Ok(Store::default()), false, false));
+            let editor = cx.new(|cx| {
+                ProviderEditor::new(app.clone(), None, super::Provider::Codex, window, cx)
+            });
+            editor.update(cx, |editor, cx| {
+                editor.fields[0].update(cx, |input, cx| {
+                    input.set_value("Keep this draft", window, cx)
+                });
+                editor.probing = true;
+                editor.models.update(cx, |models, _| models.disabled = true);
+                editor.probe_task = Some(cx.spawn_in(window, async move |this, cx| {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs(1))
+                        .await;
+                    let _ = this.update_in(cx, |editor, _, _| {
+                        editor.feedback = Some("stale result".into())
+                    });
+                }));
+            });
+            *output.borrow_mut() = Some(editor);
+            gpui_kit::component::Root::new(app, window, cx)
+        });
+        let editor = slot.borrow().clone().unwrap();
+        cx.update(|_, cx| {
+            editor.update(cx, |editor, cx| {
+                editor.stop_discovery(cx);
+                assert!(!editor.probing);
+                assert!(!editor.models.read(cx).disabled);
+                assert!(!editor.can_close(cx));
+                assert!(
+                    editor.confirm_discard,
+                    "closing offers the normal dirty-draft choice"
+                );
+            })
+        });
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(2));
+        cx.run_until_parked();
+        editor.read_with(cx, |editor, cx| {
+            assert_eq!(
+                editor.fields[0].read(cx).value().as_str(),
+                "Keep this draft"
+            );
+            assert_ne!(editor.feedback.as_deref(), Some("stale result"));
         });
     }
     use gpui_kit::AppContext as _;

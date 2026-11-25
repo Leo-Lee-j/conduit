@@ -43,28 +43,38 @@ pub(super) struct Wheel {
 }
 
 impl Wheel {
-    pub(super) fn is_pending(&self, app: &ConduitApp) -> bool {
-        self.context == Some((app.selected_session, app.chat_rows.mapping_revision))
-            && app.pending_message_jump.is_none()
+    pub(super) fn is_pending(
+        &self,
+        app: &ConduitApp,
+        source: &TimelineSource,
+        scroll: &ListState,
+    ) -> bool {
+        self.context == Some(source.context(app))
+            && !source.navigating(app)
             && self
                 .pending
                 .as_ref()
-                .is_some_and(|pending| same(pending.displayed, app.scroll.logical_scroll_top()))
+                .is_some_and(|pending| same(pending.displayed, scroll.logical_scroll_top()))
     }
 
-    pub(super) fn resume_follow(&self, app: &ConduitApp) -> bool {
+    pub(super) fn resume_follow(
+        &self,
+        app: &ConduitApp,
+        source: &TimelineSource,
+        scroll: &ListState,
+    ) -> bool {
         self.toward_bottom
-            && self.context == Some((app.selected_session, app.chat_rows.mapping_revision))
+            && self.context == Some(source.context(app))
             && self.pending.is_none()
-            && app.pending_message_jump.is_none()
-            && app.scroll.logical_scroll_top().item_ix >= app.scroll.item_count()
+            && !source.navigating(app)
+            && scroll.logical_scroll_top().item_ix >= scroll.item_count()
     }
 
     // A session switch or a rebuilt row map can reuse the same numeric offset.
     // Never carry a deferred gesture into that new transcript.
-    pub(super) fn sync(&mut self, app: &ConduitApp) {
-        let context = (app.selected_session, app.chat_rows.mapping_revision);
-        if self.context != Some(context) || app.pending_message_jump.is_some() {
+    pub(super) fn sync(&mut self, app: &ConduitApp, source: &TimelineSource) {
+        let context = source.context(app);
+        if self.context != Some(context) || source.navigating(app) {
             self.pending = None;
             self.toward_bottom = false;
             self.context = Some(context);
@@ -112,12 +122,13 @@ impl Wheel {
         &mut self,
         scroll: &ListState,
         app: &WeakEntity<ConduitApp>,
+        source: &TimelineSource,
         bounds: Bounds<Pixels>,
         window: &mut Window,
         cx: &mut App,
     ) {
         if let Some(app) = app.upgrade() {
-            self.sync(app.read(cx));
+            self.sync(app.read(cx), source);
         }
         let Some(pending) = self.pending.take() else {
             return;
@@ -128,7 +139,8 @@ impl Wheel {
         let mut top = pending.target;
         let mut waiting = false;
         while top.offset_in_item < px(0.) && top.item_ix > 0 {
-            let Some(height) = measure(app, top.item_ix - 1, bounds.size.width, window, cx) else {
+            let Some(height) = measure(app, source, top.item_ix - 1, bounds.size.width, window, cx)
+            else {
                 waiting = true;
                 break;
             };
@@ -139,7 +151,8 @@ impl Wheel {
             top.offset_in_item = top.offset_in_item.max(px(0.));
         }
         while !waiting && top.item_ix < scroll.item_count() && top.offset_in_item > px(0.) {
-            let Some(height) = measure(app, top.item_ix, bounds.size.width, window, cx) else {
+            let Some(height) = measure(app, source, top.item_ix, bounds.size.width, window, cx)
+            else {
                 waiting = true;
                 break;
             };
@@ -165,14 +178,15 @@ impl Wheel {
             scroll.scroll_to(top);
         }
         // Row crossings now happen during layout, after the wheel listener.
-        // Refresh the outline only when its active section actually changes.
+        // Each source owns its marker and follow intent. Reference timelines
+        // have no main poll_streams hook to resume follow after this resolves.
         let _ = app.update(cx, |app, cx| {
-            let top = scroll.logical_scroll_top();
-            let active = app
-                .outline
-                .active_for_item(app.chat_rows.message(top.item_ix));
-            if app.outline.active != active {
-                cx.notify();
+            if matches!(source, TimelineSource::Session(_))
+                && self.resume_follow(app, source, scroll)
+            {
+                source.scrolled(scroll, true, app, cx);
+            } else {
+                source.refresh_active(app, cx);
             }
         });
     }
@@ -180,6 +194,7 @@ impl Wheel {
 
 fn measure(
     app: &WeakEntity<ConduitApp>,
+    source: &TimelineSource,
     index: usize,
     width: Pixels,
     window: &mut Window,
@@ -187,15 +202,15 @@ fn measure(
 ) -> Option<Pixels> {
     let (mut element, markdown, text) = app
         .update(cx, |app, cx| {
-            let text = app
-                .selected_session
+            let text = source
+                .id(app)
                 .and_then(|id| app.session(id))
                 .and_then(|session| {
-                    let item = session.messages.get(app.chat_rows.message(index))?;
+                    let item = session.messages.get(source.message(app, index))?;
                     matches!(item.kind, ItemKind::Assistant | ItemKind::Reasoning)
                         .then(|| chat::message_markdown(item, session.provider).into_owned())
                 });
-            let (element, markdown) = app.render_message(index, window, cx);
+            let (element, markdown) = source.render(app, index, window, cx);
             (element, markdown, text)
         })
         .ok()?;

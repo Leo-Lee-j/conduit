@@ -9,10 +9,10 @@ use gpui::Anchor;
 
 mod approvals;
 use approvals::ApprovalBinding;
-pub(super) use approvals::approval_message;
+pub(super) use approvals::{approval_message, approval_preview};
 use gpui_kit::component::{
     alert::Alert,
-    notification::{Notification, NotificationDelivery},
+    notification::{Notification, NotificationDelivery, NotificationType},
 };
 
 struct AppToast;
@@ -41,13 +41,18 @@ pub(super) struct NotificationUi {
     pub update_state: Option<String>,
     persistence_error: Option<String>,
     load_failed: bool,
+    load_error: Option<String>,
     target_error: Option<(u64, String)>,
     // Capabilities for live requests only. Never written to notification history.
     approvals: HashMap<u64, ApprovalBinding>,
 }
 
 impl NotificationUi {
-    pub(super) fn new(writable: bool, cx: &mut Context<ConduitApp>) -> Self {
+    pub(super) fn new(
+        writable: bool,
+        load_error: Option<String>,
+        cx: &mut Context<ConduitApp>,
+    ) -> Self {
         let path = Store::path().with_file_name("notifications.json");
         // UI fixtures never share notification history or acquire the production writer lock.
         #[cfg(test)]
@@ -82,6 +87,7 @@ impl NotificationUi {
             update_state: None,
             persistence_error: None,
             load_failed: !writable,
+            load_error,
             target_error: None,
             approvals: HashMap::new(),
         }
@@ -109,6 +115,31 @@ impl Render for NotificationPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.app
             .update(cx, |app, cx| app.notification_list(cx))
+            .unwrap_or_else(|_| div().into_any_element())
+    }
+}
+
+struct UpdateToastContent {
+    app: WeakEntity<ConduitApp>,
+    id: u64,
+    _subscription: Subscription,
+}
+
+impl Render for UpdateToastContent {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.app
+            .update(cx, |app, cx| {
+                let Some(record) = app.notifications.center.get(self.id) else {
+                    return div().into_any_element();
+                };
+                v_flex()
+                    .gap_2()
+                    .child(div().text_sm().child(app.notification_message(record)))
+                    .when(app.is_ready_update_notification(record), |content| {
+                        content.child(app.update_notification_actions(self.id, "toast", cx))
+                    })
+                    .into_any_element()
+            })
             .unwrap_or_else(|_| div().into_any_element())
     }
 }
@@ -158,6 +189,39 @@ impl ConduitApp {
         }
         published.id
     }
+    pub(super) fn notify_feedback(
+        &mut self,
+        source: Source,
+        level: Level,
+        message: impl Into<String>,
+        target: Option<Target>,
+        cx: &mut Context<Self>,
+    ) {
+        let title = match level {
+            Level::Warning => conduit::i18n::text_static("notifications.operation_unavailable"),
+            Level::Error => conduit::i18n::text_static("notifications.operation_failed"),
+            _ => source.label(),
+        };
+        let mut notice = Notice::new(source, level, title, message);
+        if let Some(target) = target {
+            notice = notice.target(target);
+        }
+        self.notify_user(notice, cx);
+    }
+    pub(super) fn notify_composer_warning(
+        &mut self,
+        message: impl Into<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let target = self
+            .send_target(true)
+            .and_then(|id| self.session_notice_target(id))
+            .or_else(|| {
+                self.composer_target()
+                    .map(|target| Target::Workspace(target.workspace))
+            });
+        self.notify_feedback(Source::Session, Level::Warning, message, target, cx);
+    }
     pub(super) fn refresh_notifications(&mut self, cx: &mut Context<Self>) {
         self.expire_notification_approvals();
         self.notifications.rendered_revision = self.notifications.center.revision();
@@ -202,13 +266,14 @@ impl ConduitApp {
         })
     }
     pub(super) fn session_is_visible(&self, id: u64) -> bool {
-        self.selected_session == Some(id)
-            && !self.viewing_subagent()
-            && self.active_file.is_none()
-            && self.active_diff.is_none()
-            && self.main_pane_visible()
-            && !self.content_overlay_open()
-            && !self.branch_navigation_open()
+        (self.reference_chat() == Some(id) && self.reference_pane_visible())
+            || (self.selected_session == Some(id)
+                && !self.viewing_subagent()
+                && self.active_file.is_none()
+                && self.active_diff.is_none()
+                && self.main_pane_visible()
+                && !self.content_overlay_open()
+                && !self.branch_navigation_open())
     }
     pub(super) fn session_is_notification_visible(&self, id: u64) -> bool {
         self.session_is_visible(id) && (!self.store.ui.system_notifications || self.window_active)
@@ -433,6 +498,89 @@ impl ConduitApp {
             .child(list)
             .into_any_element()
     }
+    fn notification_message(&self, record: &Record) -> String {
+        if self.is_ready_update_notification(record) {
+            self.update_status()
+        } else {
+            record.display_message()
+        }
+    }
+
+    fn update_notification_actions(
+        &self,
+        id: u64,
+        surface: &'static str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        h_flex()
+            .gap_2()
+            .flex_wrap()
+            .child(
+                Button::new(("notification-update-install", id))
+                    .debug_selector(move || format!("update-{surface}-install-{id}"))
+                    .label(conduit::i18n::text_static(
+                        if self.updater.install_requested {
+                            "update.install_scheduled"
+                        } else {
+                            "update.install_now"
+                        },
+                    ))
+                    .tooltip(conduit::i18n::text_static("update.install_and_restart"))
+                    .small()
+                    .disabled(self.closing || !self.writable || self.updater.install_requested)
+                    .on_click(cx.listener(move |app, _, window, cx| {
+                        cx.stop_propagation();
+                        app.act_on_update_notification(id, true, window, cx);
+                    })),
+            )
+            .child(
+                Button::new(("notification-update-later", id))
+                    .debug_selector(move || format!("update-{surface}-later-{id}"))
+                    .label(conduit::i18n::text_static("update.later"))
+                    .small()
+                    .ghost()
+                    .disabled(self.closing)
+                    .on_click(cx.listener(move |_, _, window, cx| {
+                        cx.stop_propagation();
+                        // Closing a toast during its input handler must be deferred.
+                        let app = cx.weak_entity();
+                        window.defer(cx, move |window, cx| {
+                            let _ = app.update(cx, |app, cx| {
+                                app.act_on_update_notification(id, false, window, cx);
+                            });
+                        });
+                    })),
+            )
+            .into_any_element()
+    }
+
+    pub(super) fn act_on_update_notification(
+        &mut self,
+        id: u64,
+        install: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // History and delayed callbacks never authorize a different release.
+        if self.closing
+            || !self
+                .notifications
+                .center
+                .get(id)
+                .is_some_and(|record| self.is_ready_update_notification(record))
+        {
+            return;
+        }
+        if install {
+            if !self.updater.install_requested {
+                self.request_update_install(cx);
+            }
+        } else {
+            self.snooze_update(cx);
+            self.read_notification(id, window, cx);
+        }
+    }
+
     fn notification_row(&self, record: &Record, cx: &mut Context<Self>) -> AnyElement {
         use gpui_kit::base::TestSupportExt as _;
         let id = record.id;
@@ -450,7 +598,9 @@ impl ConduitApp {
             })
             .unwrap_or_default();
         let location = match &record.target {
-            Some(Target::Session { workspace, .. }) | Some(Target::Workspace(workspace)) => {
+            Some(Target::Session { workspace, .. })
+            | Some(Target::Workspace(workspace))
+            | Some(Target::ArchivedSessions(workspace)) => {
                 format!(" · {}", display_path(workspace))
             }
             _ => String::new(),
@@ -558,7 +708,7 @@ impl ConduitApp {
                     .id(("notification-message", id))
                     .debug_selector(move || format!("notification-message-{id}"))
                     .role(Role::Label)
-                    .aria_value(record.display_message())
+                    .aria_value(self.notification_message(record))
                     .min_w_0()
                     .overflow_x_hidden()
                     .text_size(ui_text_size(12.))
@@ -566,9 +716,12 @@ impl ConduitApp {
                     .cursor_text()
                     .child(gpui_kit::base::SelectableText::new(
                         ("notification-message-text", id),
-                        record.display_message(),
+                        self.notification_message(record),
                     )),
             )
+            .when(self.is_ready_update_notification(record), |row| {
+                row.child(self.update_notification_actions(id, "history", cx))
+            })
             .child(
                 div()
                     .id(("notification-source", id))
@@ -731,6 +884,25 @@ impl ConduitApp {
                     false
                 }
             }
+            Some(Target::ArchivedSessions(path)) => {
+                if let Some(index) = self
+                    .store
+                    .workspaces
+                    .iter()
+                    .position(|workspace| workspace.path == path)
+                {
+                    window.close_all_dialogs(cx);
+                    if self.settings_ui.open {
+                        self.close_settings(window, cx);
+                    }
+                    self.show_archived = true;
+                    self.collapsed_workspaces.remove(&path);
+                    self.switch(index, None, window, cx);
+                    true
+                } else {
+                    false
+                }
+            }
             Some(Target::Workspace(path)) => {
                 if let Some(index) = self
                     .store
@@ -835,12 +1007,15 @@ impl ConduitApp {
     pub(super) fn poll_notifications(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.expire_notification_approvals();
         let persistence_error = if self.notifications.load_failed {
-            Some(
-                conduit::i18n::text_static(
-                    "notifications.application_data_could_not_be_loaded_original",
-                )
-                .to_string(),
+            let mut error = conduit::i18n::text_static(
+                "notifications.application_data_could_not_be_loaded_original",
             )
+            .to_string();
+            if let Some(detail) = &self.notifications.load_error {
+                error.push('\n');
+                error.push_str(detail);
+            }
+            Some(error)
         } else {
             self.persistence.error.clone()
         };
@@ -866,25 +1041,6 @@ impl ConduitApp {
                     cx,
                 );
             } else {
-                if self
-                    .notifications
-                    .persistence_error
-                    .as_ref()
-                    .is_some_and(|error| {
-                        self.message.as_ref().is_some_and(|message| {
-                            conduit::i18n::languages().iter().any(|language| {
-                                *message
-                                    == conduit::i18n::format_for(
-                                        &language.id.clone().into(),
-                                        "notifications.save_failed",
-                                        &[("error", error.clone())],
-                                    )
-                            })
-                        })
-                    })
-                {
-                    self.message = None;
-                }
                 self.resolve_notification("application-persistence", cx);
             }
             self.notifications.persistence_error = persistence_error;
@@ -1002,32 +1158,44 @@ impl ConduitApp {
             }
             let action_view = view.clone();
             let has_target = record.target.is_some();
-            let note = match record.level {
-                Level::Info => Notification::info(preview),
-                Level::Success => Notification::success(preview),
-                Level::Warning => Notification::warning(preview),
-                Level::Error => Notification::error(preview),
-            }
-            .id1::<AppToast>(id)
-            .title(record.display_title())
-            .placement(Anchor::BottomRight)
-            .delivery(NotificationDelivery::InApp)
-            .on_click(move |_, window, cx| {
-                // The toast invokes this while its Notification entity is updating.
-                // Marking it read removes the toast, so wait until that update ends.
-                let view = view.clone();
-                window.defer(cx, move |window, cx| {
-                    let _ = view.update(cx, |app, cx| app.open_notification(id, window, cx));
+            let ready_update = !use_system && self.is_ready_update_notification(&record);
+            let note = Notification::new()
+                .with_type(match record.level {
+                    Level::Info => NotificationType::Info,
+                    Level::Success => NotificationType::Success,
+                    Level::Warning => NotificationType::Warning,
+                    Level::Error => NotificationType::Error,
+                })
+                .when(!ready_update, |note| note.message(preview))
+                .id1::<AppToast>(id)
+                .title(record.display_title())
+                .placement(Anchor::BottomRight)
+                .delivery(NotificationDelivery::InApp)
+                .on_click(move |_, window, cx| {
+                    // The toast invokes this while its Notification entity is updating.
+                    // Marking it read removes the toast, so wait until that update ends.
+                    let view = view.clone();
+                    window.defer(cx, move |window, cx| {
+                        let _ = view.update(cx, |app, cx| app.open_notification(id, window, cx));
+                    });
+                })
+                .on_close(move |_, cx| {
+                    let _ = close_view.update(cx, |app, _| {
+                        if app.notifications.visible.get(&id) == Some(&revision) {
+                            app.notifications.visible.remove(&id);
+                        }
+                    });
                 });
-            })
-            .on_close(move |_, cx| {
-                let _ = close_view.update(cx, |app, _| {
-                    if app.notifications.visible.get(&id) == Some(&revision) {
-                        app.notifications.visible.remove(&id);
-                    }
+            let note = if ready_update {
+                let app = cx.entity();
+                let content = cx.new(|cx| UpdateToastContent {
+                    app: app.downgrade(),
+                    id,
+                    _subscription: cx.observe(&app, |_, _, cx| cx.notify()),
                 });
-            });
-            let note = if has_target {
+                note.content(move |_, _, _| content.clone().into_any_element())
+                    .autohide(false)
+            } else if has_target {
                 note.action(move |_, _, _| {
                     let action_view = action_view.clone();
                     Button::new(("notification-action", id))

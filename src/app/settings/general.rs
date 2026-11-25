@@ -46,13 +46,20 @@ impl ConduitApp {
             |app| app.store.ui.system_notifications,
             |app, value| app.store.ui.system_notifications = value,
         );
-        let system_notifications_description = if self.store.ui.system_notifications
+        let system_notifications = SettingItem::new(
+            conduit::i18n::text_static("settings.general.system_notifications"),
+            system_notifications,
+        )
+        .disabled(disabled);
+        let system_notifications = if self.store.ui.system_notifications
             && self.notifications.system_preference == Some(true)
             && !self.notifications.system_available
         {
-            conduit::i18n::text_static("settings.general.system_notifications_unavailable")
+            system_notifications.description(settings_description(conduit::i18n::text_static(
+                "settings.general.system_notifications_unavailable",
+            )))
         } else {
-            conduit::i18n::text_static("settings.general.system_notifications_description")
+            system_notifications
         };
         let compact_middle_packages = switch_field(
             view.clone(),
@@ -109,62 +116,36 @@ impl ConduitApp {
                     conduit::i18n::text_static("settings.general.full_width_content"),
                     full_width,
                 )
-                .description(settings_description(conduit::i18n::text_static(
-                    "settings.general.fill_the_available_area_with_chat_content",
-                )))
                 .disabled(disabled),
-                SettingItem::new(
-                    conduit::i18n::text_static("settings.general.system_notifications"),
-                    system_notifications,
-                )
-                .description(settings_description(system_notifications_description))
-                .disabled(disabled),
+                system_notifications,
                 SettingItem::new(
                     conduit::i18n::text_static("settings.general.files_open_beside"),
                     files_beside,
                 )
-                .description(settings_description(conduit::i18n::text_static(
-                    "settings.general.files_open_beside_description",
-                )))
                 .disabled(disabled),
                 SettingItem::new(
                     conduit::i18n::text_static("settings.general.compact_middle_packages"),
                     compact_middle_packages,
                 )
-                .description(settings_description(conduit::i18n::text_static(
-                    "settings.general.compact_middle_packages_description",
-                )))
                 .disabled(disabled),
                 SettingItem::new(
                     conduit::i18n::text_static("settings.general.group_tabs"),
                     group_tabs,
                 )
-                .description(settings_description(conduit::i18n::text_static(
-                    "settings.general.group_tabs_description",
-                )))
                 .disabled(disabled),
                 SettingItem::new(
                     conduit::i18n::text_static("settings.general.sidebar_session_count"),
                     sessions_limit,
                 )
-                .description(settings_description(conduit::i18n::text_static(
-                    "settings.general.default_number_of_ordinary_sessions_per_workspace",
-                )))
                 .disabled(disabled),
                 SettingItem::new(
                     conduit::i18n::text_static("settings.general.tab_limit"),
                     max_tabs_limit,
                 )
-                .description(settings_description(conduit::i18n::text_static(
-                    "settings.general.automatically_close_the_oldest_tab_when_the",
-                )))
                 .disabled(disabled),
             ]),
             settings_section(conduit::i18n::text("language.section")).items(vec![
                 SettingItem::new(conduit::i18n::text("language.title"), language_field)
-                    .description(settings_description(conduit::i18n::text(
-                        "language.description",
-                    )))
                     .disabled(disabled),
             ]),
             #[cfg(feature = "remote")]
@@ -198,6 +179,17 @@ impl ConduitApp {
             |app| app.store.updates.auto_install,
             |app, value| app.store.updates.auto_install = value,
         );
+        let update_view = view.clone();
+        let update_details = SettingField::render(move |_, _, _| {
+            let view = update_view.clone();
+            Button::new("settings-view-update")
+                .label(conduit::i18n::text_static("update.view_update"))
+                .small()
+                .secondary()
+                .on_click(move |_, window, cx| {
+                    view.update(cx, |app, cx| app.open_about_dialog(window, cx));
+                })
+        });
         let performance_view = view.clone();
         let performance_read = performance_view.clone();
         let performance = SettingField::switch(
@@ -243,39 +235,33 @@ impl ConduitApp {
                 "settings.general.application_updates",
             ))
             .items(vec![
+                SettingItem::new(conduit::i18n::text_static("update.status"), update_details)
+                    .description(settings_description(format!(
+                        "{}\n{}",
+                        self.update_status(),
+                        self.last_update_check_text(),
+                    ))),
                 SettingItem::new(
                     conduit::i18n::text_static("settings.general.automatically_check_for_updates"),
                     auto_check,
                 )
-                .description(settings_description(conduit::i18n::text_static(
-                    "settings.general.check_in_the_background_after_startup_and",
-                )))
-                .disabled(disabled),
+                .disabled(disabled || conduit::update::PUBLIC_KEY.is_empty()),
                 SettingItem::new(
                     conduit::i18n::text_static("settings.general.download_updates_in_background"),
                     auto_download,
                 )
-                .description(settings_description(conduit::i18n::text_static(
-                    "settings.general.download_and_verify_new_versions_when_found",
-                )))
-                .disabled(disabled),
+                .disabled(disabled || conduit::update::PUBLIC_KEY.is_empty()),
                 SettingItem::new(
                     conduit::i18n::text_static("settings.general.install_and_restart_when_idle"),
                     auto_install,
                 )
-                .description(settings_description(conduit::i18n::text_static(
-                    "settings.general.save_drafts_after_tasks_finish_install_the",
-                )))
-                .disabled(disabled),
+                .disabled(disabled || conduit::update::PUBLIC_KEY.is_empty()),
             ]),
             settings_section(conduit::i18n::text_static("settings.general.diagnostics")).item(
                 SettingItem::new(
                     conduit::i18n::text_static("settings.general.performance_monitoring"),
                     performance,
                 )
-                .description(settings_description(conduit::i18n::text_static(
-                    "settings.general.show_performance_monitor_in_the_bottom_toolbar",
-                )))
                 .disabled(disabled),
             ),
         ])
@@ -345,9 +331,10 @@ impl ConduitApp {
                     }
                 })
         });
-        let mut generation = vec![self.generation_disclosure(false, view.clone())];
-        if self.settings_ui.git_expanded {
-            generation.extend([
+        let generation = self.generation_disclosure(
+            false,
+            view.clone(),
+            vec![
                 SettingItem::new(
                     conduit::i18n::text_static("settings.general.generation_engine"),
                     provider,
@@ -363,8 +350,8 @@ impl ConduitApp {
                     model,
                 )
                 .disabled(disabled),
-            ]);
-        }
+            ],
+        );
         let tag_settings_view = view.clone();
         let tag_increment = self.store.git.tag_increment;
         let tag_strategy = SettingField::render(move |_, _, _| {
@@ -420,57 +407,54 @@ impl ConduitApp {
         }
         .to_owned();
         let prompt_view = view.clone();
-        let edit = SettingItem::render(move |_, _, _| {
+        let prompt_fields = [
+            SettingItem::new(
+                conduit::i18n::text_static("settings.general.prompt"),
+                prompt,
+            )
+            .layout(Axis::Vertical)
+            .disabled(disabled),
+            SettingItem::new(
+                conduit::i18n::text_static("settings.appearance.restore_defaults"),
+                reset,
+            )
+            .disabled(disabled),
+        ];
+        let edit = SettingItem::render(move |options, window, cx| {
             let view = prompt_view.clone();
-            v_flex()
-                .w_full()
-                .gap_2()
-                .when(!expanded, |row| {
-                    row.child(
+            settings_accordion(
+                "git-prompt-expand",
+                v_flex()
+                    .min_w_0()
+                    .gap_1()
+                    .child(
                         div()
-                            .text_size(ui_text_size(12.))
-                            .text_color(rgb(palette().muted))
-                            .child(preview.clone()),
+                            .debug_selector(|| "git-prompt-expand".into())
+                            .child(conduit::i18n::text_static("settings.general.edit_prompt")),
                     )
-                })
-                .child(
-                    Button::new("git-prompt-expand")
-                        .debug_selector(|| "git-prompt-expand".into())
-                        .small()
-                        .ghost()
-                        .label(if expanded {
-                            conduit::i18n::text_static("settings.general.hide_prompt")
-                        } else {
-                            conduit::i18n::text_static("settings.general.edit_prompt")
-                        })
-                        .on_click(move |_, _, cx| {
-                            view.update(cx, |app, cx| {
-                                app.settings_ui.prompt_expanded = !expanded;
-                                cx.notify();
-                            });
-                        }),
-                )
+                    .when(!expanded, |title| {
+                        title.child(
+                            div()
+                                .truncate()
+                                .text_size(ui_text_size(12.))
+                                .text_color(rgb(palette().muted))
+                                .child(preview.clone()),
+                        )
+                    }),
+                expanded,
+                v_flex().child(accordion_fields(&prompt_fields, options, window, cx)),
+                move |open, _, cx| {
+                    view.update(cx, |app, cx| {
+                        app.settings_ui.prompt_expanded = open;
+                        cx.notify();
+                    })
+                },
+            )
         })
         .keywords([
             conduit::i18n::text_static("settings.general.prompt"),
             "prompt",
         ]);
-        let mut prompts = vec![edit];
-        if expanded {
-            prompts.extend([
-                SettingItem::new(
-                    conduit::i18n::text_static("settings.general.prompt"),
-                    prompt,
-                )
-                .layout(Axis::Vertical)
-                .disabled(disabled),
-                SettingItem::new(
-                    conduit::i18n::text_static("settings.appearance.restore_defaults"),
-                    reset,
-                )
-                .disabled(disabled),
-            ]);
-        }
         let auto_fetch_enabled = self.store.git.auto_fetch_incoming;
         let auto_fetch = SettingField::render(move |_, _, _| {
             let view = view.clone();
@@ -510,32 +494,27 @@ impl ConduitApp {
                     conduit::i18n::text_static("settings.general.version_increment_strategy"),
                     tag_strategy,
                 )
-                .description(settings_description(conduit::i18n::text_static(
-                    "settings.general.generate_a_version_from_known_stable_tags",
-                )))
                 .disabled(disabled),
                 SettingItem::new(
                     conduit::i18n::text_static("settings.general.increment"),
                     tag_step,
                 )
-                .description(settings_description(conduit::i18n::text_static(
-                    "settings.general.increase_the_selected_segment_by_this_amount",
-                )))
                 .disabled(disabled),
             ]),
             settings_section(conduit::i18n::text_static(
                 "settings.general.generation_model",
             ))
-            .items(generation),
-            settings_section(conduit::i18n::text_static(
-                "settings.general.commit_message_prompt",
-            ))
-            .items(prompts)
-            .footer(|_, _| {
-                conduit::i18n::text_static(
-                    "settings.general.changes_save_automatically_and_apply_to_the",
-                )
-            }),
+            .item(generation),
+            SettingGroup::new()
+                .title(conduit::i18n::text_static(
+                    "settings.general.commit_message_prompt",
+                ))
+                .item(edit)
+                .footer(|_, _| {
+                    conduit::i18n::text_static(
+                        "settings.general.changes_save_automatically_and_apply_to_the",
+                    )
+                }),
             settings_section(conduit::i18n::text_static(
                 "settings.general.branch_updates",
             ))
@@ -544,9 +523,6 @@ impl ConduitApp {
                     conduit::i18n::text_static("settings.general.auto_fetch_incoming"),
                     auto_fetch,
                 )
-                .description(settings_description(conduit::i18n::text_static(
-                    "settings.general.auto_fetch_incoming_description",
-                )))
                 .disabled(disabled),
             ),
         ])

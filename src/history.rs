@@ -11,9 +11,17 @@
 //! same conversation the terminal CLI sees.
 
 pub(crate) mod children;
+mod diagnostics;
 mod index;
 mod opencode;
+mod questions;
 mod scan;
+#[cfg(test)]
+mod task_list_tests;
+mod usage;
+#[cfg(test)]
+mod usage_tests;
+pub(crate) use diagnostics::record_scan_summary;
 pub(crate) use scan::Scanner;
 
 use crate::domain::{ChatItem, ItemKind, Provider};
@@ -22,8 +30,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// A CLI-side session discovered on disk, ready to become a `SessionRecord`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ImportedSession {
+    #[serde(default)]
+    pub usage: crate::domain::Usage,
+    #[serde(default)]
+    pub task_list: Option<crate::task_list::Snapshot>,
     pub is_subagent: bool,
     pub provider: Provider,
     pub native_id: String,
@@ -149,6 +161,14 @@ fn merge_session(
             return 0;
         }
         existing.created_at = session.created_at;
+        // Repeated imports refresh native snapshots, but never replace usage
+        // measured by a live Conduit turn with a possibly older disk scan.
+        if session.usage.history.is_some()
+            && (existing.usage == crate::domain::Usage::default()
+                || existing.usage.history.is_some())
+        {
+            existing.usage = session.usage;
+        }
         if existing.title.is_empty() && !session.title.is_empty() {
             existing.title = session.title;
         }
@@ -158,6 +178,19 @@ fn merge_session(
         merge_imported_subagents(&mut existing.subagents, session.subagents);
         let mut messages = session.messages;
         preserve_reply_timings(&existing.messages, &mut messages);
+        questions::restore_imported(&mut existing.messages, &messages);
+        // Import is a fallback for local state; a delayed disk scan cannot roll
+        // back a newer live task update. Native-only sessions follow the scan.
+        if session.task_list.is_some()
+            && (existing.task_list.is_none()
+                || existing
+                    .messages
+                    .iter()
+                    .all(|item| item.key.starts_with("import-"))
+                || native_tasks_advanced(&existing.messages, &messages))
+        {
+            existing.task_list = session.task_list;
+        }
         existing.messages = merge_transcript(&existing.messages, messages);
         return 0;
     }
@@ -167,6 +200,7 @@ fn merge_session(
     let id = *next_id;
     *next_id += 1;
     workspace.sessions.push(crate::domain::SessionRecord {
+        task_list: session.task_list,
         subagents: session.subagents,
         is_subagent: false,
         branching: Default::default(),
@@ -186,9 +220,34 @@ fn merge_session(
         reasoning_effort: Default::default(),
         opencode: Default::default(),
         permission: crate::domain::PermissionLevel::default(),
-        usage: crate::domain::Usage::default(),
+        usage: session.usage,
     });
     1
+}
+
+/// A native session can continue outside Conduit after a GUI turn. Accept its
+/// snapshot only when it includes our last successful task call and a later one.
+fn native_tasks_advanced(local: &[ChatItem], incoming: &[ChatItem]) -> bool {
+    let successful = |item: &ChatItem| {
+        item.kind == ItemKind::Tool
+            && crate::task_list::claude::is_task_tool(&item.text)
+            && item.status == crate::message_status::ToolStatus::Completed
+    };
+    let Some(last) = local.iter().rev().find(|item| successful(item)) else {
+        return false;
+    };
+    let Some(index) = incoming.iter().position(|item| {
+        successful(item)
+            && item.text == last.text
+            && item
+                .key
+                .splitn(4, '-')
+                .nth(3)
+                .is_some_and(|id| last.key.ends_with(&format!("-{id}")))
+    }) else {
+        return false;
+    };
+    incoming[index + 1..].iter().any(successful)
 }
 
 fn merge_imported_subagents(
@@ -388,6 +447,12 @@ fn parse_claude_any(text: &str) -> Option<(Vec<String>, ImportedSession)> {
 }
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 struct ClaudeState {
+    #[serde(default)]
+    usage: usage::Claude,
+    #[serde(default)]
+    task_list: Option<crate::task_list::Snapshot>,
+    #[serde(default)]
+    task_tracker: crate::task_list::claude::Tracker,
     native_id: Option<String>,
     created_at: u64,
     model: Option<String>,
@@ -406,6 +471,9 @@ fn parse_claude_lines(
 
 fn extend_claude(lines: impl Iterator<Item = String>, state: ClaudeState) -> ClaudeState {
     let ClaudeState {
+        mut usage,
+        mut task_list,
+        mut task_tracker,
         mut native_id,
         mut created_at,
         mut model,
@@ -414,6 +482,14 @@ fn extend_claude(lines: impl Iterator<Item = String>, state: ClaudeState) -> Cla
         mut cwds,
         mut next_line,
     } = state;
+    let mut task_tools: HashMap<String, usize> = messages
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| {
+            item.kind == ItemKind::Tool && crate::task_list::claude::is_task_tool(&item.text)
+        })
+        .filter_map(|(index, item)| Some((item.key.splitn(4, '-').nth(3)?.to_owned(), index)))
+        .collect();
     let start_line = next_line;
     for (index, line) in lines
         .enumerate()
@@ -446,6 +522,16 @@ fn extend_claude(lines: impl Iterator<Item = String>, state: ClaudeState) -> Cla
             .and_then(Value::as_str)
             .and_then(rfc3339_to_unix_opt)
             .unwrap_or(created_at);
+        for change in task_tracker.accept(&value) {
+            let turn = messages
+                .iter()
+                .rev()
+                .find(|item| item.kind == ItemKind::User)
+                .map(|item| item.key.clone());
+            task_list
+                .get_or_insert_with(Default::default)
+                .apply(change, turn);
+        }
         match value.get("type").and_then(Value::as_str) {
             Some("system")
                 if value.get("subtype").and_then(Value::as_str) == Some("turn_duration") =>
@@ -455,6 +541,29 @@ fn extend_claude(lines: impl Iterator<Item = String>, state: ClaudeState) -> Cla
                 }
             }
             Some("user") => {
+                if let Some(blocks) = value.pointer("/message/content").and_then(Value::as_array) {
+                    for block in blocks.iter().filter(|b| b["type"] == "tool_result") {
+                        let Some(key) = block["tool_use_id"].as_str() else {
+                            continue;
+                        };
+                        if let Some(item) = task_tools
+                            .get(key)
+                            .and_then(|index| messages.get_mut(*index))
+                        {
+                            item.detail = block["content"]
+                                .as_str()
+                                .map(str::to_owned)
+                                .unwrap_or_else(|| block["content"].to_string());
+                            item.status = if block["is_error"] == true
+                                || (blocks.len() == 1 && value["toolUseResult"]["success"] == false)
+                            {
+                                crate::message_status::ToolStatus::Failed
+                            } else {
+                                crate::message_status::ToolStatus::Completed
+                            };
+                        }
+                    }
+                }
                 let is_user_prompt = value
                     .get("promptSource")
                     .and_then(Value::as_str)
@@ -486,6 +595,7 @@ fn extend_claude(lines: impl Iterator<Item = String>, state: ClaudeState) -> Cla
                 }
             }
             Some("assistant") => {
+                usage.accept(&value);
                 let message = value.get("message");
                 if model.is_none()
                     && let Some(m) = message.and_then(|m| m.get("model")).and_then(Value::as_str)
@@ -526,6 +636,11 @@ fn extend_claude(lines: impl Iterator<Item = String>, state: ClaudeState) -> Cla
                         }
                         Some("tool_use") => {
                             let name = part.get("name").and_then(Value::as_str).unwrap_or("tool");
+                            if crate::task_list::claude::is_task_tool(name)
+                                && let Some(id) = part["id"].as_str()
+                            {
+                                task_tools.insert(id.into(), messages.len());
+                            }
                             messages.push(ChatItem::from(crate::domain::ChatItemData {
                                 reasoning_summary: None,
                                 elapsed_ms: None,
@@ -541,7 +656,11 @@ fn extend_claude(lines: impl Iterator<Item = String>, state: ClaudeState) -> Cla
                                 )
                                 .unwrap_or_default(),
                                 detail: String::new(),
-                                status: "已完成".into(),
+                                status: if crate::task_list::claude::is_task_tool(name) {
+                                    crate::message_status::ToolStatus::Running
+                                } else {
+                                    crate::message_status::ToolStatus::Completed
+                                },
                                 approval: None,
                                 model: None,
                             }));
@@ -555,6 +674,9 @@ fn extend_claude(lines: impl Iterator<Item = String>, state: ClaudeState) -> Cla
     }
 
     ClaudeState {
+        usage,
+        task_list,
+        task_tracker,
         native_id,
         created_at,
         model,
@@ -568,6 +690,8 @@ fn extend_claude(lines: impl Iterator<Item = String>, state: ClaudeState) -> Cla
 impl ClaudeState {
     fn finish(self) -> Option<(Vec<String>, ImportedSession)> {
         let Self {
+            usage,
+            task_list,
             native_id,
             created_at,
             model,
@@ -589,6 +713,8 @@ impl ClaudeState {
         Some((
             cwds,
             ImportedSession {
+                usage: usage.finish(),
+                task_list,
                 is_subagent: false,
                 provider: Provider::Claude,
                 native_id,
@@ -650,6 +776,8 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
 }
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 struct CodexState {
+    #[serde(default)]
+    usage: crate::domain::Usage,
     native_id: Option<String>,
     #[serde(default)]
     is_subagent: bool,
@@ -669,6 +797,8 @@ struct CodexState {
     current_model: Option<String>,
     event_rows: Vec<(usize, usize, ChatItem)>,
     response_rows: Vec<(usize, usize, ChatItem)>,
+    #[serde(default)]
+    questions: questions::State,
     event_reasoning: Vec<CodexReasoningItem>,
     response_reasoning: Vec<CodexReasoningItem>,
     event_users: usize,
@@ -775,6 +905,7 @@ fn extend_codex(
         return state;
     }
     let CodexState {
+        mut usage,
         native_id,
         is_subagent,
         parent_thread_id,
@@ -787,6 +918,7 @@ fn extend_codex(
         mut current_model,
         mut event_rows,
         mut response_rows,
+        mut questions,
         mut subagents,
         mut event_reasoning,
         mut response_reasoning,
@@ -814,6 +946,9 @@ fn extend_codex(
             .and_then(rfc3339_to_unix_opt)
             .unwrap_or(created_at);
         timestamps.push(event_created_at);
+        if questions.observe(index, event_created_at, value) {
+            continue;
+        }
         if value.get("type").and_then(Value::as_str) == Some("event_msg") {
             let turn_id = payload.get("turn_id").and_then(Value::as_str).unwrap_or("");
             let timestamp = value
@@ -849,6 +984,9 @@ fn extend_codex(
             }
         }
         match value.get("type").and_then(Value::as_str) {
+            Some("event_msg") if payload["type"] == "token_count" => {
+                usage::codex(&mut usage, &payload["info"]);
+            }
             Some("turn_context") => {
                 if let Some(entry) = payload.get("model").and_then(Value::as_str) {
                     current_model = Some(entry.to_owned());
@@ -1275,6 +1413,7 @@ fn extend_codex(
     }
 
     CodexState {
+        usage,
         native_id,
         is_subagent,
         parent_thread_id,
@@ -1287,6 +1426,7 @@ fn extend_codex(
         current_model,
         event_rows,
         response_rows,
+        questions,
         subagents,
         event_reasoning,
         response_reasoning,
@@ -1305,6 +1445,7 @@ fn extend_codex(
 impl CodexState {
     fn finish(self) -> Option<(String, ImportedSession)> {
         let Self {
+            usage,
             native_id,
             is_subagent,
             parent_thread_id,
@@ -1316,6 +1457,7 @@ impl CodexState {
             mut model,
             event_rows,
             response_rows,
+            questions,
             subagents,
             event_reasoning,
             response_reasoning,
@@ -1345,6 +1487,8 @@ impl CodexState {
             return Some((
                 cwd,
                 ImportedSession {
+                    usage: Default::default(),
+                    task_list: None,
                     is_subagent: true,
                     provider: Provider::Codex,
                     native_id,
@@ -1357,6 +1501,7 @@ impl CodexState {
             ));
         }
         let mut rows = event_rows;
+        rows.extend(questions.rows());
         rows.extend(
             response_rows
                 .into_iter()
@@ -1440,6 +1585,8 @@ impl CodexState {
         Some((
             cwd,
             ImportedSession {
+                usage,
+                task_list: None,
                 is_subagent: false,
                 provider: Provider::Codex,
                 native_id,
@@ -1816,6 +1963,8 @@ mod tests {
             sessions: vec![parent],
         };
         let imported = ImportedSession {
+            usage: Default::default(),
+            task_list: None,
             is_subagent: true,
             provider: Provider::Codex,
             native_id: "child-thread".into(),
@@ -2221,6 +2370,7 @@ mod tests {
         let result = scan::Scanner::open(
             Some(&dir),
             vec![dir.join("nope")],
+            Vec::new(),
             &dir.join("index.sqlite3"),
             None,
             &cancel,
@@ -2263,6 +2413,7 @@ mod tests {
         // Simulate an existing GUI session that shares a native id with one
         // imported session plus one completely new import.
         workspace.sessions.push(crate::domain::SessionRecord {
+            task_list: None,
             subagents: Default::default(),
             is_subagent: false,
             branching: Default::default(),
@@ -2300,6 +2451,8 @@ mod tests {
         // through merge_imported instead.
         let imported = vec![
             ImportedSession {
+                usage: Default::default(),
+                task_list: None,
                 is_subagent: false,
                 provider: Provider::Claude,
                 native_id: "known".into(),
@@ -2322,6 +2475,8 @@ mod tests {
                 })],
             },
             ImportedSession {
+                usage: Default::default(),
+                task_list: None,
                 is_subagent: false,
                 provider: Provider::Codex,
                 subagents: vec![crate::subagents::Agent {

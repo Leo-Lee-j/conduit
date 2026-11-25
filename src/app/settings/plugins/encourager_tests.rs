@@ -131,12 +131,25 @@ fn desktop_pet_settings_fit_and_switches_preserve_configuration(cx: &mut TestApp
         let card = cx.debug_bounds("programmer-encourager-settings").unwrap();
         assert_eq!(card.size.width, px(width - 32.));
         assert!(card.right() <= px(width));
-        for id in ["encourager-pet-row", "encourager-context-row"] {
+        let switches = cx.update(|window, _| gpui_kit::base::test_support::snapshots(window));
+        for (id, label) in [
+            ("encourager-pet-row", "显示悬浮宠物"),
+            ("encourager-context-row", "参考当前会话最近一轮"),
+        ] {
+            let row = cx.debug_bounds(id).expect(id);
+            let toggle = switches
+                .iter()
+                .find(|element| {
+                    element.role() == Some(Role::Switch) && element.label() == Some(label)
+                })
+                .expect(label)
+                .bounds();
             assert_eq!(
-                cx.debug_bounds(id).expect(id).size.height,
-                px(52.),
-                "{id} must keep its switch beside its label"
+                toggle.center().y,
+                row.center().y,
+                "{id} keeps its switch beside its label"
             );
+            assert!(toggle.right() < row.right());
         }
         let mut left = None;
         for id in [

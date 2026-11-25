@@ -507,7 +507,13 @@ impl ConduitApp {
                     ));
                 }
                 if let Err(error) = self.start_turn(index, Some(id), provider, text, true, cx) {
-                    self.message = Some(error);
+                    self.notify_feedback(
+                        NoticeSource::Session,
+                        NoticeLevel::Error,
+                        error,
+                        self.session_notice_target(id),
+                        cx,
+                    );
                     cx.notify();
                     return Err(Fault::conflict(
                         "The desktop could not start the turn. Check the engine and session status on the desktop.",
@@ -859,10 +865,7 @@ impl ConduitApp {
                             .into_any_element()
                     }
                 }),
-            )
-            .description(settings::settings_description(
-                self.remote_settings_text("scope"),
-            )),
+            ),
         ])
     }
 

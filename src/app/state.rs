@@ -87,29 +87,7 @@ impl From<&SessionRecord> for SessionSummary {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(super) enum PlanStatus {
-    #[default]
-    Pending,
-    InProgress,
-    Completed,
-}
-
-impl PlanStatus {
-    pub(super) fn from_wire(status: &str) -> Self {
-        match status {
-            "completed" => Self::Completed,
-            "in_progress" | "inProgress" => Self::InProgress,
-            _ => Self::Pending,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct PlanStep {
-    pub(super) text: String,
-    pub(super) status: PlanStatus,
-}
+pub(super) use crate::task_list::{Status as PlanStatus, Task as PlanStep};
 
 /// File churn of the latest turn, shown in the stats tags above the composer.
 /// Paths stay sorted so repeated edits merge into one row.
@@ -126,9 +104,15 @@ pub(super) struct FileStat {
     pub(super) removed: usize,
 }
 
-/// Most recent plan emitted inside the latest user turn. Live Codex turns keep
-/// it in `ConduitApp::plans`; imported history falls back to the tool input.
+/// Persisted tasks, or the latest turn plan from legacy tool inputs.
 pub(super) fn plan_from_messages(session: &SessionRecord) -> Vec<PlanStep> {
+    if let Some(steps) = session
+        .task_list
+        .as_ref()
+        .and_then(|list| list.visible(session))
+    {
+        return steps.to_vec();
+    }
     let start = session
         .messages
         .iter()
@@ -137,42 +121,25 @@ pub(super) fn plan_from_messages(session: &SessionRecord) -> Vec<PlanStep> {
     session.messages[start..]
         .iter()
         .rev()
-        .filter(|item| item.kind == ItemKind::Tool)
-        .find_map(|item| plan_steps_from_input(&item.input))
+        .find_map(plan_from_tool)
         .unwrap_or_default()
 }
 
-pub(super) fn plan_steps_from_input(input: &str) -> Option<Vec<PlanStep>> {
-    #[derive(serde::Deserialize)]
-    struct Input {
-        plan: Option<Vec<serde_json::Value>>,
-        todos: Option<Vec<serde_json::Value>>,
+pub(super) fn plan_from_tool(item: &ChatItem) -> Option<Vec<PlanStep>> {
+    if item.kind != ItemKind::Tool
+        || !matches!(
+            item.text.as_str(),
+            "TodoWrite" | "todo_write" | "todowrite" | "update_plan" | "functions.update_plan"
+        )
+        || (!tool_succeeded(item) && item.status != crate::message_status::ToolStatus::Unspecified)
+    {
+        return None;
     }
-    let value = serde_json::from_str::<Input>(input).ok()?;
-    let entries = value.plan.or(value.todos)?;
-    let steps = entries
-        .iter()
-        .filter_map(|entry| {
-            let text = entry
-                .get("step")
-                .or_else(|| entry.get("content"))
-                .or_else(|| entry.get("activeForm"))
-                .and_then(serde_json::Value::as_str)?;
-            if text.trim().is_empty() {
-                return None;
-            }
-            Some(PlanStep {
-                text: text.to_string(),
-                status: PlanStatus::from_wire(
-                    entry
-                        .get("status")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("pending"),
-                ),
-            })
-        })
-        .collect::<Vec<_>>();
-    (!steps.is_empty()).then_some(steps)
+    plan_steps_from_input(&item.input)
+}
+
+pub(super) fn plan_steps_from_input(input: &str) -> Option<Vec<PlanStep>> {
+    crate::task_list::plan(&serde_json::from_str::<serde_json::Value>(input).ok()?)
 }
 
 /// Editor diffs carry absolute paths; the stats panel shows paths relative to

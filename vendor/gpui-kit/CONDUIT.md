@@ -1,4 +1,4 @@
-# Conduit renderer patch
+# Conduit GPUI patches
 
 This directory contains `gpui-base` and `gpui-component` from upstream
 `longbridge/gpui-kit`, revision `11345ec002d9f182a266b5d5dd3a217090700a87`.
@@ -35,8 +35,31 @@ checkout without changing Cargo's cache or running a preparation script.
   decoration at the link label's first grapheme. The icon shares wrapping and
   table measurement with native text without introducing document bytes or an
   atomic label. Layout caches include icon identity; click and drag remain distinct.
+- `crates/base/src/accordion.rs`: makes enabled accordion triggers keyboard
+  tab stops and exposes the disabled state to accessibility tools.
+- `crates/component/src/accordion.rs`: sends toggle callbacks from the trigger
+  so that clicking a control inside the panel does not toggle the accordion.
+- `crates/component/src/setting/item.rs`: exposes the existing field renderer
+  for use without group borders inside an accordion.
+- `crates/component/src/setting/group.rs`: optional style for the shared content
+  surface, leaving the group heading and footer outside it.
+- `crates/component/src/setting/settings.rs`: omits the resizable sidebar and
+  its divider when the host sets the sidebar width to zero.
+- `crates/component/src/icon.rs`: applies the runtime icon scale to SVG paint
+  transforms while preserving each icon's layout and hitbox.
+- `crates/component/src/theme/mod.rs`: stores the runtime icon scale outside
+  serialized theme files.
+- `crates/component/src/color_picker.rs`: debug selectors for native pointer
+  regression tests of the picker and its palette swatches.
+- `crates/component/src/tab/tab.rs`: optional folder-tab border color using
+  the same rounded/concave contour as the selected tab's fill. A thin open
+  stroke fades vertically to transparent at the content edge; inactive tabs
+  are dimmer. Other variants and tabs without a border color are unchanged.
 - `Cargo.toml`: trims the upstream workspace to these two crates and pins
   references to the remaining Kit crates to the original Git revision.
+- `crates/component/src/highlighter/mod.rs` and
+  `crates/component/src/highlighter/syntect_backend.rs`: expose the shared
+  Syntect syntax set so application highlighting does not retain a second copy.
 
 The body-column API deliberately accepts text refinements only. It does not
 offer per-cell padding, backgrounds, or a general row/column layout callback.
@@ -47,11 +70,11 @@ keep their default appearance. The icon size is 0.9em with a 0.25em gap.
 
 `upstream-files.json` records SHA-256 hashes of every copied crate file and
 the exact upstream revision. `python scripts/check-gpui-vendor.py` checks that
-only the declared renderer files differ and that the application, vendor
+only the declared files differ and that the application, vendor
 workspace, and lockfile still select the intended dependency graph.
 
 When upgrading Kit, replace both crate snapshots from one revision, reapply
-the small renderer changes, regenerate the upstream hashes from the pristine
+the local changes, regenerate the upstream hashes from the pristine
 revision, and run the Markdown selection/search/streaming tests plus the core
 checks. Do not edit the Cargo checkout or change only one crate's revision.
 Once upstream provides equivalent APIs, remove these patches and this directory

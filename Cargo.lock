@@ -1088,7 +1088,7 @@ dependencies = [
 
 [[package]]
 name = "conduit"
-version = "0.3.15"
+version = "0.3.21"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -1105,6 +1105,7 @@ dependencies = [
  "image",
  "mermaid-rs-renderer",
  "percent-encoding",
+ "pet-core",
  "raw-window-handle",
  "regex",
  "roxmltree 0.20.0",
@@ -3341,8 +3342,6 @@ dependencies = [
 [[package]]
 name = "gpui-pre-windows"
 version = "0.3.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "513d4f0fc7d596d3bdef2a73a524ffb83dabc95bf484f2855a698e7f431290a9"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -5386,6 +5385,10 @@ name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
+
+[[package]]
+name = "pet-core"
+version = "0.1.0"
 
 [[package]]
 name = "phf"

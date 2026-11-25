@@ -1,5 +1,6 @@
 //! Persistent defaults apply only when constructing a new conversation.
 use super::*;
+mod model_picker;
 
 /// Resolve a legacy CCS alias only for display, and only to an existing
 /// registry entry for the same engine. Never migrate the persisted selection.
@@ -32,6 +33,21 @@ impl ConduitApp {
         selection
     }
 
+    /// Re-selecting the displayed service preserves the saved model and legacy route.
+    pub(super) fn set_default_channel(
+        &mut self,
+        engine: Provider,
+        channel: ModelChannel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let current = self.default_selection(engine);
+        if default_channel_for_display(engine, &current.channel, &self.store.providers) == channel {
+            return false;
+        }
+        self.set_service_default(engine, channel, None, window, cx)
+    }
+
     /// Compatibility entry point; defaults share the management browsing engine.
     pub(super) fn settings_defaults_page(&self, disabled: bool, view: Entity<Self>) -> SettingPage {
         settings_page(
@@ -48,6 +64,7 @@ impl ConduitApp {
         view: Entity<Self>,
     ) -> SettingGroup {
         let engine = self.connection_settings.engine;
+        let disabled = disabled || self.connection_settings.saving;
         let selection = self.default_selection(engine);
         let mut channels = vec![(
             ModelChannel::Cli,
@@ -68,27 +85,27 @@ impl ConduitApp {
         let service_unavailable = selected_channel.is_none();
         let label = selected_channel
             .map(|(_, label)| label.clone())
-            .unwrap_or_else(|| {
-                let id = match &selection.channel {
-                    ModelChannel::Provider(id) | ModelChannel::Ccs(id) => id.as_str(),
-                    ModelChannel::Cli => "",
-                };
-                format!(
-                    "{} · {}",
-                    conduit::i18n::text_static(
-                        "settings.defaults.service_unavailable_select_another_service",
-                    ),
-                    id,
-                )
-            });
+            .unwrap_or_else(|| conduit::i18n::text("settings.navigation.service_unavailable"));
+        let service_warning = service_unavailable.then(|| {
+            let id = match &selection.channel {
+                ModelChannel::Provider(id) | ModelChannel::Ccs(id) => id.as_str(),
+                ModelChannel::Cli => "",
+            };
+            conduit::i18n::format(
+                "settings.sessions.service_unavailable_description",
+                &[("id", id.into())],
+            )
+        });
         let route_view = view.clone();
         let route = SettingField::render(move |_, _, _| {
             let channels = channels.clone();
+            let display_channel = display_channel.clone();
             let view = route_view.clone();
             Button::new(("default-channel", engine as usize))
                 .debug_selector(move || format!("default-channel-{}", engine as usize))
                 .outline()
                 .small()
+                .max_w(rems(14.))
                 .label(label.clone())
                 .tooltip(label.clone())
                 .icon(FullIconName::ChevronDown)
@@ -97,28 +114,33 @@ impl ConduitApp {
                     for (channel, label) in &channels {
                         let channel = channel.clone();
                         let view = view.clone();
-                        menu = menu.item(PopupMenuItem::new(label.clone()).on_click(
-                            move |_, _, cx| {
-                                view.update(cx, |app, cx| {
-                                    if !app.writable || app.closing {
-                                        return;
-                                    }
-                                    app.store.session_defaults.insert(
-                                        engine,
-                                        crate::store::SessionDefaults {
-                                            channel: channel.clone(),
-                                            model: None,
-                                        },
-                                    );
-                                    app.persist();
-                                    cx.notify();
-                                });
-                            },
-                        ));
+                        menu = menu.item(
+                            PopupMenuItem::new(label.clone())
+                                .checked(channel == display_channel)
+                                .on_click(move |_, window, cx| {
+                                    view.update(cx, |app, cx| {
+                                        app.set_default_channel(
+                                            engine,
+                                            channel.clone(),
+                                            window,
+                                            cx,
+                                        );
+                                    });
+                                }),
+                        );
                     }
                     menu
                 })
         });
+        let route = SettingItem::new(
+            conduit::i18n::text_static("settings.sessions.default_service"),
+            route,
+        );
+        let route = if let Some(warning) = service_warning {
+            route.description(settings_description(warning))
+        } else {
+            route
+        };
         let mut models = vec![(
             None,
             conduit::i18n::text_static("settings.defaults.use_service_default_model").to_string(),
@@ -137,39 +159,40 @@ impl ConduitApp {
         let label = selected_model
             .map(|(_, label)| label.clone())
             .unwrap_or_else(|| selection.model.clone().unwrap_or_default());
+        let selected_model_id = selection.model.clone();
+        if model_unconfirmed {
+            models.push((selected_model_id.clone(), label.clone()));
+        }
         let model_view = view.clone();
-        let model = SettingField::render(move |_, _, _| {
-            let models = models.clone();
-            let view = model_view.clone();
-            Button::new(("default-model", engine as usize))
-                .debug_selector(move || format!("default-model-{}", engine as usize))
-                .outline()
-                .small()
-                .label(label.clone())
-                .tooltip(label.clone())
-                .icon(FullIconName::ChevronDown)
-                .disabled(disabled || service_unavailable)
-                .dropdown_menu(move |mut menu, _, _| {
-                    for (model, label) in &models {
-                        let model = model.clone();
-                        let view = view.clone();
-                        menu = menu.item(PopupMenuItem::new(label.clone()).on_click(
-                            move |_, _, cx| {
-                                view.update(cx, |app, cx| {
-                                    if !app.writable || app.closing {
-                                        return;
-                                    }
-                                    app.store.session_defaults.entry(engine).or_default().model =
-                                        model.clone();
-                                    app.persist();
-                                    cx.notify();
-                                });
-                            },
-                        ));
-                    }
-                    menu
+        let model = SettingField::render(move |_, _, _| model_picker::DefaultModelPicker {
+            app: model_view.clone(),
+            engine,
+            channel: selection.channel.clone(),
+            choices: models
+                .iter()
+                .map(|(id, label)| model_picker::ModelChoice {
+                    id: id.clone(),
+                    label: label.clone(),
                 })
+                .collect(),
+            selected: selected_model_id.clone(),
+            disabled: disabled || service_unavailable,
         });
+        let model = SettingItem::new(
+            conduit::i18n::text_static("settings.sessions.default_model"),
+            model,
+        );
+        let model = if service_unavailable || model_unconfirmed {
+            model.description(settings_description(conduit::i18n::text_static(
+                if service_unavailable {
+                    "settings.sessions.model_needs_service_description"
+                } else {
+                    "settings.sessions.model_pending_confirmation_description"
+                },
+            )))
+        } else {
+            model
+        };
         settings_section(format!(
             "{} · {}",
             conduit::i18n::text_static("settings.defaults.new_session_defaults"),
@@ -177,29 +200,14 @@ impl ConduitApp {
         ))
         .items(vec![
             SettingItem::new(
-                conduit::i18n::text_static("settings.sessions.default_service"),
-                route,
+                conduit::i18n::text_static("settings.models.service_engine"),
+                SettingField::render(move |_, _, _| {
+                    super::management::engine_tabs(engine, false, view.clone())
+                }),
             )
-            .description(settings_description(conduit::i18n::text_static(
-                if service_unavailable {
-                    "settings.sessions.service_unavailable_description"
-                } else {
-                    "settings.sessions.service_description"
-                },
-            )))
-            .disabled(disabled),
-            SettingItem::new(
-                conduit::i18n::text_static("settings.sessions.default_model"),
-                model,
-            )
-            .description(settings_description(conduit::i18n::text_static(
-                if model_unconfirmed {
-                    "settings.sessions.model_pending_confirmation_description"
-                } else {
-                    "settings.sessions.model_description"
-                },
-            )))
-            .disabled(disabled || service_unavailable),
+            .layout(Axis::Vertical),
+            route,
+            model,
         ])
         .footer(|_, _| conduit::i18n::text_static("settings.sessions.defaults_scope"))
     }

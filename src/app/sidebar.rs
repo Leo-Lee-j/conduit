@@ -7,6 +7,8 @@ use gpui_kit::component::tag::Tag;
 
 mod cache;
 mod keyboard;
+#[cfg(all(test, feature = "ui-tests"))]
+mod pin_tests;
 mod projects;
 mod sticky;
 #[cfg(all(test, feature = "ui-tests"))]
@@ -22,6 +24,25 @@ const TREE_MARK_SIZE: f32 = 16.;
 const TREE_TOGGLE_SIZE: f32 = 24.;
 const TREE_TITLE_LEFT: f32 = TREE_AXIS + TREE_MARK_SIZE / 2. + 8.;
 
+fn workspace_tint(color: Option<u32>, opacity: f32) -> Option<gpui_kit::Rgba> {
+    // Explicit workspace colors take precedence over the theme's project styling.
+    color.map(|color| {
+        let mut tint = gpui_kit::rgba(color);
+        tint.a *= opacity;
+        tint
+    })
+}
+
+fn fading_background(color: gpui_kit::Rgba) -> gpui_kit::Background {
+    let mut transparent = color;
+    transparent.a = 0.;
+    gpui_kit::linear_gradient(
+        90.,
+        gpui_kit::linear_color_stop(color, 0.),
+        gpui_kit::linear_color_stop(transparent, 1.),
+    )
+}
+
 fn tree_guide(id: String, axis: f32, height: f32) -> Div {
     div()
         .debug_selector(move || id.clone())
@@ -31,6 +52,37 @@ fn tree_guide(id: String, axis: f32, height: f32) -> Div {
         .h(px(height))
         .w(px(1.))
         .bg(rgb(palette().border))
+}
+
+fn session_tree_guide(id: String, axis: f32, height: f32) -> Div {
+    let icon_top = (ROW_HEIGHT - TREE_MARK_SIZE) / 2.;
+    let icon_bottom = icon_top + TREE_MARK_SIZE;
+    // Leave the icon slot clear so it can show the row's fading background.
+    div()
+        .debug_selector(move || id.clone())
+        .absolute()
+        .left(px(axis))
+        .top_0()
+        .h(px(height))
+        .w(px(1.))
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .w_full()
+                .h(px(icon_top.min(height)))
+                .bg(rgb(palette().border)),
+        )
+        .when(height > icon_bottom, |guide| {
+            guide.child(
+                div()
+                    .absolute()
+                    .top(px(icon_bottom))
+                    .bottom_0()
+                    .w_full()
+                    .bg(rgb(palette().border)),
+            )
+        })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -97,6 +149,7 @@ pub(super) fn navigation_content() -> Div {
 struct WorkspaceDrag {
     path: PathBuf,
     index: usize,
+    pinned: bool,
 }
 struct WorkspaceDragPreview {
     name: String,
@@ -135,6 +188,7 @@ impl Render for WorkspaceDragPreview {
 pub(super) struct SidebarView {
     app: WeakEntity<ConduitApp>,
     _subscription: Subscription,
+    _color_subscription: Subscription,
     _bounds_subscription: Subscription,
     was_workspace_navigation: bool,
     navigation_revision: Option<super::plugin_ui::NavigationRevision>,
@@ -147,6 +201,7 @@ pub(super) struct SidebarView {
 impl SidebarView {
     pub(super) fn new(
         app: WeakEntity<ConduitApp>,
+        color_picker: &Entity<ColorPickerState>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -182,6 +237,7 @@ impl SidebarView {
             view.pending_tasks = pending_tasks;
         });
         Self {
+            _color_subscription: cx.observe(color_picker, |_, _, cx| cx.notify()),
             app,
             _subscription: subscription,
             _bounds_subscription: cx.observe_window_bounds(window, |_, _, cx| cx.notify()),
@@ -233,7 +289,7 @@ impl ConduitApp {
         }
     }
 
-    fn refresh_sidebar(&mut self) -> bool {
+    pub(super) fn refresh_sidebar(&mut self) -> bool {
         let inputs = cache::Inputs::new(self);
         self.sidebar
             .refresh(&self.store, &self.session_control, &self.search_ui, inputs)
@@ -346,6 +402,19 @@ impl ConduitApp {
         .into_any_element()
     }
 
+    fn workspace_reorderable(&self, path: &Path) -> bool {
+        self.writable
+            && !self.closing
+            && (!self.store.ui.auto_sort_workspaces
+                || self.store.ui.pinned_workspaces.contains(path))
+    }
+
+    fn can_reorder_workspace(&self, source: &Path, target: &Path) -> bool {
+        self.workspace_reorderable(source)
+            && self.store.ui.pinned_workspaces.contains(source)
+                == self.store.ui.pinned_workspaces.contains(target)
+    }
+
     /// Reorder by stable paths and remap all index-based navigation state.
     pub(super) fn reorder_workspace(
         &mut self,
@@ -353,7 +422,7 @@ impl ConduitApp {
         target: &Path,
         cx: &mut Context<Self>,
     ) {
-        if !self.writable || self.closing {
+        if !self.can_reorder_workspace(source, target) {
             return;
         }
         let Some(from) = self.store.workspaces.iter().position(|w| w.path == source) else {
@@ -567,6 +636,7 @@ impl ConduitApp {
                         .into_any_element(),
                     cache::Row::Loading(_) => {
                         let workspace = &self.store.workspaces[index];
+                        let loaded = workspace.visible_sessions().count();
                         h_flex()
                             .h(px(ROW_HEIGHT))
                             .flex_shrink_0()
@@ -577,26 +647,15 @@ impl ConduitApp {
                             .text_size(ui_text_size(12.))
                             .text_color(rgb(palette().faint))
                             .child(Spinner::new().small().color(rgb(palette().faint).into()))
-                            .child(
-                                self.session_control
-                                    .scan_progress
-                                    .get(&workspace.path)
-                                    .map(|(completed, total)| {
-                                        conduit::i18n::format(
-                                            "sidebar.loading_session_history",
-                                            &[
-                                                ("completed", format!("{}", completed)),
-                                                ("total", format!("{}", total)),
-                                            ],
-                                        )
-                                    })
-                                    .unwrap_or_else(|| {
-                                        conduit::i18n::text_static(
-                                            "sidebar.discovering_session_history",
-                                        )
-                                        .into()
-                                    }),
-                            )
+                            .child(if loaded > 0 {
+                                conduit::i18n::format(
+                                    "sidebar.loading_session_history",
+                                    &[("completed", loaded.to_string())],
+                                )
+                            } else {
+                                conduit::i18n::text_static("sidebar.discovering_session_history")
+                                    .into()
+                            })
                             .into_any_element()
                     }
                     cache::Row::Session { id, .. } => {
@@ -609,7 +668,26 @@ impl ConduitApp {
                         let unread = self.session_control.unread_completed.contains(&id);
                         let archived = session.archived;
                         let pinned = session.pinned;
-
+                        let workspace_color = self
+                            .store
+                            .ui
+                            .workspace_colors
+                            .get(&self.store.workspaces[index].path)
+                            .copied();
+                        let active_background = workspace_tint(workspace_color, 0.18)
+                            .unwrap_or_else(|| {
+                                rgb(if palette().restrained_projects {
+                                    palette().highlight_bg
+                                } else {
+                                    palette().surface_hover
+                                })
+                            });
+                        let hover_background = if active {
+                            workspace_tint(workspace_color, 0.24)
+                                .unwrap_or_else(|| rgb(palette().surface_hover))
+                        } else {
+                            rgb(palette().surface_hover)
+                        };
                         h_flex()
                             .id(("session", id))
                             .role(Role::TreeItem)
@@ -634,11 +712,11 @@ impl ConduitApp {
                             } else {
                                 theme::sidebar_session_text_color()
                             }))
-                            .when(active, |row| row.bg(rgb(palette().surface_hover)))
+                            .when(active, |row| row.bg(fading_background(active_background)))
                             .cursor_pointer()
-                            .hover(|style| {
+                            .hover(move |style| {
                                 style
-                                    .bg(rgb(palette().surface_hover))
+                                    .bg(fading_background(hover_background))
                                     .text_color(rgb(palette().text))
                             })
                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -650,7 +728,7 @@ impl ConduitApp {
                                     session_menu(menu, menu_app.clone(), id, menu_app.read(cx))
                                 }
                             })
-                            .child(tree_guide(
+                            .child(session_tree_guide(
                                 format!("session-guide-{id}"),
                                 TREE_AXIS + indent,
                                 if last_child { row.height() / 2. } else { list_height },
@@ -667,8 +745,6 @@ impl ConduitApp {
                                             .size(px(TREE_MARK_SIZE))
                                             .flex_shrink_0()
                                             .rounded_full()
-                                            .bg(rgb(if active { palette().surface_hover } else { palette().sidebar_bg }))
-                                            .group_hover("session-row", |style| style.bg(rgb(palette().surface_hover)))
                                             .child(provider_icon(session.provider).size_full()),
                                     )
                                     .child(
@@ -1279,11 +1355,16 @@ impl ConduitApp {
         let nested = self.sidebar.projects.parent(&workspace.path).is_some();
         let collapsed = self.workspace_collapsed(&workspace.path);
         let importing = self.history_loading.contains(&workspace.path);
-        let toggle_path = workspace.path.clone();
+        let workspace_color = self.store.ui.workspace_colors.get(&workspace.path).copied();
+        let restrained_projects = palette().restrained_projects;
+        let pinned = self.store.ui.pinned_workspaces.contains(&workspace.path);
+        let can_reorder = self.workspace_reorderable(&workspace.path);
+        let workspace_hover_color = workspace_tint(workspace_color, 0.24);
         let compact_path = workspace.path.clone();
         let drag_path = workspace.path.clone();
         let drop_path = workspace.path.clone();
         let hover_path = workspace.path.clone();
+        let unpin_path = workspace.path.clone();
         let drag_name = workspace.name();
         // Attention sets are small; do not scan every session in a virtualized header.
         let activity = self
@@ -1318,7 +1399,14 @@ impl ConduitApp {
             )))
             .debug_selector(move || format!("workspace-item-{index}"))
             .role(Role::TreeItem)
-            .aria_label(workspace.name())
+            .aria_label(if pinned {
+                conduit::i18n::format(
+                    "sidebar.pinned_workspace_label",
+                    &[("name", workspace.name())],
+                )
+            } else {
+                workspace.name()
+            })
             .aria_expanded(!collapsed)
             .aria_selected(workspace_selected)
             .when(self.sidebar.keyboard_row.as_ref().is_some_and(|row| matches!(row, cache::Row::Workspace { path, .. } if *path == workspace.path)), |row| row.aria_active_descendant())
@@ -1334,12 +1422,18 @@ impl ConduitApp {
             .text_size(ui_text_size(13.))
             .text_color(rgb(palette().text))
             .cursor_pointer()
-            .hover(|style| style.bg(rgb(palette().surface_hover)))
-            .when(can_edit, |row| {
+            .hover(move |style| match workspace_hover_color {
+                Some(color) => style.bg(fading_background(color)),
+                None => style.bg(fading_background(rgb(palette().surface_hover))),
+            })
+            .when_some(workspace_tint(workspace_color, 0.18), |row, color| row.bg(fading_background(color)))
+            .when(restrained_projects && workspace_selected && workspace_color.is_none(), |row| row.bg(fading_background(rgb(palette().highlight_bg))))
+            .when(can_reorder, |row| {
                 row.on_drag(
                     WorkspaceDrag {
                         path: drag_path,
                         index,
+                        pinned,
                     },
                     move |_, _, _, cx| {
                         cx.stop_propagation();
@@ -1349,6 +1443,9 @@ impl ConduitApp {
                     },
                 )
                 .drag_over::<WorkspaceDrag>(move |row, dragged, _, _| {
+                    if dragged.pinned != pinned {
+                        return row;
+                    }
                     if dragged.path == hover_path {
                         return row.opacity(0.5);
                     }
@@ -1372,43 +1469,35 @@ impl ConduitApp {
                 ))
             })
             .on_click(cx.listener(move |this, _, window, cx| this.activate_sidebar_workspace(index, last, window, cx)))
-            .child(
-                Button::new(("workspace-collapse", index))
-                    .debug_selector(move || format!("workspace-collapse-{index}"))
-                    .ghost()
-                    .small()
-                    .compact()
-                    .w(px(TREE_TOGGLE_SIZE))
-                    .h(px(TREE_TOGGLE_SIZE))
-                    .p_0()
-                    .flex_shrink_0()
-                    .cursor_pointer()
-                    .child(
-                        div()
-                            .debug_selector(move || format!("workspace-folder-{index}"))
-                            .size(px(TREE_MARK_SIZE))
-                            .child(
-                                Icon::new(if collapsed { IconName::Folder } else { IconName::FolderOpen })
-                                    .size(px(TREE_MARK_SIZE))
-                                    .text_color(rgb(palette().muted)),
-                            ),
-                    )
-                    .tooltip(if collapsed {
-                        conduit::i18n::text_static("sidebar.expand_workspace")
-                    } else {
-                        conduit::i18n::text_static("sidebar.collapse_workspace")
-                    })
-                    .accessibility_label(if collapsed {
-                        conduit::i18n::text_static("sidebar.expand_workspace")
-                    } else {
-                        conduit::i18n::text_static("sidebar.collapse_workspace")
-                    })
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        cx.stop_propagation();
-                        this.toggle_sidebar_workspace(&toggle_path, window, cx);
-                    })),
-            )
+            .child(self.sidebar_workspace_icon(index, collapsed, can_edit, cx))
             .child(div().debug_selector(move || format!("workspace-name-{index}")).flex_1().min_w_0().font_semibold().truncate().child(workspace.name()))
+            .when(pinned, |row| {
+                row.child(
+                    div()
+                        .id(("workspace-pin-slot", index))
+                        .debug_selector(move || format!("workspace-pinned-{index}"))
+                        .flex_shrink_0()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(|_, _, cx| cx.stop_propagation())
+                        .child(
+                            Button::new(("workspace-unpin", index))
+                                .ghost()
+                                .small()
+                                .compact()
+                                .size(px(24.))
+                                .p_0()
+                                .child(Icon::new(FullIconName::Pin).size(px(12.)).text_color(rgb(palette().muted)))
+                                .tooltip(conduit::i18n::text_static("sidebar.unpin_workspace"))
+                                .accessibility_label(conduit::i18n::text_static("sidebar.unpin_workspace"))
+                                .disabled(!can_edit)
+                                .when(can_edit, |button| button.cursor_pointer())
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.set_workspace_pinned(&unpin_path, false, cx);
+                                })),
+                        ),
+                )
+            })
             .child(
                 h_flex()
                     // Share one slot so the count and actions swap
@@ -1475,7 +1564,7 @@ impl ConduitApp {
                                 this.new_session_here(index, window, cx)
                             })),
                     )
-                    .child(self.workspace_menu(index, app_entity.clone())),
+                    .child(self.workspace_menu(index, app_entity.clone(), can_edit)),
             )
             .when(!collapsed && self.expanded_workspaces.contains(&index), |row| {
                 row.child(
@@ -1504,6 +1593,127 @@ impl ConduitApp {
                 )
             })
             .when(self.sidebar.keyboard_row.as_ref().is_some_and(|row| matches!(row, cache::Row::Workspace { path, .. } if *path == workspace.path)), |row| row.child(self.sidebar_focus_indicator()))
+            .into_any_element()
+    }
+
+    fn sidebar_workspace_icon(
+        &self,
+        index: usize,
+        collapsed: bool,
+        can_edit: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let path = self.store.workspaces[index].path.clone();
+        let picker_open = self.workspace_color_target.as_ref() == Some(&path)
+            && self.workspace_color_picker.read(cx).is_open();
+        let label = conduit::i18n::text_static("sessions.workspace_color");
+        let folder = div()
+            .debug_selector(move || format!("workspace-folder-{index}"))
+            .size(px(TREE_MARK_SIZE))
+            .child(
+                Icon::new(if collapsed {
+                    IconName::Folder
+                } else {
+                    IconName::FolderOpen
+                })
+                .size(px(TREE_MARK_SIZE))
+                .text_color(rgb(palette().muted)),
+            );
+        if !can_edit {
+            return Button::new(("workspace-collapse", index))
+                .debug_selector(move || format!("workspace-collapse-{index}"))
+                .ghost()
+                .small()
+                .compact()
+                .size(px(TREE_TOGGLE_SIZE))
+                .p_0()
+                .flex_shrink_0()
+                .cursor_pointer()
+                .child(folder)
+                .tooltip(if collapsed {
+                    conduit::i18n::text_static("sidebar.expand_workspace")
+                } else {
+                    conduit::i18n::text_static("sidebar.collapse_workspace")
+                })
+                .accessibility_label(if collapsed {
+                    conduit::i18n::text_static("sidebar.expand_workspace")
+                } else {
+                    conduit::i18n::text_static("sidebar.collapse_workspace")
+                })
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.toggle_sidebar_workspace(&path, window, cx);
+                }))
+                .into_any_element();
+        }
+        let palette_icon = Icon::new(FullIconName::Palette)
+            .size(px(TREE_MARK_SIZE))
+            .text_color(rgb(palette().muted));
+        let control = if picker_open {
+            gpui_kit::component::color_picker::ColorPicker::new(&self.workspace_color_picker)
+                .icon(palette_icon)
+                .with_size(Size::Small)
+                .accessibility_label(label)
+                .size(px(TREE_TOGGLE_SIZE))
+                .flex()
+                .items_center()
+                .justify_center()
+                .into_any_element()
+        } else {
+            Button::new(("workspace-color-trigger", index))
+                .ghost()
+                .small()
+                .compact()
+                .size(px(TREE_TOGGLE_SIZE))
+                .p_0()
+                .opacity(0.)
+                .group_hover("workspace-row", |style| style.opacity(1.))
+                .focus_visible(|style| style.opacity(1.).bg(rgb(palette().surface_hover)))
+                .child(palette_icon)
+                .tooltip(label)
+                .accessibility_label(label)
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    if !this.writable || this.closing {
+                        return;
+                    }
+                    this.workspace_color_target = Some(path.clone());
+                    let color = this.store.ui.workspace_colors.get(&path).copied();
+                    this.workspace_color_picker.update(cx, |picker, cx| {
+                        match color {
+                            Some(color) => picker.set_value(
+                                gpui_kit::Hsla::from(gpui_kit::rgba(color)),
+                                window,
+                                cx,
+                            ),
+                            None => picker.clear_value(window, cx),
+                        }
+                        picker.set_open(true, cx);
+                        picker.focus_handle(cx).focus(window, cx);
+                    });
+                    this.sidebar_view.update(cx, |_, cx| cx.notify());
+                    cx.notify();
+                }))
+                .into_any_element()
+        };
+        div()
+            .id(("workspace-color-slot", index))
+            .debug_selector(move || format!("workspace-color-trigger-{index}"))
+            .relative()
+            .size(px(TREE_TOGGLE_SIZE))
+            .flex_shrink_0()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(|_, _, cx| cx.stop_propagation())
+            .child(
+                folder
+                    .absolute()
+                    .top(px(4.))
+                    .left(px(4.))
+                    .when(picker_open, |folder| folder.opacity(0.))
+                    .group_hover("workspace-row", |style| style.opacity(0.)),
+            )
+            .child(control)
             .into_any_element()
     }
 }

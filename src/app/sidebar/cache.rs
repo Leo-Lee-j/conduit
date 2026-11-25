@@ -4,7 +4,7 @@ use gpui_kit::component::VirtualListScrollHandle;
 use gpui_kit::component::menu::PopupMenu;
 use std::rc::Rc;
 
-const INACTIVE_WORKSPACE_AGE: u64 = 3 * 24 * 60 * 60;
+const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
 pub(super) const WORKSPACE_MOVE_DURATION: Duration = Duration::from_millis(240);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -175,13 +175,14 @@ pub(super) struct Inputs {
     expanded_projects: HashSet<PathBuf>,
     auto_expanded: HashSet<PathBuf>,
     auto_collapse_inactive: bool,
+    auto_collapse_inactive_days: u32,
     auto_sort_workspaces: bool,
+    pinned_workspaces: HashSet<PathBuf>,
     loading: HashSet<PathBuf>,
     runs: HashSet<u64>,
     task_states: HashMap<u64, TaskState>,
     unread: HashSet<u64>,
     namings: HashSet<u64>,
-    progress: HashMap<PathBuf, (usize, usize)>,
     query: String,
     results: u64,
     show_archived: bool,
@@ -226,7 +227,9 @@ impl Inputs {
             expanded_projects: app.sidebar.expanded_projects.clone(),
             auto_expanded: app.sidebar.auto_expanded.clone(),
             auto_collapse_inactive: app.store.ui.auto_collapse_inactive_workspaces,
+            auto_collapse_inactive_days: app.store.ui.auto_collapse_inactive_days.max(1),
             auto_sort_workspaces: app.store.ui.auto_sort_workspaces,
+            pinned_workspaces: app.store.ui.pinned_workspaces.clone(),
             loading: app.history_loading.clone(),
             runs: app.session_control.runs.keys().copied().collect(),
             task_states: app
@@ -237,7 +240,6 @@ impl Inputs {
                 .collect(),
             unread: app.session_control.unread_completed.clone(),
             namings: app.session_control.namings.keys().copied().collect(),
-            progress: app.session_control.scan_progress.clone(),
             query: app.search_query.trim().to_lowercase(),
             results: app.search_ui.result_generation,
             show_archived: app.show_archived,
@@ -262,7 +264,9 @@ impl Inputs {
             && self.unread == other.unread
             && self.auto_expanded == other.auto_expanded
             && self.auto_collapse_inactive == other.auto_collapse_inactive
+            && self.auto_collapse_inactive_days == other.auto_collapse_inactive_days
             && self.auto_sort_workspaces == other.auto_sort_workspaces
+            && self.pinned_workspaces == other.pinned_workspaces
             && self.loading == other.loading
             && self.query == other.query
             && self.results == other.results
@@ -543,9 +547,10 @@ impl SidebarState {
             }
         }
         // Use cached summaries, including unloaded transcript activity. Recheck
-        // on age ticks so a long-running app also crosses the three-day boundary.
+        // on age ticks so a long-running app also crosses the configured boundary.
         if changed || rebuild {
             let now = inputs.age_tick * inputs.age_interval;
+            let inactive_age = u64::from(inputs.auto_collapse_inactive_days) * SECONDS_PER_DAY;
             let auto_collapsed = if inputs.auto_collapse_inactive && inputs.query.is_empty() {
                 self.groups
                     .iter()
@@ -559,8 +564,7 @@ impl SidebarState {
                                 .any(|s| {
                                     s.running
                                         || (s.activity > 0
-                                            && now.saturating_sub(s.activity)
-                                                < INACTIVE_WORKSPACE_AGE)
+                                            && now.saturating_sub(s.activity) < inactive_age)
                                 })
                     })
                     .map(|(path, _)| path.clone())
@@ -579,13 +583,19 @@ impl SidebarState {
             // Sort only the display projection: all stored workspace indices and
             // the user's manual order remain valid. Stable ties keep that order.
             let mut workspaces: Vec<_> = store.workspaces.iter().enumerate().collect();
-            if inputs.auto_sort_workspaces {
+            if inputs.auto_sort_workspaces || !inputs.pinned_workspaces.is_empty() {
                 workspaces.sort_by_cached_key(|(_, workspace)| {
+                    let pinned = inputs.pinned_workspaces.contains(&workspace.path);
+                    // Pins stay in manual order even when ordinary workspaces
+                    // follow activity. Project projection keeps each group whole.
+                    if pinned || !inputs.auto_sort_workspaces {
+                        return std::cmp::Reverse((pinned, false, 0));
+                    }
                     let summaries = &self.groups[&workspace.path].summaries;
                     let visible = || summaries.values().filter(|s| !s.is_subagent);
                     let running = visible().any(|s| s.running);
                     let activity = visible().map(|s| s.activity).max().unwrap_or(0);
-                    std::cmp::Reverse((running, activity))
+                    std::cmp::Reverse((false, running, activity))
                 });
             }
             for (index, workspace) in workspaces {
@@ -694,11 +704,19 @@ impl SidebarState {
                     }
                 }
             }
+            let pinned_order = store
+                .workspaces
+                .iter()
+                .enumerate()
+                .filter(|(_, workspace)| inputs.pinned_workspaces.contains(&workspace.path))
+                .map(|(index, workspace)| (workspace.path.clone(), index))
+                .collect();
             let rows = self.projects.project(
                 rows,
                 &inputs.expanded_projects,
                 &attention,
                 !inputs.query.is_empty(),
+                &pinned_order,
             );
             if self.rows.as_ref() != &rows {
                 let reset = self
@@ -870,7 +888,7 @@ impl SidebarState {
 
 #[cfg(all(test, feature = "ui-tests"))]
 mod tests {
-    use super::{INACTIVE_WORKSPACE_AGE, Inputs, Row};
+    use super::{Inputs, Row, SECONDS_PER_DAY};
     use crate::app::{ConduitApp, Store, Workspace};
     use gpui_kit::{AppContext, TestAppContext};
 
@@ -1047,7 +1065,7 @@ mod tests {
             let app = cx.new(|cx| {
                 let now = 1_000_000;
                 let mut old = crate::app::tests::session();
-                old.created_at = now - INACTIVE_WORKSPACE_AGE;
+                old.created_at = now - SECONDS_PER_DAY;
                 let mut recent = old.clone();
                 recent.id = 2;
                 // A cold transcript's recent activity must override old creation.
@@ -1135,6 +1153,14 @@ mod tests {
                 assert!(app.workspace_collapsed(&old_path));
                 assert!(app.workspace_collapsed(&empty_path));
                 assert!(!app.workspace_collapsed(&recent_path));
+                // Changing only the setting invalidates cached rows immediately.
+                app.store.ui.auto_collapse_inactive_days = 2;
+                refresh(&mut app, now);
+                assert!(!app.workspace_collapsed(&old_path));
+                assert!(app.workspace_collapsed(&empty_path));
+                app.store.ui.auto_collapse_inactive_days = 1;
+                refresh(&mut app, now);
+                assert!(app.workspace_collapsed(&old_path));
                 assert!(
                     !app.sidebar
                         .rows
@@ -1194,11 +1220,11 @@ mod tests {
                     "活跃工作空间",
                     "sort active",
                 ] {
-                    assert!(
-                        app.settings_search_matches(query)
-                            .iter()
-                            .any(|result| { result.page == 1 && result.group == Some(1) })
-                    );
+                    assert!(app.settings_search_matches(query).iter().any(|result| {
+                        use crate::app::settings::{APPEARANCE_OPTIONS_GROUP, SettingsRoute};
+                        result.page == SettingsRoute::Appearance.index()
+                            && result.group == Some(APPEARANCE_OPTIONS_GROUP)
+                    }));
                 }
                 app
             });

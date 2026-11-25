@@ -19,6 +19,8 @@ pub(super) struct GitDiffDialog {
     pub(super) review: super::git_review::ReviewUi,
     pub(super) comparison: Option<git::ComparisonRequest>,
     pub(super) commit: Option<git::CommitDiffRequest>,
+    /// An API patch is immutable and must never reload from the local working tree.
+    pub(super) remote: Option<(String, (String, String))>,
     pub(super) workspace: PathBuf,
     pub(super) file: git::ChangedFile,
     pub(super) scope: git::FileDiffScope,
@@ -82,19 +84,32 @@ impl GitDiffDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let mut dialog = Self::empty(workspace, file, comparison, commit, cx);
+        dialog.reload(window, cx);
+        dialog
+    }
+
+    fn empty(
+        workspace: PathBuf,
+        file: git::ChangedFile,
+        comparison: Option<git::ComparisonRequest>,
+        commit: Option<git::CommitDiffRequest>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let state = cx.new(|cx| {
             DiffState::new(Vec::new(), cx)
                 .with_mode(DiffMode::Split)
                 .with_context_lines(Some(3))
         });
         let subscription = cx.observe(&state, |_, _, cx| cx.notify());
-        let mut dialog = Self {
+        Self {
             embedded: false,
             focus: cx.focus_handle(),
             last_patch: None,
             review: Default::default(),
             comparison,
             commit,
+            remote: None,
             workspace,
             scope: if file.fully_staged() {
                 git::FileDiffScope::Staged
@@ -110,12 +125,29 @@ impl GitDiffDialog {
             cancelled: Arc::new(AtomicBool::new(false)),
             _load_task: Task::ready(()),
             _state_subscription: subscription,
-        };
-        dialog.reload(window, cx);
-        dialog
+        }
+    }
+
+    pub(super) fn from_remote(
+        workspace: PathBuf,
+        file: git::ChangedFile,
+        source: String,
+        versions: (String, String),
+        diff: anyhow::Result<git::FileDiff>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut view = Self::empty(workspace, file, None, None, cx);
+        view.embedded = true;
+        view.remote = Some((source, versions));
+        view.finish_load(diff, window, cx);
+        view
     }
 
     pub(super) fn reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.remote.is_some() {
+            return;
+        }
         self.cancelled.store(true, Ordering::Relaxed);
         let cancelled = Arc::new(AtomicBool::new(false));
         self.cancelled = cancelled.clone();
@@ -244,6 +276,9 @@ impl GitDiffDialog {
     }
 
     pub(super) fn versions(&self) -> (String, String) {
+        if let Some((_, versions)) = &self.remote {
+            return versions.clone();
+        }
         if let Some(commit) = &self.commit {
             return (
                 commit
@@ -348,7 +383,7 @@ impl GitDiffDialog {
         let mut details = h_flex()
             .w_full()
             .min_w_0()
-            .gap(px(8.))
+            .gap(px(6.))
             .items_center()
             .child(
                 div()
@@ -397,15 +432,15 @@ impl GitDiffDialog {
         v_flex()
             .w_full()
             .flex_shrink_0()
-            .gap(px(4.))
-            .px(px(16.))
-            .pt(px(14.))
-            .pb(px(10.))
+            .gap(px(3.))
+            .px(px(12.))
+            .pt(px(8.))
+            .pb(px(6.))
             .child(
                 h_flex()
                     .w_full()
                     .min_w_0()
-                    .gap(px(10.))
+                    .gap(px(6.))
                     .items_center()
                     .child(
                         Icon::new(FullIconName::FileDiff)
@@ -416,7 +451,7 @@ impl GitDiffDialog {
                         v_flex()
                             .flex_1()
                             .min_w_0()
-                            .gap(px(5.))
+                            .gap(px(3.))
                             .child(details)
                             .child(
                                 h_flex()
@@ -462,7 +497,7 @@ impl GitDiffDialog {
                     }),
             )
             .when(
-                self.comparison.is_none() && self.commit.is_none(),
+                self.comparison.is_none() && self.commit.is_none() && self.remote.is_none(),
                 |column| {
                     column.child(
                         h_flex().gap_1().flex_wrap().children(
@@ -792,24 +827,37 @@ impl GitDiffDialog {
     pub(super) fn footer(&self, cx: &mut Context<Self>) -> AnyElement {
         let files = self.state.read(cx).files();
         let binary = files.iter().any(DiffFile::is_binary);
-        h_flex()
-            .w_full()
-            .flex_shrink_0()
-            .gap(px(12.))
-            .items_center()
-            .px(px(14.))
-            .py(px(6.))
-            .border_t_1()
-            .border_color(rgb(palette().border))
+        let footer = if self.remote.is_some() {
+            document_footer()
+        } else {
+            h_flex()
+                .w_full()
+                .flex_shrink_0()
+                .gap(px(12.))
+                .items_center()
+                .px(px(14.))
+                .py(px(6.))
+                .border_t_1()
+                .border_color(rgb(palette().border))
+        };
+        footer
+            .id("git-diff-footer")
+            .debug_selector(|| "git-diff-footer".into())
             .child(
                 div()
-                    .text_size(ui_text_size(9.))
-                    .text_color(rgb(palette().faint))
+                    .min_w_0()
+                    .truncate()
+                    .text_size(ui_text_size(if self.remote.is_some() { 11. } else { 9. }))
+                    .text_color(rgb(if self.remote.is_some() {
+                        palette().muted
+                    } else {
+                        palette().faint
+                    }))
                     .child(if binary {
                         conduit::i18n::text_static(
                             "git_diff.line_by_line_diffs_are_unavailable_for",
                         )
-                    } else if self.comparison.is_some() {
+                    } else if self.comparison.is_some() || self.remote.is_some() {
                         conduit::i18n::text_static("git_diff.read_only_diff_compare_both_versions")
                     } else {
                         conduit::i18n::text_static("git_diff.read_only_diff_compare_with_head")
@@ -818,8 +866,14 @@ impl GitDiffDialog {
             .child(div().flex_1())
             .child(
                 div()
-                    .text_size(ui_text_size(9.))
-                    .text_color(rgb(palette().faint))
+                    .min_w_0()
+                    .truncate()
+                    .text_size(ui_text_size(if self.remote.is_some() { 11. } else { 9. }))
+                    .text_color(rgb(if self.remote.is_some() {
+                        palette().muted
+                    } else {
+                        palette().faint
+                    }))
                     .child(if self.embedded {
                         conduit::i18n::format(
                             "git_diff.next_change_previous_close_tab",

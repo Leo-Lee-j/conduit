@@ -5,6 +5,7 @@
 use crate::domain::Provider;
 mod opencode;
 pub mod preferences;
+pub mod reasoning;
 pub use opencode::CACHE_TTL as OPENCODE_CACHE_TTL;
 pub use opencode::OpenCodeModelsProbe;
 use std::{
@@ -34,6 +35,9 @@ pub struct ModelCatalog {
     pub catalog_path: Option<PathBuf>,
     pub current: Option<String>,
     pub models: Vec<ModelOption>,
+    /// Native capabilities are scoped to this CLI catalog, never other routes.
+    pub reasoning: std::collections::BTreeMap<String, reasoning::Capabilities>,
+    pub aliases: std::collections::BTreeMap<String, String>,
     pub endpoint: Option<String>,
     pub detail: Option<String>,
     pub note: Option<String>,
@@ -186,6 +190,10 @@ pub fn load_from(provider: Provider, home: &Path) -> ModelCatalog {
     match provider {
         Provider::Claude => claude(home),
         Provider::Codex => codex(home),
+        Provider::Gemini => ModelCatalog {
+            note: Some(conduit::i18n::text("gemini.catalog_after_connect")),
+            ..Default::default()
+        },
         Provider::Qoder => ModelCatalog {
             note: Some(conduit::i18n::text("qoder.catalog_after_connect")),
             ..Default::default()
@@ -329,6 +337,13 @@ fn claude(home: &Path) -> ModelCatalog {
         .or_else(|| top_text("model"))
         .map(str::to_string);
     catalog.endpoint = env_text("ANTHROPIC_BASE_URL").map(str::to_string);
+    for role in crate::providers::claude::Role::ALL {
+        if role != crate::providers::claude::Role::Subagent
+            && let Some(id) = env_text(role.env())
+        {
+            catalog.aliases.insert(role.alias().into(), id.into());
+        }
+    }
     if let Some(current) = &catalog.current {
         push_model(
             &mut catalog.models,
@@ -429,7 +444,17 @@ fn codex(home: &Path) -> ModelCatalog {
         }
         (!parts.is_empty()).then(|| parts.join(" · "))
     };
-    if let Some(relative) = text_value("model_catalog_json") {
+    // An explicit catalog wins over the CLI cache. Never merge capability data
+    // from a different custom catalog into the active provider.
+    let catalog_file = text_value("model_catalog_json")
+        .map(str::to_owned)
+        .or_else(|| {
+            directory
+                .join("models_cache.json")
+                .is_file()
+                .then(|| "models_cache.json".into())
+        });
+    if let Some(relative) = catalog_file {
         let catalog_path = PathBuf::from(relative);
         let catalog_path = if catalog_path.is_absolute() {
             catalog_path
@@ -488,6 +513,11 @@ fn codex(home: &Path) -> ModelCatalog {
                                     &note,
                                     context_window,
                                 );
+                                if let Some(capabilities) =
+                                    reasoning::Capabilities::from_codex(entry)
+                                {
+                                    catalog.reasoning.insert(slug.to_owned(), capabilities);
+                                }
                             }
                         } else {
                             catalog.incomplete = true;
@@ -581,6 +611,7 @@ mod tests {
         assert!(catalog.models[0].note.contains("当前默认"));
         assert!(catalog.models[0].note.contains("Opus"));
         assert_eq!(catalog.label("sonnet-model"), "sonnet-model");
+        assert_eq!(catalog.aliases["sonnet"], "sonnet-model");
         assert_eq!(catalog.label("unknown"), "unknown");
         assert!(catalog.error.is_none());
     }
@@ -605,7 +636,8 @@ base_url = "https://example.invalid"
         fs::write(
             directory.join("catalog.json"),
             serde_json::to_vec(&serde_json::json!({"models": [
-                {"slug": "gpt-current", "display_name": "GPT Current", "default_reasoning_level": "high"},
+                {"slug": "gpt-current", "display_name": "GPT Current", "default_reasoning_level": "high",
+                 "supported_reasoning_levels":[{"effort":"low"},{"effort":"high"},{"effort":"max"},{"effort":"ultra"}]},
                 {"slug": "gpt-other", "display_name": "GPT Other", "default_reasoning_level": "low"},
                 {"slug": "gpt-hidden", "display_name": "Hidden", "visibility": "hide"}
             ]}))
@@ -621,6 +653,16 @@ base_url = "https://example.invalid"
         );
         assert_eq!(catalog.models.len(), 2);
         assert_eq!(catalog.label("gpt-current"), "GPT Current");
+        assert_eq!(
+            catalog.reasoning["gpt-current"].levels,
+            [
+                crate::providers::ReasoningEffort::Low,
+                crate::providers::ReasoningEffort::High,
+                crate::providers::ReasoningEffort::Max,
+                crate::providers::ReasoningEffort::Ultra,
+            ]
+        );
+        assert!(!catalog.reasoning.contains_key("gpt-other"));
         assert_eq!(catalog.models[0].note, "推理 high · 当前配置");
         assert!(catalog.models.iter().all(|model| model.id != "gpt-hidden"));
         assert!(
@@ -631,6 +673,47 @@ base_url = "https://example.invalid"
                 .contains("provider custom")
         );
         assert!(catalog.error.is_none());
+    }
+
+    #[test]
+    fn codex_cache_capabilities_are_used_only_without_an_explicit_catalog() {
+        let _locale = crate::test_support::chinese();
+        let home = home("codex-reasoning-cache");
+        let directory = home.join(".codex");
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("config.toml"), "model = \"gpt-5\"\n").unwrap();
+        fs::write(
+            directory.join("models_cache.json"),
+            serde_json::json!({"models":[{
+                "slug":"gpt-5", "supported_reasoning_levels":[{"effort":"max"},{"effort":"ultra"}],
+                "default_reasoning_level":"max"
+            }]})
+            .to_string(),
+        )
+        .unwrap();
+        let catalog = load_from(Provider::Codex, &home);
+        assert_eq!(
+            catalog.reasoning["gpt-5"].levels,
+            [
+                crate::providers::ReasoningEffort::Max,
+                crate::providers::ReasoningEffort::Ultra
+            ]
+        );
+        fs::write(
+            directory.join("config.toml"),
+            "model = \"gpt-5\"\nmodel_catalog_json = \"custom.json\"\n",
+        )
+        .unwrap();
+        fs::write(
+            directory.join("custom.json"),
+            serde_json::json!({"models":[{
+                "slug":"gpt-5", "supported_reasoning_levels":[]
+            }]})
+            .to_string(),
+        )
+        .unwrap();
+        let catalog = load_from(Provider::Codex, &home);
+        assert!(catalog.reasoning["gpt-5"].levels.is_empty());
     }
 
     #[test]

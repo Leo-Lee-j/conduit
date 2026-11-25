@@ -470,10 +470,16 @@ impl ConduitApp {
         {
             self.closing = false;
             self.terminals.close_confirmed = false;
-            self.message = Some(conduit::i18n::format(
-                "terminal.exit_paused_because_terminal_cleanup_is_incomplete",
-                &[("error", error.to_string())],
-            ));
+            self.notify_feedback(
+                NoticeSource::App,
+                NoticeLevel::Error,
+                conduit::i18n::format(
+                    "terminal.exit_paused_because_terminal_cleanup_is_incomplete",
+                    &[("error", error.to_string())],
+                ),
+                None,
+                cx,
+            );
             changed = true;
         }
         if changed {
