@@ -151,10 +151,10 @@ pub(super) fn render(
             rows = rows.child(caption(text("session_data.files_empty")));
         }
         for (index, (path, change)) in changes.files.iter().enumerate() {
-            let (label, color) = match change.status {
-                EditFileStatus::Added => ("new", palette().diff_add_text),
-                EditFileStatus::Modified => ("changed", palette().highlight_text),
-                EditFileStatus::Deleted => ("deleted", palette().diff_remove_text),
+            let (label, description, color) = match change.status {
+                EditFileStatus::Added => ("N", "new", palette().diff_add_text),
+                EditFileStatus::Modified => ("C", "change", palette().highlight_text),
+                EditFileStatus::Deleted => ("D", "delete", palette().diff_remove_text),
             };
             let diff = change.latest.clone();
             let path = path.clone();
@@ -168,13 +168,14 @@ pub(super) fn render(
                     .h(px(32.))
                     .px_1()
                     .tooltip(format!(
-                        "{}\n{}",
+                        "{} · {}\n{}",
                         path,
+                        description,
                         text("session_data.files_open_diff")
                     ))
                     .accessibility_label(format!(
                         "{} · {} · +{} -{}",
-                        path, label, change.added, change.removed
+                        path, description, change.added, change.removed
                     ))
                     .cursor_pointer()
                     .on_click(cx.listener(move |app, event: &ClickEvent, window, cx| {
