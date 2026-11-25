@@ -909,7 +909,10 @@ mod tests {
                 api_key_env: String::new(),
                 protected_api_key: None,
                 models: vec!["existing-model".into()],
-                source: ProviderSource::Ccs { id: "pet".into() },
+                source: ProviderSource::Ccs {
+                    id: "pet".into(),
+                    protected_route: None,
+                },
                 model_metadata: vec![],
                 claude_models: None,
             };

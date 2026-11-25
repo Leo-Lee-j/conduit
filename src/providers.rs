@@ -99,6 +99,9 @@ pub enum ProviderSource {
     Local,
     Ccs {
         id: String,
+        /// Account-protected import snapshot, including credentials and headers.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        protected_route: Option<String>,
     },
 }
 
@@ -136,7 +139,12 @@ impl ModelProvider {
     pub fn runtime_route(&self, database: &std::path::Path) -> Result<RuntimeRoute> {
         match &self.source {
             ProviderSource::Local => self.route(),
-            ProviderSource::Ccs { id } => crate::ccs::runtime_route(database, self.engine, id),
+            ProviderSource::Ccs {
+                protected_route: Some(snapshot),
+                ..
+            } => Ok(serde_json::from_str(&credentials::unprotect(snapshot)?)?),
+            // Compatibility for imports saved before route snapshots were introduced.
+            ProviderSource::Ccs { id, .. } => crate::ccs::runtime_route(database, self.engine, id),
         }
     }
     pub fn validate(&self) -> Result<()> {
@@ -210,7 +218,7 @@ impl ModelProvider {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct RuntimeRoute {
     pub config: serde_json::Map<String, Value>,
     pub default_model: Option<String>,

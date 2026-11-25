@@ -202,6 +202,7 @@ fn desktop_pet_selects_existing_provider_and_model(cx: &mut TestAppContext) {
             imported.models = vec!["imported-model".into()];
             imported.source = ProviderSource::Ccs {
                 id: "pet-imported".into(),
+                protected_route: None,
             };
             app.store.providers.push(imported);
             let mut claude = app.store.providers[0].clone();
@@ -418,6 +419,7 @@ fn desktop_pet_settings_native_snapshots() {
                                         imported.id = "ccs:codex:pet-imported".into();
                                         imported.source = ProviderSource::Ccs {
                                             id: "pet-imported".into(),
+                                            protected_route: None,
                                         };
                                         app.store.providers.push(imported);
                                     });

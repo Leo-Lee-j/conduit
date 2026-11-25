@@ -1257,7 +1257,12 @@ impl ConduitApp {
             return self.engine_catalog(provider).cloned().unwrap_or_default();
         }
         let catalog = self.catalogs.get(&provider);
-        let synced = self.ccs.current(provider);
+        let synced = self
+            .store
+            .ccs_catalog
+            .as_ref()
+            .unwrap_or(&self.ccs)
+            .current(provider);
         match (catalog, synced) {
             (Some(catalog), Some(synced)) if !synced.models.is_empty() => {
                 catalog.with_synced(&format!("CCS · {}", synced.name), &synced.models)

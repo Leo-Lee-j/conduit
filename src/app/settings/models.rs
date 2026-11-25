@@ -712,8 +712,12 @@ impl ConduitApp {
         if self.closing || self.connection_settings.syncing {
             return;
         }
-        self.connection_settings.syncing = true;
         self.ensure_opencode_models(refresh, cx);
+        // Opening settings uses the durable import. Only an explicit refresh reads external files.
+        if !refresh {
+            return;
+        }
+        self.connection_settings.syncing = true;
         cx.notify();
         // Reading the CLI config files and the cc-switch SQLite database must
         // not block the first frame of the settings dialog (or the UI thread at
@@ -731,17 +735,21 @@ impl ConduitApp {
                 .await;
             let _ = this.update_in(cx, |this, _, cx| {
                 this.connection_settings.syncing = false;
-                this.catalogs.insert(Provider::Claude, loaded.0);
-                this.catalogs.insert(Provider::Codex, loaded.1);
-                this.ccs = loaded.2;
-                if refresh {
-                    this.store.refresh_ccs_providers(&this.ccs);
-                } else {
-                    this.store.sync_ccs_providers(&this.ccs);
-                }
+                let claude = this.store.cache_model_catalog(Provider::Claude, loaded.0);
+                let codex = this.store.cache_model_catalog(Provider::Codex, loaded.1);
+                this.catalogs.insert(Provider::Claude, claude);
+                this.catalogs.insert(Provider::Codex, codex);
+                this.store.refresh_ccs_providers(&loaded.2);
+                this.ccs = this
+                    .store
+                    .ccs_catalog
+                    .clone()
+                    .unwrap_or_else(|| loaded.2.clone());
+                this.ccs.error = loaded.2.error;
+                this.ccs.note = loaded.2.note;
                 cx.emit(crate::providers::ProviderCatalogChanged);
                 if this.writable {
-                    this.dirty = true;
+                    this.persist();
                 }
                 cx.notify();
             });

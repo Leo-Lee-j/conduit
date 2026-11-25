@@ -78,7 +78,7 @@ Enter / F3 跳到下一个结果，Shift+Enter / Shift+F3 跳到上一个，到�
 
 服务列表提供“用于新会话”和引用位置查看。**新会话默认**按引擎保存服务与模型；现有会话保留自己的配置，输入区临时选择优先于默认值。自动命名与 Git 提交说明的模型在各自页面设置。
 
-Claude / Codex 支持自定义 Provider 与 CCS 配置同步。OpenCode 使用自己的 Provider、模型目录和原生思考档位，配置方式见 [OpenCode 文档](cli-adapters.md)。切换模型会清除不再适用的档位。“重新读取配置”读取 CLI 和 cc-switch 的配置；从 cc-switch 导入的服务仍在 cc-switch 中编辑。被会话、辅助任务或新会话默认设置引用的服务不能直接删除，引用列表包含历史会话。
+Claude / Codex 支持自定义 Provider 与 CCS 配置同步。OpenCode 使用自己的 Provider、模型目录和原生思考档位，配置方式见 [OpenCode 文档](cli-adapters.md)。切换模型会清除不再适用的档位。“重新读取配置”显式同步 CLI 和 cc-switch 的配置，并将成功读取的模型目录和服务运行配置保存到 Conduit 本地。启动、打开设置和新建会话复用缓存，关闭 cc-switch 不会改变已同步的模型列表；外部文件缺失或读取失败时保留上次成功的缓存。从 cc-switch 导入的服务仍在 cc-switch 中编辑，修改后再次同步。被会话、辅助任务或新会话默认设置引用的服务不能直接删除，引用列表包含历史会话。
 
 | 环境变量 | 用途 |
 | --- | --- |

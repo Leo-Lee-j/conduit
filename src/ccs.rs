@@ -1,19 +1,19 @@
 //! Read-only model catalogs from the local cc-switch database.
 //!
-//! Queries extract only model identifiers, display names, context sizes and
-//! visibility. Only execution resolves the explicitly selected provider
-//! credentials; those are never stored in application state or displayed.
+//! Synchronization captures model metadata and account-protected route snapshots.
+//! Imported services then run independently of cc-switch and its database.
 use crate::{
     domain::Provider,
     models::{self, ModelOption},
 };
+use anyhow::Context;
 use rusqlite::{Connection, OpenFlags};
 use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CcsProvider {
     pub provider: Provider,
     pub name: String,
@@ -23,10 +23,13 @@ pub struct CcsProvider {
     pub base_url: String,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct CcsCatalog {
     pub database_path: PathBuf,
     pub providers: Vec<CcsProvider>,
+    #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub protected_routes: std::collections::HashMap<String, String>,
     pub error: Option<String>,
     pub note: Option<String>,
 }
@@ -44,7 +47,13 @@ impl CcsCatalog {
                 api_key_env: String::new(),
                 protected_api_key: None,
                 models: p.models.iter().map(|m| m.id.clone()).collect(),
-                source: crate::providers::ProviderSource::Ccs { id: p.id.clone() },
+                source: crate::providers::ProviderSource::Ccs {
+                    id: p.id.clone(),
+                    protected_route: self
+                        .protected_routes
+                        .get(&crate::providers::ModelProvider::ccs_id(p.provider, &p.id))
+                        .cloned(),
+                },
                 model_metadata: p.models.clone(),
                 claude_models: None,
             })
@@ -81,8 +90,6 @@ pub fn runtime_route(
     engine: Provider,
     id: &str,
 ) -> anyhow::Result<crate::providers::RuntimeRoute> {
-    use crate::providers::RuntimeRoute;
-    use anyhow::{Context, bail};
     let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     connection.busy_timeout(Duration::from_millis(500))?;
     let app = match engine {
@@ -105,6 +112,15 @@ pub fn runtime_route(
             "ccs.invalid_ccs_provider_configuration"
         ))
     })?;
+    route_from_settings(engine, &settings)
+}
+
+fn route_from_settings(
+    engine: Provider,
+    settings: &serde_json::Value,
+) -> anyhow::Result<crate::providers::RuntimeRoute> {
+    use crate::providers::RuntimeRoute;
+    use anyhow::bail;
     match engine {
         Provider::Qoder => bail!(conduit::i18n::text("qoder.native_route")),
         Provider::OpenCode => bail!(conduit::i18n::text(
@@ -245,7 +261,7 @@ pub fn load_from(path: &Path) -> CcsCatalog {
         catalog.note =
             Some(conduit::i18n::text_static("ccs.no_claude_codex_models_to_list_in").into());
     }
-    // Synchronize public configuration metadata without querying auth fields.
+    // Read each complete configuration once; persist secrets only as ciphertext.
     for provider in &mut providers {
         let app = match provider.provider {
             Provider::Claude => "claude",
@@ -253,10 +269,24 @@ pub fn load_from(path: &Path) -> CcsCatalog {
             Provider::OpenCode => "opencode",
             Provider::Qoder => "qoder",
         };
-        let endpoint: rusqlite::Result<Option<String>> = connection.query_row(
-            "SELECT CASE WHEN app_type = 'claude' THEN json_extract(settings_config, '$.env.ANTHROPIC_BASE_URL') ELSE json_extract(settings_config, '$.config') END FROM providers WHERE id = ?1 AND app_type = ?2",
-            rusqlite::params![provider.id, app], |row| row.get(0));
-        provider.base_url = match (provider.provider, endpoint.ok().flatten()) {
+        let raw: rusqlite::Result<String> = connection.query_row(
+            "SELECT settings_config FROM providers WHERE id = ?1 AND app_type = ?2",
+            rusqlite::params![provider.id, app],
+            |row| row.get(0),
+        );
+        let settings = raw
+            .ok()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok());
+        let endpoint = settings.as_ref().and_then(|settings| {
+            if provider.provider == Provider::Claude {
+                settings.pointer("/env/ANTHROPIC_BASE_URL")
+            } else {
+                settings.get("config")
+            }
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+        });
+        provider.base_url = match (provider.provider, endpoint) {
             (Provider::Claude, Some(url)) => url,
             (Provider::Codex, Some(config)) => config
                 .parse::<toml::Value>()
@@ -272,6 +302,29 @@ pub fn load_from(path: &Path) -> CcsCatalog {
                 .unwrap_or_default(),
             _ => String::new(),
         };
+        if !provider.base_url.is_empty() {
+            let snapshot = settings
+                .as_ref()
+                .context("Missing imported provider configuration")
+                .and_then(|settings| route_from_settings(provider.provider, settings))
+                .and_then(|route| Ok(serde_json::to_string(&route)?))
+                .and_then(|json| crate::providers::credentials::protect(&json));
+            match snapshot {
+                Ok(snapshot) => {
+                    catalog.protected_routes.insert(
+                        crate::providers::ModelProvider::ccs_id(provider.provider, &provider.id),
+                        snapshot,
+                    );
+                }
+                Err(_) => {
+                    // Do not publish a partial import or include secret-bearing input in errors.
+                    catalog.error = Some(conduit::i18n::text(
+                        "ccs.invalid_ccs_provider_configuration",
+                    ));
+                    return catalog;
+                }
+            }
+        }
     }
     catalog.providers = providers;
     catalog
@@ -568,6 +621,154 @@ mod tests {
         assert!(!debug.contains("claude-secret"));
         assert!(!debug.contains("codex-secret"));
         assert_eq!(claude.base_url, "https://ignore.invalid");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn imported_snapshots_survive_database_changes_removal_and_restart() {
+        use crate::{providers::ModelProvider, store::Store};
+        let _locale = crate::test_support::chinese();
+        let path = database("durable-import");
+        create_database(&path);
+        let connection = Connection::open(&path).unwrap();
+        let codex_settings = serde_json::json!({
+            "auth": {"OPENAI_API_KEY": "snapshot-codex-secret"},
+            "config": "model = \"codex-snapshot\"\nmodel_provider = \"proxy\"\n[model_providers.proxy]\nbase_url = \"https://codex.invalid/v1\"\nwire_api = \"responses\"\nstream_idle_timeout_ms = 42000\n[model_providers.proxy.http_headers]\nx-private = \"snapshot-header-secret\"\n[model_providers.proxy.query_params]\nversion = \"2026-test\"\n",
+            "modelCatalog": {"models": [
+                {"model": "codex-snapshot", "displayName": "Cached Codex", "contextWindow": 256000},
+                {"model": "codex-secondary"}
+            ]}
+        });
+        let claude_settings = serde_json::json!({"env": {
+            "ANTHROPIC_BASE_URL": "https://claude.invalid",
+            "ANTHROPIC_AUTH_TOKEN": "snapshot-claude-secret",
+            "ANTHROPIC_MODEL": "claude-snapshot",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-snapshot",
+            "CLAUDE_CODE_SUBAGENT_MODEL": "claude-subagent-snapshot"
+        }});
+        for (app, settings) in [("codex", &codex_settings), ("claude", &claude_settings)] {
+            connection
+                .execute(
+                    "INSERT INTO providers VALUES ('shared-id', ?1, 'Snapshot', ?2, 0, 1)",
+                    params![app, settings.to_string()],
+                )
+                .unwrap();
+        }
+        let mut store = Store::default();
+        let imported = load_from(&path);
+        assert!(imported.error.is_none());
+        store.refresh_ccs_providers(&imported);
+        let saved = path.with_extension("state.json");
+        store.save_to(&saved).unwrap();
+        let json = std::fs::read_to_string(&saved).unwrap();
+        for secret in [
+            "snapshot-codex-secret",
+            "snapshot-claude-secret",
+            "snapshot-header-secret",
+        ] {
+            assert!(!json.contains(secret));
+            assert!(!format!("{imported:?}").contains(secret));
+        }
+        let mut restored = Store::load_from(&saved).unwrap();
+        let codex_id = ModelProvider::ccs_id(Provider::Codex, "shared-id");
+        let claude_id = ModelProvider::ccs_id(Provider::Claude, "shared-id");
+        let mut changed = codex_settings.clone();
+        changed["auth"]["OPENAI_API_KEY"] = "updated-codex-secret".into();
+        changed["modelCatalog"]["models"] = serde_json::json!([
+            {"model": "codex-snapshot", "displayName": "Updated Codex", "contextWindow": 512000}
+        ]);
+        connection
+            .execute(
+                "UPDATE providers SET settings_config = ?1 WHERE app_type = 'codex'",
+                [changed.to_string()],
+            )
+            .unwrap();
+        let provider = restored
+            .providers
+            .iter()
+            .find(|p| p.id == codex_id)
+            .unwrap();
+        assert_eq!(
+            provider.runtime_route(&path).unwrap().env["CONDUIT_PROVIDER_API_KEY"],
+            "snapshot-codex-secret"
+        );
+        assert_eq!(provider.catalog()[0].label, "Cached Codex");
+        assert_eq!(
+            restored
+                .load_ccs_catalog()
+                .current(Provider::Codex)
+                .unwrap()
+                .models
+                .len(),
+            2
+        );
+        // Only explicit synchronization adopts changed credentials and removed models.
+        restored.refresh_ccs_providers(&load_from(&path));
+        let provider = restored
+            .providers
+            .iter()
+            .find(|p| p.id == codex_id)
+            .unwrap();
+        assert_eq!(provider.catalog().len(), 1);
+        assert_eq!(provider.catalog()[0].label, "Updated Codex");
+        assert_eq!(provider.catalog()[0].context_window, Some(512000));
+        assert_eq!(
+            provider.runtime_route(&path).unwrap().env["CONDUIT_PROVIDER_API_KEY"],
+            "updated-codex-secret"
+        );
+        drop(connection);
+        std::fs::remove_file(&path).unwrap();
+        restored.refresh_ccs_providers(&load_from(&path));
+        std::fs::write(&path, "invalid database").unwrap();
+        restored.refresh_ccs_providers(&load_from(&path));
+        std::fs::remove_file(&path).unwrap();
+        restored.save_to(&saved).unwrap();
+        let mut restarted = Store::load_from(&saved).unwrap();
+        assert_eq!(
+            restarted
+                .load_ccs_catalog()
+                .current(Provider::Codex)
+                .unwrap()
+                .id,
+            "shared-id"
+        );
+        assert_eq!(restarted.providers.len(), 2);
+        let codex = restarted
+            .providers
+            .iter()
+            .find(|p| p.id == codex_id)
+            .unwrap();
+        let route = codex.runtime_route(&path).unwrap();
+        assert_eq!(route.default_model.as_deref(), Some("codex-snapshot"));
+        assert_eq!(
+            route.env["CONDUIT_PROVIDER_API_KEY"],
+            "updated-codex-secret"
+        );
+        let config = &route.config["model_providers"]["conduit"];
+        assert_eq!(config["base_url"], "https://codex.invalid/v1");
+        assert_eq!(
+            config["http_headers"]["x-private"],
+            "snapshot-header-secret"
+        );
+        assert_eq!(config["query_params"]["version"], "2026-test");
+        assert_eq!(config["stream_idle_timeout_ms"], 42000);
+        let claude = restarted
+            .providers
+            .iter()
+            .find(|p| p.id == claude_id)
+            .unwrap();
+        let route = claude.runtime_route(&path).unwrap();
+        assert_eq!(route.default_model.as_deref(), Some("claude-snapshot"));
+        assert_eq!(route.env["ANTHROPIC_BASE_URL"], "https://claude.invalid");
+        assert_eq!(route.env["ANTHROPIC_AUTH_TOKEN"], "snapshot-claude-secret");
+        assert_eq!(
+            route.env["ANTHROPIC_DEFAULT_SONNET_MODEL"],
+            "claude-sonnet-snapshot"
+        );
+        assert_eq!(
+            route.env["CLAUDE_CODE_SUBAGENT_MODEL"],
+            "claude-subagent-snapshot"
+        );
     }
 
     #[test]

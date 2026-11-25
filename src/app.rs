@@ -733,8 +733,15 @@ impl ConduitApp {
                 this.apply_appearance(window, cx);
             }
         });
-        let ccs = ccs::load();
-        store.sync_ccs_providers(&ccs);
+        let had_ccs_cache = store.ccs_catalog.is_some();
+        let cached_engines = store.cli_model_catalogs.len();
+        let ccs = store.load_ccs_catalog();
+        let catalogs = Provider::ALL
+            .into_iter()
+            .map(|provider| (provider, store.load_model_catalog(provider)))
+            .collect();
+        let model_cache_changed = had_ccs_cache != store.ccs_catalog.is_some()
+            || cached_engines != store.cli_model_catalogs.len();
         let scroll = gpui_kit::ListState::new(0, ListAlignment::Bottom, px(240.));
         let app = cx.entity().downgrade();
         let timeline = cx.new(|_| shell::ChatTimeline::new(app.clone(), scroll.clone()));
@@ -804,10 +811,7 @@ impl ConduitApp {
             queued_messages: HashMap::new(),
             probes: HashMap::new(),
             diagnostics: HashMap::new(),
-            catalogs: Provider::ALL
-                .into_iter()
-                .map(|provider| (provider, models::load(provider)))
-                .collect(),
+            catalogs,
             opencode_catalogs: HashMap::new(),
             opencode_model_probes: HashMap::new(),
             ccs,
@@ -914,6 +918,8 @@ impl ConduitApp {
             app.show_git_navigation(cx);
         }
         app.cleanup_attachments();
+        // Import metadata has no attachment references; schedule it after startup collection.
+        app.dirty |= writable && model_cache_changed;
         app.ensure_selected_transcript(cx);
         app.restore_background(window, cx);
         app

@@ -22,8 +22,13 @@ pub struct ModelOption {
     pub context_window: Option<u64>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct ModelCatalog {
+    /// Missing/unreadable sources must not replace a durable snapshot.
+    #[serde(skip)]
+    pub incomplete: bool,
+    #[serde(skip)]
     pub fetched_at: Option<std::time::SystemTime>,
     pub config_path: PathBuf,
     pub catalog_path: Option<PathBuf>,
@@ -279,6 +284,7 @@ fn claude(home: &Path) -> ModelCatalog {
         ..Default::default()
     };
     if !path.exists() {
+        catalog.incomplete = true;
         catalog.note = Some(
             conduit::i18n::text_static("models.claude_configuration_not_found_using_the_cli")
                 .into(),
@@ -345,7 +351,7 @@ fn claude(home: &Path) -> ModelCatalog {
             push_model(&mut catalog.models, id, id, role);
         }
     }
-    if catalog.models.is_empty() {
+    if catalog.models.is_empty() && catalog.note.is_none() {
         catalog.note = Some(
             conduit::i18n::text_static("models.no_model_declared_in_configuration_using_the")
                 .into(),
@@ -362,6 +368,7 @@ fn codex(home: &Path) -> ModelCatalog {
         ..Default::default()
     };
     if !path.exists() {
+        catalog.incomplete = true;
         catalog.note = Some(
             conduit::i18n::text_static("models.codex_configuration_not_found_using_the_cli").into(),
         );
@@ -482,9 +489,16 @@ fn codex(home: &Path) -> ModelCatalog {
                                     context_window,
                                 );
                             }
+                        } else {
+                            catalog.incomplete = true;
+                            catalog.note = Some(conduit::i18n::format(
+                                "models.model_catalog_is_not_valid_json_showing",
+                                &[("error", "expected a models array".into())],
+                            ));
                         }
                     }
                     Err(error) => {
+                        catalog.incomplete = true;
                         catalog.note = Some(conduit::i18n::format(
                             "models.model_catalog_is_not_valid_json_showing",
                             &[("error", format!("{}", error))],
@@ -493,6 +507,7 @@ fn codex(home: &Path) -> ModelCatalog {
                 }
             }
             Err(error) => {
+                catalog.incomplete = true;
                 catalog.note = Some(conduit::i18n::format(
                     "models.model_catalog_was_not_read",
                     &[
@@ -511,7 +526,7 @@ fn codex(home: &Path) -> ModelCatalog {
             conduit::i18n::text_static("models.current_configuration"),
         );
     }
-    if catalog.models.is_empty() {
+    if catalog.models.is_empty() && catalog.note.is_none() {
         catalog.note = Some(
             conduit::i18n::text_static("models.no_model_definitions_found_using_the_cli").into(),
         );

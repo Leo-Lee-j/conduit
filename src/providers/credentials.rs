@@ -1,4 +1,4 @@
-//! Protect manually entered service credentials for the current Windows user.
+//! Protect service credentials and imported route snapshots for the current Windows user.
 use anyhow::{Result, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 

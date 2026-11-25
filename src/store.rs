@@ -508,6 +508,11 @@ pub struct Store {
     pub git: GitSettings,
     #[serde(default, alias = "custom_providers")]
     pub providers: Vec<crate::providers::ModelProvider>,
+    /// Last successful import, independent of external configuration lifetimes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ccs_catalog: Option<crate::ccs::CcsCatalog>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub cli_model_catalogs: HashMap<crate::domain::Provider, crate::models::ModelCatalog>,
     #[serde(default)]
     pub session_defaults: std::collections::HashMap<crate::domain::Provider, SessionDefaults>,
 }
@@ -521,6 +526,47 @@ pub struct SessionDefaults {
 }
 
 impl Store {
+    pub fn load_ccs_catalog(&mut self) -> crate::ccs::CcsCatalog {
+        if let Some(catalog) = &self.ccs_catalog {
+            return catalog.clone();
+        }
+        let catalog = crate::ccs::load();
+        self.sync_ccs_providers(&catalog);
+        catalog
+    }
+
+    pub fn load_model_catalog(
+        &mut self,
+        engine: crate::domain::Provider,
+    ) -> crate::models::ModelCatalog {
+        if let Some(catalog) = self.cli_model_catalogs.get(&engine) {
+            return catalog.clone();
+        }
+        self.cache_model_catalog(engine, crate::models::load(engine))
+    }
+
+    pub fn cache_model_catalog(
+        &mut self,
+        engine: crate::domain::Provider,
+        catalog: crate::models::ModelCatalog,
+    ) -> crate::models::ModelCatalog {
+        if !engine.descriptor().capabilities.model_services {
+            return catalog;
+        }
+        if catalog.error.is_some() || catalog.incomplete {
+            if let Some(cached) = self.cli_model_catalogs.get(&engine) {
+                let mut effective = cached.clone();
+                effective.incomplete = true;
+                effective.error = catalog.error;
+                effective.note = catalog.note;
+                return effective;
+            }
+        } else {
+            self.cli_model_catalogs.insert(engine, catalog.clone());
+        }
+        catalog
+    }
+
     /// Merge imported providers by stable origin id and migrate the earlier
     /// CCS-only session selection to the shared provider registry.
     pub fn sync_ccs_providers(&mut self, catalog: &crate::ccs::CcsCatalog) {
@@ -537,11 +583,16 @@ impl Store {
         if catalog.error.is_none() && catalog.database_path.is_file() {
             self.providers.retain(|p| match &p.source {
                 crate::providers::ProviderSource::Local => true,
-                crate::providers::ProviderSource::Ccs { id } => catalog
+                crate::providers::ProviderSource::Ccs { id, .. } => catalog
                     .providers
                     .iter()
                     .any(|entry| entry.id == *id && entry.provider == p.engine),
             });
+        }
+        if catalog.error.is_none()
+            && (catalog.database_path.is_file() || !catalog.providers.is_empty())
+        {
+            self.ccs_catalog = Some(catalog.clone());
         }
         for mut imported in catalog.imported_providers() {
             if let Some(provider) = self.providers.iter_mut().find(|p| p.id == imported.id) {
@@ -680,6 +731,8 @@ impl Store {
                 updates: Default::default(),
                 git: Default::default(),
                 providers: vec![],
+                ccs_catalog: None,
+                cli_model_catalogs: HashMap::new(),
                 session_defaults: Default::default(),
             });
         }
@@ -1067,6 +1120,114 @@ mod tests {
         assert_eq!(session.channel, ModelChannel::Provider("local".into()));
     }
     #[test]
+    fn cli_catalog_snapshot_survives_missing_external_files_and_failed_refresh() {
+        use crate::models;
+        let _locale = crate::test_support::chinese();
+        let directory = std::env::temp_dir().join(format!(
+            "conduit-cli-cache-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let codex = directory.join(".codex");
+        fs::create_dir_all(&codex).unwrap();
+        fs::write(
+            codex.join("config.toml"),
+            "model = \"snapshot-model\"\nmodel_catalog_json = \"ccs-models.json\"\n",
+        )
+        .unwrap();
+        fs::write(codex.join("ccs-models.json"), serde_json::json!({"models": [
+            {"slug": "snapshot-model", "display_name": "Snapshot Model", "context_window": 256000},
+            {"slug": "secondary-model", "display_name": "Secondary Model", "context_window": 1000000},
+            {"slug": "hidden-model", "visibility": "hide"}
+        ]}).to_string()).unwrap();
+        let mut store = Store::default();
+        let expected = store.cache_model_catalog(
+            Provider::Codex,
+            models::load_from(Provider::Codex, &directory),
+        );
+        assert_eq!(expected.models.len(), 2);
+        fs::remove_file(codex.join("ccs-models.json")).unwrap();
+        let state_path = directory.join("state.json");
+        store.save_to(&state_path).unwrap();
+        let mut restarted = Store::load_from(&state_path).unwrap();
+        let cached = restarted.load_model_catalog(Provider::Codex);
+        assert_eq!(cached.models, expected.models);
+        assert_eq!(cached.current, expected.current);
+        // A readable config pointing at a vanished generated catalog is still a failed refresh.
+        let partial = models::load_from(Provider::Codex, &directory);
+        assert!(partial.note.is_some());
+        let effective = restarted.cache_model_catalog(Provider::Codex, partial);
+        assert!(effective.note.is_some());
+        assert_eq!(effective.models, expected.models);
+        for invalid_catalog in ["not json", "{}"] {
+            fs::write(codex.join("ccs-models.json"), invalid_catalog).unwrap();
+            let invalid = models::load_from(Provider::Codex, &directory);
+            assert!(invalid.incomplete);
+            assert_eq!(
+                restarted
+                    .cache_model_catalog(Provider::Codex, invalid)
+                    .models,
+                expected.models
+            );
+        }
+        fs::remove_file(codex.join("ccs-models.json")).unwrap();
+        fs::write(codex.join("config.toml"), "invalid toml").unwrap();
+        let effective = restarted.cache_model_catalog(
+            Provider::Codex,
+            models::load_from(Provider::Codex, &directory),
+        );
+        assert!(effective.error.is_some());
+        assert_eq!(effective.models, expected.models);
+        fs::remove_file(codex.join("config.toml")).unwrap();
+        let effective = restarted.cache_model_catalog(
+            Provider::Codex,
+            models::load_from(Provider::Codex, &directory),
+        );
+        assert_eq!(effective.models, expected.models);
+        assert!(
+            restarted
+                .load_model_catalog(Provider::Codex)
+                .error
+                .is_none()
+        );
+        // A successful explicit reread replaces the snapshot, including genuine removals.
+        fs::write(codex.join("config.toml"), "model = \"replacement-model\"\n").unwrap();
+        let updated = restarted.cache_model_catalog(
+            Provider::Codex,
+            models::load_from(Provider::Codex, &directory),
+        );
+        assert_eq!(updated.models.len(), 1);
+        assert_eq!(updated.current.as_deref(), Some("replacement-model"));
+        restarted.save_to(&state_path).unwrap();
+        assert_eq!(
+            Store::load_from(&state_path)
+                .unwrap()
+                .load_model_catalog(Provider::Codex)
+                .models,
+            updated.models
+        );
+        fs::write(
+            codex.join("config.toml"),
+            "model_catalog_json = \"ccs-models.json\"\n",
+        )
+        .unwrap();
+        fs::write(codex.join("ccs-models.json"), r#"{"models":[]}"#).unwrap();
+        let empty = models::load_from(Provider::Codex, &directory);
+        assert!(empty.models.is_empty());
+        assert!(!empty.incomplete);
+        restarted.cache_model_catalog(Provider::Codex, empty);
+        assert!(
+            restarted
+                .load_model_catalog(Provider::Codex)
+                .models
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn ccs_sync_preserves_saved_model_catalog_after_restart_and_refresh() {
         let _locale = crate::test_support::chinese();
         let mut catalog = crate::ccs::CcsCatalog {
@@ -1204,6 +1365,8 @@ mod tests {
             updates: Default::default(),
             git: Default::default(),
             providers: vec![],
+            ccs_catalog: None,
+            cli_model_catalogs: HashMap::new(),
             session_defaults: Default::default(),
             workspaces: vec![Workspace {
                 path: directory.clone(),

@@ -613,6 +613,7 @@ fn settings_service_actions_keep_history_and_revalidate_routes(cx: &mut TestAppC
             app.store.git.generation_channel = None;
             app.store.providers[0].source = ProviderSource::Ccs {
                 id: "external".into(),
+                protected_route: None,
             };
             assert!(
                 !app.delete_model_service(&provider.id, cx),
@@ -670,6 +671,7 @@ fn settings_services_inline_selection_resizes_without_changing_defaults(cx: &mut
     second.name = "Imported service".into();
     second.source = ProviderSource::Ccs {
         id: "external".into(),
+        protected_route: None,
     };
     let route = ModelChannel::Provider(first.id.clone());
     cx.simulate_resize(size(px(1500.), px(850.)));
@@ -823,4 +825,67 @@ fn settings_services_inline_selection_resizes_without_changing_defaults(cx: &mut
     });
     assert!(cx.debug_bounds("service-list").is_some());
     assert!(cx.debug_bounds("service-details").is_none());
+}
+
+#[gpui_kit::test]
+fn cached_cli_models_survive_app_start_settings_and_new_sessions(cx: &mut TestAppContext) {
+    use crate::{
+        domain::Provider,
+        models::{ModelCatalog, ModelOption},
+        providers::ModelChannel,
+    };
+    let _locale = crate::test_support::chinese();
+    cx.update(gpui_kit::init);
+    let expected = vec![
+        ModelOption {
+            id: "cached-default".into(),
+            label: "Cached default".into(),
+            note: "Imported model".into(),
+            context_window: Some(256000),
+        },
+        ModelOption {
+            id: "cached-secondary".into(),
+            label: "Cached secondary".into(),
+            note: String::new(),
+            context_window: Some(1000000),
+        },
+    ];
+    let mut store = Store {
+        ccs_catalog: Some(Default::default()),
+        ..Default::default()
+    };
+    for engine in [Provider::Claude, Provider::Codex] {
+        store.cache_model_catalog(
+            engine,
+            ModelCatalog {
+                current: Some("cached-default".into()),
+                models: expected.clone(),
+                ..Default::default()
+            },
+        );
+    }
+    let restored = serde_json::from_str(&serde_json::to_string(&store).unwrap()).unwrap();
+    let (app, cx) = cx.add_window_view(|window, cx| {
+        let mut app = ConduitApp::with_store(window, cx, Ok(restored), false, false);
+        app.startup = None;
+        app.writable = false;
+        app
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            for engine in [Provider::Claude, Provider::Codex] {
+                assert_eq!(app.channel_models(engine, &ModelChannel::Cli).1, expected);
+                let session = app.prepare_session_with_defaults(engine, false);
+                assert_eq!(session.model.as_deref(), Some("cached-default"));
+                assert_eq!(app.channel_models(engine, &ModelChannel::Cli).1, expected);
+            }
+            app.reload_all_models_async(false, window, cx);
+            assert!(!app.connection_settings.syncing);
+            assert_eq!(
+                app.channel_models(Provider::Codex, &ModelChannel::Cli).1,
+                expected
+            );
+            assert!(app.store.providers.is_empty());
+        })
+    });
 }

@@ -1452,10 +1452,9 @@ impl ConduitApp {
     ) -> SessionRecord {
         let id = self.next_id;
         if provider != Provider::OpenCode {
-            self.catalogs.insert(provider, models::load(provider));
+            self.catalogs
+                .insert(provider, self.store.load_model_catalog(provider));
         }
-        self.ccs = ccs::load();
-        self.store.sync_ccs_providers(&self.ccs);
         let model = self
             .catalogs
             .get(&provider)
