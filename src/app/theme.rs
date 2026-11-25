@@ -175,7 +175,7 @@ pub(super) fn is_dark_mode() -> bool {
     DARK_MODE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// Project identity is projected for the new light themes without rewriting saved colors.
+/// Project identity follows the paired themes without rewriting saved colors.
 pub(super) fn project_marker_color(path: &std::path::Path, stored: Option<u32>) -> Option<u32> {
     if !palette().restrained_projects {
         return stored;
@@ -196,7 +196,12 @@ pub(super) fn project_marker_color(path: &std::path::Path, stored: Option<u32>) 
             });
         [0.62, 0.46, 0.70, 0.34, 0.54, 0.22][hash as usize % 6]
     };
-    let color: gpui_kit::Rgba = gpui_kit::hsla(hue, 0.28, 0.52, 1.).into();
+    let (saturation, lightness) = if is_dark_mode() {
+        (0.48, 0.68)
+    } else {
+        (0.28, 0.52)
+    };
+    let color: gpui_kit::Rgba = gpui_kit::hsla(hue, saturation, lightness, 1.).into();
     Some(
         ((color.r * 255.).round() as u32) << 24
             | ((color.g * 255.).round() as u32) << 16
@@ -221,6 +226,7 @@ pub(super) fn palette_for_mode(mode: gpui_kit::component::ThemeMode) -> Palette 
 const THEME_PACKS: &[&str] = &[
     include_str!("../../assets/themes/conduit.json"),
     include_str!("../../assets/themes/conduit-lights.json"),
+    include_str!("../../assets/themes/conduit-darks.json"),
     include_str!("../../assets/themes/adventure.json"),
     include_str!("../../assets/themes/alduin.json"),
     include_str!("../../assets/themes/asciinema.json"),
@@ -304,6 +310,10 @@ pub(crate) fn apply_theme(mode: ThemeMode, light: &str, dark: &str, cx: &mut gpu
         || current.dark_theme.name != dark.name;
     if changed {
         Theme::update(cx, |theme| {
+            // Theme packs may disable shadows; restore the default when switching away.
+            theme.shadow = if mode.is_dark() { &dark } else { &light }
+                .shadow
+                .unwrap_or(true);
             theme.light_theme = light;
             theme.dark_theme = dark;
         });
@@ -391,8 +401,14 @@ fn readable(color: u32, backgrounds: &[u32]) -> u32 {
 fn palette_from_theme(theme: &Theme) -> Palette {
     let restrained_projects = matches!(
         theme.theme_name().as_ref(),
-        "Graphite & Indigo" | "Warm Paper & Terracotta" | "Slate & Teal"
+        "Graphite & Indigo"
+            | "Warm Paper & Terracotta"
+            | "Slate & Teal"
+            | "Graphite & Indigo Dark"
+            | "Warm Charcoal & Terracotta"
+            | "Deep Slate & Teal"
     );
+    let dark_status = restrained_projects && theme.is_dark();
     let canvas = color_on(theme.background, if theme.is_dark() { 0 } else { 0xffffff });
     let surface = color_on(theme.popover, canvas);
     let sidebar_bg = color_on(theme.tab_bar, canvas);
@@ -406,13 +422,32 @@ fn palette_from_theme(theme: &Theme) -> Palette {
     };
     let surface_hover = color_on(theme.secondary_hover, canvas);
     let surface_strong = color_on(theme.group_box, canvas);
-    let backgrounds = [canvas, sidebar_bg, surface, surface_hover, surface_strong];
+    let selected = if dark_status {
+        color_on(theme.list_active, canvas)
+    } else {
+        canvas
+    };
+    let backgrounds = [
+        canvas,
+        sidebar_bg,
+        surface,
+        surface_hover,
+        surface_strong,
+        selected,
+    ];
     let text = readable(color_on(theme.foreground, canvas), &backgrounds);
     let muted = readable(color_on(theme.muted_foreground, canvas), &backgrounds);
     let primary = readable(color_on(theme.primary, canvas), &backgrounds);
-    let success = readable(color_on(theme.success, canvas), &backgrounds);
-    let danger = readable(color_on(theme.danger, canvas), &backgrounds);
-    let warning = readable(color_on(theme.warning, canvas), &backgrounds);
+    // The paired dark themes use deep status fills with separate bright text.
+    let status_text = |fill, foreground| {
+        readable(
+            color_on(if dark_status { foreground } else { fill }, canvas),
+            &backgrounds,
+        )
+    };
+    let success = status_text(theme.success, theme.success_foreground);
+    let danger = status_text(theme.danger, theme.danger_foreground);
+    let warning = status_text(theme.warning, theme.warning_foreground);
     Palette {
         restrained_projects,
         canvas,
@@ -447,13 +482,23 @@ fn palette_from_theme(theme: &Theme) -> Palette {
         git_modified_text: warning,
         git_deleted_text: danger,
         danger_border: blend(danger, canvas, 0.4),
-        danger_bg: blend(danger, canvas, 0.08),
+        danger_bg: if dark_status {
+            color_on(theme.danger, canvas)
+        } else {
+            blend(danger, canvas, 0.08)
+        },
         danger_text: danger,
         warning_border: blend(warning, canvas, 0.4),
-        warning_bg: blend(warning, canvas, 0.06),
+        warning_bg: if dark_status {
+            color_on(theme.warning, canvas)
+        } else {
+            blend(warning, canvas, 0.06)
+        },
         warning_icon_bg: blend(warning, canvas, 0.12),
         warning_text: warning,
-        context_warning_fill: if restrained_projects {
+        context_warning_fill: if dark_status {
+            0xe0a33a
+        } else if restrained_projects {
             0xd98a12
         } else {
             warning
@@ -529,4 +574,65 @@ pub(super) fn theme_choices(mode: ThemeMode, cx: &gpui_kit::App) -> Vec<ThemeCho
         .collect();
     choices.sort_by_key(|theme| (theme.name.as_ref() != default, theme.name.to_lowercase()));
     choices
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dark_theme_status_text_and_selected_rows_remain_readable() {
+        let pack: gpui_kit::component::ThemeSet =
+            serde_json::from_str(include_str!("../../assets/themes/conduit-darks.json")).unwrap();
+        for config in pack.themes {
+            let mut theme = Theme::default();
+            theme.apply_config(&Rc::new(config));
+            let palette = palette_from_theme(&theme);
+            assert!(palette.restrained_projects);
+            for (fill, foreground, projected) in [
+                (
+                    theme.success,
+                    theme.success_foreground,
+                    palette.git_added_text,
+                ),
+                (theme.danger, theme.danger_foreground, palette.danger_text),
+                (
+                    theme.warning,
+                    theme.warning_foreground,
+                    palette.warning_text,
+                ),
+            ] {
+                let fill = color_on(fill, palette.canvas);
+                let foreground = color_on(foreground, palette.canvas);
+                assert_eq!(projected, foreground, "{} status hue", theme.theme_name());
+                assert!(
+                    contrast(projected, fill) >= 4.5,
+                    "{} status text",
+                    theme.theme_name()
+                );
+            }
+            for background in [
+                palette.canvas,
+                palette.sidebar_bg,
+                palette.surface,
+                palette.surface_hover,
+                palette.surface_strong,
+                palette.highlight_bg,
+            ] {
+                for foreground in [palette.text, palette.muted, palette.highlight_text] {
+                    assert!(
+                        contrast(foreground, background) >= 4.5,
+                        "{}: {foreground:06x} on {background:06x}",
+                        theme.theme_name()
+                    );
+                }
+            }
+            assert!(
+                contrast(
+                    color_on(theme.primary_foreground, palette.canvas),
+                    color_on(theme.primary, palette.canvas),
+                ) >= 4.5
+            );
+        }
+    }
 }
