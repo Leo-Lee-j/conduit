@@ -450,6 +450,11 @@ impl ConduitApp {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let session = self.session(session_id)?;
+        let saved_plan = session
+            .task_list
+            .as_ref()
+            .and_then(|list| list.visible(session))
+            .map(<[_]>::to_vec);
         let start = session
             .messages
             .iter()
@@ -461,13 +466,7 @@ impl ConduitApp {
             .cloned()
             .collect();
         let (_, historical_plan) = self.tool_analysis.turn(session_id, &items, cx);
-        let plan = self
-            .session_control
-            .plans
-            .get(&session_id)
-            .cloned()
-            .filter(|steps| !steps.is_empty())
-            .unwrap_or(historical_plan);
+        let plan = saved_plan.unwrap_or(historical_plan);
         if plan.is_empty() {
             return None;
         }
@@ -479,6 +478,7 @@ impl ConduitApp {
         let total = plan.len();
         let mut tags = h_flex()
             .id("turn-stats")
+            .test_support()
             .debug_selector(|| "turn-stats".into())
             .items_center()
             .gap(px(6.));
@@ -552,6 +552,7 @@ fn stat_tag() -> Div {
 fn turn_stats_details(plan: &[PlanStep], live: bool, window: &Window) -> AnyElement {
     let mut rows = v_flex()
         .id("turn-stats-details")
+        .test_support()
         .debug_selector(|| "turn-stats-details".into())
         .w(px(
             (f32::from(window.viewport_size().width) - 32.).clamp(200., 380.)
@@ -568,7 +569,18 @@ fn turn_stats_details(plan: &[PlanStep], live: bool, window: &Window) -> AnyElem
         .border_color(rgb(palette().border))
         .bg(rgb(palette().surface))
         .shadow_sm();
-    for step in plan {
+    for (index, step) in plan.iter().enumerate() {
+        let metadata = task_metadata(step, plan);
+        let details = [
+            step.label(),
+            step.description.clone(),
+            step.active_form.clone(),
+            metadata.clone(),
+        ]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
         let icon = match step.status {
             PlanStatus::Completed => Icon::new(IconName::CircleCheck)
                 .size(px(13.))
@@ -589,27 +601,70 @@ fn turn_stats_details(plan: &[PlanStep], live: bool, window: &Window) -> AnyElem
         };
         rows = rows.child(
             h_flex()
+                .id(SharedString::from(format!("task-row-{index}")))
+                .test_support()
+                .debug_selector(move || format!("task-row-{index}"))
+                .role(gpui_kit::Role::Group)
+                .aria_label(format!("{} {}", step.label(), metadata).trim().to_owned())
+                .tooltip(move |window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(details.clone()).build(window, cx)
+                })
                 .w_full()
                 .min_w_0()
-                .items_center()
+                .items_start()
                 .gap_2()
                 .child(icon)
                 .child(
-                    div()
+                    v_flex()
                         .flex_1()
                         .min_w_0()
-                        .truncate()
+                        .whitespace_normal()
                         .text_size(px(12.))
                         .text_color(rgb(match step.status {
                             PlanStatus::Completed => palette().faint,
                             PlanStatus::InProgress => palette().text,
                             PlanStatus::Pending => palette().muted,
                         }))
-                        .child(step.text.clone()),
+                        .child(step.label())
+                        .when(!metadata.is_empty(), |row| {
+                            row.child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(rgb(palette().muted))
+                                    .child(metadata),
+                            )
+                        }),
                 ),
         );
     }
     rows.into_any_element()
+}
+
+pub(in crate::app) fn task_metadata(step: &PlanStep, plan: &[PlanStep]) -> String {
+    let mut details = Vec::new();
+    if !step.owner.is_empty() {
+        details.push(conduit::i18n::format(
+            "tasks.owner",
+            &[("owner", step.owner.clone())],
+        ));
+    }
+    let blocked = step
+        .blocked_by
+        .iter()
+        .filter(|id| {
+            plan.iter()
+                .find(|task| task.id == **id)
+                .is_none_or(|task| task.status != PlanStatus::Completed)
+        })
+        .map(|id| format!("#{id}"))
+        .collect::<Vec<_>>();
+    if step.status != PlanStatus::Completed && !blocked.is_empty() {
+        details.push(conduit::i18n::format(
+            "tasks.blocked_by",
+            &[("tasks", blocked.join(", "))],
+        ));
+    }
+    details.join(" · ")
 }
 
 impl ConduitApp {

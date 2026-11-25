@@ -1293,6 +1293,7 @@ mod tests {
         };
         store.save_to(&path).unwrap();
         store.workspaces[0].sessions.push(SessionRecord {
+            task_list: None,
             subagents: Default::default(),
             is_subagent: false,
             branching: Default::default(),

@@ -511,6 +511,7 @@ fn reclassifying_an_existing_subagent_preserves_metadata_and_cold_body_without_i
         "messages":[{"key":"local-reply", "kind":"Assistant", "text":"Locally preserved reply", "elapsed_ms":1234}]
     })).unwrap();
     let incoming = ImportedSession {
+        task_list: None,
         is_subagent: true,
         provider: Provider::Codex,
         native_id: "child".into(),

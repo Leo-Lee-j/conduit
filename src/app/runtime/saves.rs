@@ -259,7 +259,6 @@ impl ConduitApp {
                     if let Some(sent) = &pending.child_composer {
                         self.clear_child_draft(sent, window, cx);
                     }
-                    self.session_control.plans.remove(&id);
                     self.session_control.unread_completed.remove(&id);
                     let composer_cleared = pending
                         .composer

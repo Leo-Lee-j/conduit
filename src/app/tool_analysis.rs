@@ -8,14 +8,14 @@ use std::{
 #[derive(Default)]
 pub(super) struct Analysis {
     pub files: Vec<EditFileDiff>,
-    pub plan: Vec<PlanStep>,
+    pub plan: Option<Vec<PlanStep>>,
 }
 
 impl Analysis {
     fn parse(item: &ChatItem) -> Self {
         Self {
             files: edit_tool_diffs(item).unwrap_or_default(),
-            plan: plan_steps_from_input(&item.input).unwrap_or_default(),
+            plan: super::state::plan_from_tool(item),
         }
     }
     fn bytes(&self) -> usize {
@@ -23,7 +23,12 @@ impl Analysis {
             .iter()
             .map(|f| f.path.len() + f.note.len() + f.patch.len())
             .sum::<usize>()
-            + self.plan.iter().map(|p| p.text.len()).sum::<usize>()
+            + self
+                .plan
+                .iter()
+                .flatten()
+                .map(PlanStep::bytes)
+                .sum::<usize>()
     }
 }
 
@@ -36,7 +41,7 @@ struct Entry {
 struct Contribution {
     identity: Weak<crate::domain::ChatItemData>,
     ready: bool,
-    value: Option<(TurnFileStats, Vec<PlanStep>)>,
+    value: Option<(TurnFileStats, Option<Vec<PlanStep>>)>,
 }
 
 #[derive(Default)]
@@ -168,9 +173,7 @@ impl Cache {
             {
                 self.turn.finish(&item.key, &identity, &value);
             }
-            if let Some((_, steps)) = &self.turn.entries[&item.key].value
-                && !steps.is_empty()
-            {
+            if let Some((_, Some(steps))) = &self.turn.entries[&item.key].value {
                 plan = steps.clone();
             }
         }
@@ -509,12 +512,9 @@ mod tests {
                 assert!(stats.files.is_empty());
                 let (stats, _) = app.tool_analysis.turn(2, &[], cx);
                 assert!(stats.files.is_empty());
-                app.session_control.plans.insert(
-                    1,
-                    vec![crate::app::PlanStep {
-                        text: "Review changes".into(),
-                        status: crate::app::PlanStatus::Pending,
-                    }],
+                crate::task_list::apply(
+                    app.session_mut(1).unwrap(),
+                    crate::task_list::wire_plan(vec![("Review changes".into(), "pending".into())]),
                 );
                 assert!(app.turn_stats_tags(1, cx).is_some());
             })

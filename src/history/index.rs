@@ -3,8 +3,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 
-// Reparse old rollouts to recover structured questions and their answers.
-const PARSER_VERSION: u32 = 8;
+// Reparse old rollouts to recover acknowledged task lists and empty snapshots.
+const PARSER_VERSION: u32 = 9;
 const MAX_ENTRY_BYTES: usize = 32 * 1024 * 1024;
 const MAX_INDEX_BYTES: i64 = 256 * 1024 * 1024;
 

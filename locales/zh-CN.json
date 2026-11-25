@@ -1,4 +1,6 @@
 {
+  "tasks.owner": "负责人：%{owner}",
+  "tasks.blocked_by": "等待任务：%{tasks}",
   "settings.cli.advanced_configuration": "启动与高级配置",
   "settings.cli.setup_hint": "先安装并登录引擎；已有程序可在高级配置中指定启动路径。",
   "settings.extensions.workspace_scope_hint": "工作区 + 全局继承 · 实际加载以会话为准",

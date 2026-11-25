@@ -858,6 +858,7 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
     use gpui_kit::AppContext as _;
 
     let session = |id, provider, native: &str| SessionRecord {
+        task_list: None,
         subagents: Default::default(),
         is_subagent: false,
         branching: Default::default(),
@@ -1046,6 +1047,7 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
             this.finish_history_import(
                 &root,
                 vec![crate::history::ImportedSession {
+                    task_list: None,
                     is_subagent: false,
                     provider: Provider::Claude,
                     native_id: "first".into(),
@@ -1369,6 +1371,7 @@ fn composer_files_paste_drafts_removal_and_failed_send(cx: &mut TestAppContext) 
     std::fs::write(&first, b"fn first() {}").unwrap();
     std::fs::write(&second, b"fn second() {}").unwrap();
     let session = |id| SessionRecord {
+        task_list: None,
         subagents: Default::default(),
         is_subagent: false,
         branching: Default::default(),
@@ -1852,6 +1855,7 @@ mod history_and_search {
     }
     fn imported(messages: Vec<ChatItem>) -> crate::history::ImportedSession {
         crate::history::ImportedSession {
+            task_list: None,
             is_subagent: false,
             provider: Provider::Claude,
             native_id: "review-native".into(),

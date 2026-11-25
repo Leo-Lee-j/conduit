@@ -227,6 +227,7 @@ mod tests {
                     workspaces: vec![Workspace {
                         path: std::env::temp_dir(),
                         sessions: vec![SessionRecord {
+                            task_list: None,
                             subagents: Default::default(),
                             is_subagent: false,
                             branching: Default::default(),

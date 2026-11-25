@@ -1,5 +1,5 @@
 //! Session identity, import generations and runtime ownership.
-use super::{ActiveRun, PlanStep, SessionNaming};
+use super::{ActiveRun, SessionNaming};
 use crate::domain::Workspace;
 use std::collections::HashSet;
 use std::{cell::RefCell, collections::HashMap, path::PathBuf};
@@ -11,7 +11,6 @@ pub(super) struct SessionController {
     pub(super) agent_panels: HashMap<u64, super::subagents::PanelState>,
     pub(super) expanded_agents: HashSet<(u64, String)>,
     pub(super) agent_navigation: super::subagents::navigation::Navigation,
-    pub(super) plans: HashMap<u64, Vec<PlanStep>>,
     pub(super) namings: HashMap<u64, SessionNaming>,
     pub(super) naming_errors: HashMap<u64, String>,
     pub(super) unread_completed: HashSet<u64>,

@@ -205,22 +205,12 @@ impl ConduitApp {
                     self.dirty = true;
                     cx.emit(crate::providers::ProviderCatalogChanged);
                 }
-                Event::Plan { steps } => {
-                    let steps = steps
-                        .into_iter()
-                        .filter_map(|(text, status)| {
-                            let text = text.trim().to_string();
-                            (!text.is_empty()).then(|| PlanStep {
-                                text,
-                                status: PlanStatus::from_wire(&status),
-                            })
-                        })
-                        .collect::<Vec<_>>();
-                    if steps.is_empty() {
-                        self.session_control.plans.remove(&id);
-                    } else {
-                        self.session_control.plans.insert(id, steps);
+                event @ (Event::Plan { .. } | Event::Tasks(_)) => {
+                    if let Some(session) = self.session_mut(id) {
+                        apply_event_indexed(session, &prefix, event, &mut MessageIndex::default());
                     }
+                    self.session_control.changed(id);
+                    self.dirty = true;
                 }
                 Event::Usage(mut usage) => {
                     if let Some(run) = self.session_control.runs.get_mut(&id) {

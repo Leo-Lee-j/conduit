@@ -759,19 +759,7 @@ impl ConduitApp {
             );
         }
         let run = self.session_control.runs.get(id);
-        let plan = self
-            .session_control
-            .plans
-            .get(id)
-            .filter(|steps| !steps.is_empty())
-            .cloned()
-            .unwrap_or_else(|| {
-                if run.is_none() && session.transcript.loaded {
-                    plan_from_messages(session)
-                } else {
-                    Vec::new()
-                }
-            });
+        let plan = plan_from_messages(session);
         let expanded = state.read(cx);
         let scroll = expanded.scroll.clone();
         let show_tools = expanded.tools;
@@ -1408,7 +1396,8 @@ impl ConduitApp {
                         )
                         .child(caption(format!("{completed}/{}", plan.len()))),
                 );
-            for step in &plan {
+            for (index, step) in plan.iter().enumerate() {
+                let metadata = crate::app::chat::task_metadata(step, &plan);
                 let (icon, color, status) = match step.status {
                     PlanStatus::Completed => (
                         FullIconName::CircleCheck,
@@ -1428,6 +1417,10 @@ impl ConduitApp {
                 };
                 plan_list = plan_list.child(
                     h_flex()
+                        .id(SharedString::from(format!("session-data-task-{index}")))
+                        .test_support()
+                        .role(Role::Group)
+                        .aria_label(format!("{} {}", step.label(), metadata).trim().to_owned())
                         .w_full()
                         .min_w_0()
                         .items_start()
@@ -1438,13 +1431,21 @@ impl ConduitApp {
                                 .flex_1()
                                 .min_w_0()
                                 .text_size(ui_text_size(12.))
-                                .truncate()
+                                .whitespace_normal()
                                 .text_color(rgb(if step.status == PlanStatus::Completed {
                                     palette().muted
                                 } else {
                                     palette().text
                                 }))
-                                .child(step.text.clone()),
+                                .child(step.label())
+                                .when(!metadata.is_empty(), |row| {
+                                    row.child(
+                                        div()
+                                            .text_size(ui_text_size(11.))
+                                            .text_color(rgb(palette().muted))
+                                            .child(metadata),
+                                    )
+                                }),
                         )
                         .child(caption(status).flex_shrink_0()),
                 );

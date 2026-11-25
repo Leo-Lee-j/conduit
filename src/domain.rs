@@ -196,6 +196,8 @@ impl Usage {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_list: Option<crate::task_list::Snapshot>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub subagents: Vec<crate::subagents::Agent>,
     /// Native child conversations stay available to their parent, outside workspace lists.

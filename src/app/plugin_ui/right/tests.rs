@@ -406,18 +406,12 @@ fn session_data_plan_stays_visible_without_usage_or_timing_details(cx: &mut Test
     cx.simulate_resize(gpui_kit::size(px(1100.), px(1600.)));
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
-            app.session_control.plans.insert(
-                1,
-                vec![
-                    crate::app::state::PlanStep {
-                        text: "读取 CLI 配置".into(),
-                        status: crate::app::state::PlanStatus::Completed,
-                    },
-                    crate::app::state::PlanStep {
-                        text: "更新会话数据面板".into(),
-                        status: crate::app::state::PlanStatus::InProgress,
-                    },
-                ],
+            crate::task_list::apply(
+                app.session_mut(1).unwrap(),
+                crate::task_list::wire_plan(vec![
+                    ("Inspect".into(), "completed".into()),
+                    ("Verify".into(), "in_progress".into()),
+                ]),
             );
             cx.notify();
         })
@@ -429,6 +423,93 @@ fn session_data_plan_stays_visible_without_usage_or_timing_details(cx: &mut Test
     click_labeled(cx, Role::Button, "耗时与轮次");
     assert!(cx.element_bounds("session-data-plan-list").is_some());
     assert!(cx.element_bounds("session-data-timing-toggle").is_some());
+}
+
+#[gpui_kit::test]
+fn task_list_restores_wraps_clears_and_stays_scoped_to_its_session(cx: &mut TestAppContext) {
+    use crate::task_list::{Change, Snapshot, Status, Task};
+    let _locale = crate::test_support::chinese();
+    let mut store = tool_store();
+    let long = "检查命令行任务列表在长标题、会话恢复与实时更新时是否显示完整。".repeat(3);
+    let first = &mut store.workspaces[0].sessions[0];
+    first.task_list = Some(Snapshot {
+        persistent: true,
+        steps: vec![
+            Task {
+                id: "1".into(),
+                text: long.clone(),
+                owner: "worker".into(),
+                ..Default::default()
+            },
+            Task {
+                id: "2".into(),
+                text: "执行测试".into(),
+                blocked_by: vec!["1".into()],
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    });
+    // A prior TodoWrite must not reappear after a newer empty TaskList.
+    first.messages.push(serde_json::from_value(serde_json::json!({"key":"old-todo","kind":"Tool","text":"TodoWrite","status":"已完成","input":"{\"todos\":[{\"content\":\"old task\",\"status\":\"pending\"}]}"})).unwrap());
+    let store = serde_json::from_str(&serde_json::to_string(&store).unwrap()).unwrap();
+    let (app, cx) = fixture(cx, store, PluginUi::new());
+    cx.simulate_resize(gpui_kit::size(px(1100.), px(1600.)));
+    draw(cx);
+    assert!(cx.element_bounds("session-data-plan-list").is_some());
+    assert!(
+        cx.element_bounds("session-data-task-0")
+            .unwrap()
+            .size
+            .height
+            > px(40.)
+    );
+    assert!(
+        cx.labeled_bounds(Role::Group, "#2 执行测试 等待任务：#1")
+            .is_some()
+    );
+    click(cx, "turn-stats");
+    draw(cx);
+    assert!(cx.element_bounds("turn-stats-details").is_some());
+    assert!(cx.element_bounds("task-row-0").unwrap().size.height > px(40.));
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            let session = app.session_mut(1).unwrap();
+            session.task_list.as_mut().unwrap().steps[0].status = Status::Completed;
+            cx.notify();
+        })
+    });
+    draw(cx);
+    // Both surfaces must refresh while the popover stays open.
+    assert!(cx.element_bounds("task-row-1").is_some());
+    let refreshed = cx.update(|window, _| {
+        gpui_kit::base::test_support::snapshots(window)
+            .into_iter()
+            .filter(|element| {
+                element.visible()
+                    && element.role() == Some(Role::Group)
+                    && element.label() == Some("#2 执行测试")
+            })
+            .count()
+    });
+    assert_eq!(refreshed, 2);
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            crate::task_list::apply(
+                app.session_mut(1).unwrap(),
+                Change::Replace {
+                    steps: vec![],
+                    persistent: true,
+                },
+            );
+            assert!(app.turn_stats_tags(1, cx).is_none());
+            assert!(app.turn_stats_tags(2, cx).is_none());
+            assert!(crate::app::state::plan_from_messages(app.session(1).unwrap()).is_empty());
+            cx.notify();
+        })
+    });
+    draw(cx);
+    assert!(cx.element_bounds("session-data-plan-list").is_none());
 }
 
 #[gpui_kit::test]

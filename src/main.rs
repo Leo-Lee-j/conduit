@@ -38,6 +38,7 @@ mod store;
 mod subagents;
 #[cfg(target_os = "windows")]
 mod system_notifications;
+mod task_list;
 mod terminal;
 mod transcript;
 mod usage_ledger;

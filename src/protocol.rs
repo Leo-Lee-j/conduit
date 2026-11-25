@@ -99,6 +99,7 @@ pub enum Event {
     Plan {
         steps: Vec<(String, String)>,
     },
+    Tasks(crate::task_list::Change),
     Tool {
         key: String,
         title: String,
@@ -241,6 +242,7 @@ pub struct Protocol {
     claude_usage_message: Option<String>,
     claude_text_blocks: claude_blocks::Blocks,
     claude_thinking_blocks: claude_blocks::Blocks,
+    claude_task_list: crate::task_list::claude::Tracker,
     tool_inputs: std::collections::HashMap<String, Value>,
     presentation: presentation::Presentation,
     #[cfg(test)]
@@ -297,37 +299,6 @@ fn id_text(v: &Value) -> String {
         .unwrap_or_else(|| v.to_string())
 }
 
-/// Claude's TodoWrite uses `todos`, Codex's update_plan uses `plan`; both carry
-/// a short label plus a status. Accept either shape.
-fn plan_steps(input: &Value) -> Option<Vec<(String, String)>> {
-    let entries = input
-        .get("plan")
-        .or_else(|| input.get("todos"))?
-        .as_array()?;
-    let steps = entries
-        .iter()
-        .filter_map(|entry| {
-            let label = entry
-                .get("step")
-                .or_else(|| entry.get("content"))
-                .or_else(|| entry.get("activeForm"))
-                .and_then(Value::as_str)?;
-            if label.trim().is_empty() {
-                return None;
-            }
-            Some((
-                label.to_string(),
-                entry
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .unwrap_or("pending")
-                    .to_string(),
-            ))
-        })
-        .collect::<Vec<_>>();
-    (!steps.is_empty()).then_some(steps)
-}
-
 impl Protocol {
     pub fn new(provider: Provider, cwd: String, prompt: String, native_id: Option<String>) -> Self {
         Self {
@@ -359,6 +330,7 @@ impl Protocol {
             claude_usage_message: None,
             claude_text_blocks: Default::default(),
             claude_thinking_blocks: Default::default(),
+            claude_task_list: Default::default(),
             tool_inputs: Default::default(),
             presentation: Default::default(),
             #[cfg(test)]
@@ -1222,6 +1194,12 @@ impl Protocol {
         }
         if !self.text_only {
             step.events.extend(self.claude_file_proposals.accept(&v));
+            step.events.extend(
+                self.claude_task_list
+                    .accept(&v)
+                    .into_iter()
+                    .map(Event::Tasks),
+            );
         }
         match text(&v, "type") {
             "control_response" if text(&v["response"], "request_id") == "conduit-init" => {
@@ -1393,13 +1371,6 @@ impl Protocol {
                         }
                         if text(block, "type") == "tool_use" {
                             self.claude_task_input(block);
-                            if matches!(
-                                text(block, "name"),
-                                "TodoWrite" | "todo_write" | "update_plan"
-                            ) && let Some(steps) = plan_steps(&block["input"])
-                            {
-                                step.events.push(Event::Plan { steps });
-                            }
                             step.events.push(Event::ToolInput {
                                 key: text(block, "id").into(),
                                 input: pretty(&block["input"]),
@@ -1428,7 +1399,9 @@ impl Protocol {
                             } else {
                                 pretty(&block["content"])
                             },
-                            status: if block["is_error"].as_bool().unwrap_or(false) {
+                            status: if block["is_error"].as_bool().unwrap_or(false)
+                                || (blocks.len() == 1 && v["tool_use_result"]["success"] == false)
+                            {
                                 crate::message_status::ToolStatus::Failed
                             } else {
                                 crate::message_status::ToolStatus::Completed
@@ -2457,12 +2430,13 @@ mod tests {
                 }]
             }
         }));
-        assert!(matches!(
-            &step.events[1],
-            Event::Plan { steps }
-                if steps == &vec![("Read code".to_string(), "in_progress".to_string())]
-        ));
-        assert!(matches!(&step.events[2], Event::ToolInput { key, .. } if key == "tool-1"));
+        assert!(matches!(&step.events[1], Event::ToolInput { key, .. } if key == "tool-1"));
+        assert!(!step.events.iter().any(|e| matches!(e, Event::Tasks(_))));
+        let step = claude.accept(json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tool-1","content":"Todos updated"}]}}));
+        assert!(
+            matches!(&step.events[0], Event::Tasks(crate::task_list::Change::Replace { steps, persistent: false })
+            if steps.len() == 1 && steps[0].text == "Read code" && steps[0].status == crate::task_list::Status::InProgress)
+        );
     }
     #[test]
     fn unknown_interactive_requests_are_never_auto_approved() {

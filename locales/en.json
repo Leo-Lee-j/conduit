@@ -1,4 +1,6 @@
 {
+  "tasks.owner": "Owner: %{owner}",
+  "tasks.blocked_by": "Waiting for: %{tasks}",
   "settings.cli.advanced_configuration": "Launch & advanced configuration",
   "settings.cli.setup_hint": "Install the engine and sign in, or choose an existing executable in advanced configuration.",
   "settings.extensions.workspace_scope_hint": "Workspace + inherited global settings · Loading depends on the session",

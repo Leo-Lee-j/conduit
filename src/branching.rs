@@ -153,6 +153,8 @@ pub fn prepare(
     session.interrupted = false;
     session.usage = Default::default();
     session.messages.truncate(through);
+    // The latest task snapshot may include operations after the fork point.
+    session.task_list = None;
     session.transcript = Default::default();
     session.branching = Branching {
         points: vec![],

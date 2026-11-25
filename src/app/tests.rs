@@ -775,6 +775,7 @@ fn commit_generation_snapshot_replaces_stream_without_duplicate_text() {
 }
 pub(crate) fn session() -> SessionRecord {
     SessionRecord {
+        task_list: None,
         subagents: Default::default(),
         is_subagent: false,
         branching: Default::default(),
@@ -1373,6 +1374,15 @@ fn plan_steps_follow_either_provider_shape_in_the_latest_turn() {
     assert_eq!(plan.len(), 1);
     assert_eq!(plan[0].text, "new step");
     assert_eq!(plan[0].status, super::PlanStatus::Pending);
+    // Explicit emptiness must win over an older nonempty plan.
+    s.messages.push(item("update_plan", r#"{"plan":[]}"#));
+    assert!(super::plan_from_messages(&s).is_empty());
+    s.messages
+        .push(item("Read", r#"{"todos":[{"content":"unrelated"}]}"#));
+    let mut failed = item("TodoWrite", r#"{"todos":[{"content":"failed"}]}"#);
+    failed.status = crate::message_status::ToolStatus::Failed;
+    s.messages.push(failed);
+    assert!(super::plan_from_messages(&s).is_empty());
 }
 #[test]
 fn stats_paths_strip_the_workspace_prefix() {
