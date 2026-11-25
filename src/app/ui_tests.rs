@@ -669,16 +669,26 @@ fn model_picker_switches_engine_and_applies_the_full_route_to_a_new_session(
         assert_eq!(selection.engine, Provider::Codex);
         assert_eq!(selection.channel, ModelChannel::Cli);
         assert_eq!(selection.model, None);
-        assert_eq!(selection.effort, ReasoningEffort::Medium);
+        assert_eq!(selection.effort, ReasoningEffort::Default);
     });
     click!("session-channel-control");
     click!("session-provider-option-1");
     click!("session-model-option-2");
-    let slider = cx.debug_bounds("session-effort-control").unwrap();
-    let point = point(slider.left() + slider.size.width * 0.75, slider.center().y);
-    cx.simulate_mouse_down(point, MouseButton::Left, Modifiers::default());
-    cx.simulate_mouse_up(point, MouseButton::Left, Modifiers::default());
-    cx.run_until_parked();
+    assert!(cx.debug_bounds("session-effort-minimal").is_some());
+    assert!(cx.debug_bounds("session-effort-none").is_none());
+    assert!(cx.debug_bounds("session-effort-xhigh").is_none());
+    click!("session-effort-high");
+    click!("session-model-option-1");
+    assert!(cx.debug_bounds("session-effort-default").is_some());
+    assert!(cx.debug_bounds("session-effort-high").is_none());
+    cx.update(|_, cx| {
+        assert_eq!(
+            app.read(cx).composer_selection(1).effort,
+            ReasoningEffort::Default
+        );
+    });
+    click!("session-model-option-2");
+    click!("session-effort-high");
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
             let selection = app.composer_selection(1);
@@ -2599,7 +2609,7 @@ fn workspace_new_session_keeps_explicit_choices_and_empty_workspace_defaults(
                 ModelChannel::Provider("global-service".into())
             );
             assert_eq!(created.model.as_deref(), Some("global-model"));
-            assert_eq!(created.reasoning_effort, ReasoningEffort::Medium);
+            assert_eq!(created.reasoning_effort, ReasoningEffort::Default);
             app.persistence.flush();
         });
     });

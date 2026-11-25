@@ -33,6 +33,7 @@
 | [CLI 适配器](cli-adapters.md) | 接入契约、进程管理、OpenCode 特有行为 |
 | [Gemini CLI](gemini.md) | 原生认证、模型选择、权限策略与接入限制 |
 | [Chat 命令](chat-commands.md) | slash 面板、已接入来源、发现与执行约束 |
+| [模型思考能力](model-reasoning.md) | 型号与档位清单、匹配优先级、引擎限制与维护方式 |
 | [测试与验收](testing.md) | 测试选择、隔离环境、人工验收和结果记录 |
 | [性能与指标](performance.md) | 有界工作、缓存、用量语义与测量边界 |
 | [发布与更新](releasing.md) | 签名密钥、CI、安装包、更新与故障恢复 |

@@ -384,7 +384,7 @@ fn unsent_session_engine_switch_preserves_identity_draft_and_attachments(cx: &mu
             assert_eq!(session.model.as_deref(), Some("gpt-5"));
             assert_eq!(
                 session.reasoning_effort,
-                crate::providers::ReasoningEffort::Medium
+                crate::providers::ReasoningEffort::Default
             );
             assert_eq!(
                 session.permission,
@@ -405,6 +405,9 @@ fn unsent_session_engine_switch_preserves_identity_draft_and_attachments(cx: &mu
                 "send from the same conversation"
             );
 
+            // A restored selection may predate the capability registry. The
+            // send boundary must clear an unsupported level before persisting.
+            this.session_mut(1).unwrap().reasoning_effort = crate::providers::ReasoningEffort::High;
             let (release, snapshot) = hold_save(this);
             this.send_prompt(window, cx);
             let snapshot = snapshot.recv_timeout(Duration::from_secs(3)).unwrap();
@@ -413,6 +416,10 @@ fn unsent_session_engine_switch_preserves_identity_draft_and_attachments(cx: &mu
             assert_eq!(sent.id, 1);
             assert_eq!(sent.provider, Provider::Codex);
             assert_eq!(sent.model.as_deref(), Some("chosen-model"));
+            assert_eq!(
+                sent.reasoning_effort,
+                crate::providers::ReasoningEffort::Default
+            );
             assert_eq!(sent.messages.len(), 1);
             assert!(
                 sent.messages[0]

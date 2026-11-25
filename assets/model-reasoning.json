@@ -1,0 +1,669 @@
+{
+  "schema_version": 1,
+  "models": [
+    {
+      "ids": [
+        "gpt-6.2-astra",
+        "gpt-6.2-sol"
+      ],
+      "control": "responses.reasoning.effort",
+      "capabilities": {
+        "levels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "default": null
+      },
+      "engines": [
+        "Codex"
+      ],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://developers.openai.com/api/docs/guides/reasoning",
+        "https://developers.openai.com/codex/app-server"
+      ],
+      "notes": "Model defaults can be overridden by CLI configuration. Ultra is a CLI capability and is never inferred from the API."
+    },
+    {
+      "ids": [
+        "gpt-6.1-terra",
+        "gpt-6-luna"
+      ],
+      "control": "responses.reasoning.effort",
+      "capabilities": {
+        "levels": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "default": "medium"
+      },
+      "engines": [
+        "Codex"
+      ],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://developers.openai.com/api/docs/models/gpt-6.1-terra",
+        "https://developers.openai.com/api/docs/models/gpt-6-luna"
+      ],
+      "notes": "A CLI's published catalog may omit none and add ultra; that catalog takes precedence."
+    },
+    {
+      "ids": [
+        "gpt-6.1-sol",
+        "gpt-6-astra"
+      ],
+      "control": "responses.reasoning.effort",
+      "capabilities": {
+        "levels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "default": null
+      },
+      "engines": [
+        "Codex"
+      ],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+        "https://developers.openai.com/api/docs/models/gpt-6-astra"
+      ],
+      "notes": "Do not add ultra unless the selected CLI catalog advertises it."
+    },
+    {
+      "ids": [
+        "gpt-5.4",
+        "gpt-5.2"
+      ],
+      "control": "responses.reasoning.effort",
+      "capabilities": {
+        "levels": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "default": "none"
+      },
+      "engines": [
+        "Codex"
+      ],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://developers.openai.com/api/docs/models/gpt-5.4",
+        "https://developers.openai.com/api/docs/models/gpt-5.2"
+      ],
+      "notes": "Base models only; pro and codex variants must have separate entries."
+    },
+    {
+      "ids": [
+        "gpt-5.1"
+      ],
+      "control": "responses.reasoning.effort",
+      "capabilities": {
+        "levels": [
+          "none",
+          "low",
+          "medium",
+          "high"
+        ],
+        "default": "none"
+      },
+      "engines": [
+        "Codex"
+      ],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://developers.openai.com/api/docs/models/gpt-5.1"
+      ],
+      "notes": "Exact model and dated snapshots only."
+    },
+    {
+      "ids": [
+        "gpt-5",
+        "gpt-5-mini",
+        "gpt-5-nano"
+      ],
+      "control": "responses.reasoning.effort",
+      "capabilities": {
+        "levels": [
+          "minimal",
+          "low",
+          "medium",
+          "high"
+        ],
+        "default": "medium"
+      },
+      "engines": [
+        "Codex"
+      ],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://developers.openai.com/api/docs/models/gpt-5",
+        "https://developers.openai.com/api/docs/models/gpt-5-mini",
+        "https://developers.openai.com/api/docs/models/gpt-5-nano"
+      ],
+      "notes": "Minimal is a real effort level; it does not mean follow default."
+    },
+    {
+      "ids": [
+        "gpt-5.3-codex"
+      ],
+      "control": "responses.reasoning.effort",
+      "capabilities": {
+        "levels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "default": null
+      },
+      "engines": [
+        "Codex"
+      ],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://developers.openai.com/api/docs/models/gpt-5.3-codex"
+      ],
+      "notes": "Legacy coding model; no none, minimal or max. Availability depends on provider retirement policy."
+    },
+    {
+      "ids": [
+        "o3",
+        "o4-mini"
+      ],
+      "control": "responses.reasoning.effort",
+      "capabilities": {
+        "levels": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "default": "medium"
+      },
+      "engines": [
+        "Codex"
+      ],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://developers.openai.com/api/docs/models/o3",
+        "https://developers.openai.com/api/docs/models/o4-mini"
+      ],
+      "notes": "No xhigh or max inferred for older reasoning models."
+    },
+    {
+      "ids": [
+        "gpt-4.1",
+        "gpt-4.1-mini",
+        "gpt-4.1-nano",
+        "gpt-4o",
+        "gpt-4o-mini"
+      ],
+      "control": "none",
+      "capabilities": {
+        "levels": [],
+        "default": null
+      },
+      "engines": [
+        "Codex"
+      ],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://developers.openai.com/api/docs/models"
+      ],
+      "notes": "No configurable reasoning effort."
+    },
+    {
+      "ids": [
+        "claude-opus-5-5",
+        "claude-haiku-5-5"
+      ],
+      "control": "messages.output_config.effort",
+      "capabilities": {
+        "levels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "default": "medium"
+      },
+      "engines": [
+        "Claude"
+      ],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://platform.claude.com/docs/en/build-with-claude/effort",
+        "https://code.claude.com/docs/en/model-config"
+      ],
+      "notes": "API default recorded here; follow default preserves Claude Code's own model/account settings."
+    },
+    {
+      "ids": [
+        "claude-sonnet-5-5",
+        "claude-sonnet-5",
+        "claude-opus-5",
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+        "claude-fable-5-2",
+        "claude-fable-5-1",
+        "claude-fable-5",
+        "claude-mythos-5-2",
+        "claude-mythos-5-1",
+        "claude-mythos-5"
+      ],
+      "control": "messages.output_config.effort",
+      "capabilities": {
+        "levels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "default": "high"
+      },
+      "engines": [
+        "Claude"
+      ],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://platform.claude.com/docs/en/build-with-claude/effort",
+        "https://code.claude.com/docs/en/model-config"
+      ],
+      "notes": "Account access and installed CLI version still determine model availability. This list does not add selectable models."
+    },
+    {
+      "ids": [
+        "claude-opus-4-6",
+        "claude-sonnet-4-6"
+      ],
+      "control": "messages.output_config.effort",
+      "capabilities": {
+        "levels": [
+          "low",
+          "medium",
+          "high",
+          "max"
+        ],
+        "default": "high"
+      },
+      "engines": [
+        "Claude"
+      ],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://platform.claude.com/docs/en/build-with-claude/effort",
+        "https://code.claude.com/docs/en/model-config"
+      ],
+      "notes": "xhigh is not a distinct supported level on these models."
+    },
+    {
+      "ids": [
+        "claude-opus-4-5"
+      ],
+      "control": "messages.output_config.effort",
+      "capabilities": {
+        "levels": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "default": "high"
+      },
+      "engines": [
+        "Claude"
+      ],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://platform.claude.com/docs/en/build-with-claude/effort"
+      ],
+      "notes": "Legacy effort model; max and xhigh are not advertised."
+    },
+    {
+      "ids": [
+        "claude-sonnet-4-5",
+        "claude-haiku-4-5",
+        "claude-sonnet-4",
+        "claude-opus-4",
+        "claude-opus-4-1"
+      ],
+      "control": "thinking.budget_tokens",
+      "capabilities": {
+        "levels": [],
+        "default": null
+      },
+      "engines": [],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://platform.claude.com/docs/en/build-with-claude/extended-thinking"
+      ],
+      "notes": "Budget-based extended thinking must not be presented as named effort levels."
+    },
+    {
+      "ids": [
+        "gemini-4-carbon",
+        "gemini-4-argon",
+        "gemini-3.8-flash"
+      ],
+      "control": "generation_config.thinking_level",
+      "capabilities": {
+        "levels": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "default": "medium"
+      },
+      "engines": [],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://ai.google.dev/gemini-api/docs/thinking"
+      ],
+      "notes": "API capability only: the current Gemini CLI adapter has no effort-setting transport. ACP engines use their native catalog."
+    },
+    {
+      "ids": [
+        "gemini-4-neon",
+        "gemini-4-hydrogen"
+      ],
+      "control": "generation_config.thinking_level",
+      "capabilities": {
+        "levels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "default": "high"
+      },
+      "engines": [],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://ai.google.dev/gemini-api/docs/thinking"
+      ],
+      "notes": "Do not send Codex effort or Claude --effort to a Gemini CLI."
+    },
+    {
+      "ids": [
+        "gemini-3.6-flash"
+      ],
+      "control": "generation_config.thinking_level",
+      "capabilities": {
+        "levels": [
+          "minimal",
+          "low",
+          "medium",
+          "high"
+        ],
+        "default": "medium"
+      },
+      "engines": [],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://ai.google.dev/gemini-api/docs/thinking"
+      ],
+      "notes": "API capability only."
+    },
+    {
+      "ids": [
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite"
+      ],
+      "control": "generation_config.thinking_level",
+      "capabilities": {
+        "levels": [
+          "minimal",
+          "low",
+          "medium",
+          "high"
+        ],
+        "default": "minimal"
+      },
+      "engines": [],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://ai.google.dev/gemini-api/docs/thinking"
+      ],
+      "notes": "API capability only; minimal does not guarantee thinking is disabled."
+    },
+    {
+      "ids": [
+        "gemini-3.1-pro-preview"
+      ],
+      "control": "generation_config.thinking_level",
+      "capabilities": {
+        "levels": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "default": "high"
+      },
+      "engines": [],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://ai.google.dev/gemini-api/docs/thinking"
+      ],
+      "notes": "API capability only."
+    },
+    {
+      "ids": [
+        "gemini-3-flash-preview"
+      ],
+      "control": "generation_config.thinking_level",
+      "capabilities": {
+        "levels": [
+          "minimal",
+          "low",
+          "medium",
+          "high"
+        ],
+        "default": "high"
+      },
+      "engines": [],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://ai.google.dev/gemini-api/docs/thinking"
+      ],
+      "notes": "API capability only."
+    },
+    {
+      "ids": [
+        "gemini-3-pro-preview"
+      ],
+      "control": "generation_config.thinking_level",
+      "capabilities": {
+        "levels": [
+          "low",
+          "high"
+        ],
+        "default": "high"
+      },
+      "engines": [],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://ai.google.dev/gemini-api/docs/thinking"
+      ],
+      "notes": "No medium level."
+    },
+    {
+      "ids": [
+        "deepseek-flash",
+        "deepseek-v4-pro"
+      ],
+      "control": "messages.output_config.effort",
+      "capabilities": {
+        "levels": [
+          "low",
+          "high",
+          "max"
+        ],
+        "default": "high"
+      },
+      "engines": [
+        "Claude"
+      ],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://api-docs.deepseek.com/guides/thinking_mode"
+      ],
+      "notes": "Only genuine levels are listed: medium and xhigh map to high, ultra maps to max. Claude CLI cannot express the separate thinking toggle through --effort."
+    },
+    {
+      "ids": [
+        "deepseek-flash",
+        "deepseek-v4-pro"
+      ],
+      "control": "responses.reasoning.effort",
+      "capabilities": {
+        "levels": [
+          "none",
+          "low",
+          "high",
+          "max"
+        ],
+        "default": "high"
+      },
+      "engines": [
+        "Codex"
+      ],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://api-docs.deepseek.com/guides/thinking_mode"
+      ],
+      "notes": "DeepSeek documents Responses support explicitly. none disables thinking; minimal maps to low, medium and xhigh to high, and ultra to max."
+    },
+    {
+      "ids": [
+        "grok-4.7",
+        "grok-4.6"
+      ],
+      "control": "responses.reasoning.effort",
+      "capabilities": {
+        "levels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ],
+        "default": "high"
+      },
+      "engines": [
+        "Codex"
+      ],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://docs.x.ai/developers/model-capabilities/text/reasoning"
+      ],
+      "notes": "Reasoning cannot be disabled."
+    },
+    {
+      "ids": [
+        "grok-4.5"
+      ],
+      "control": "responses.reasoning.effort",
+      "capabilities": {
+        "levels": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "default": "high"
+      },
+      "engines": [
+        "Codex"
+      ],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://docs.x.ai/developers/model-capabilities/text/reasoning"
+      ],
+      "notes": "xhigh is not a distinct supported level."
+    },
+    {
+      "ids": [
+        "kimi-k3"
+      ],
+      "control": "chat.reasoning_effort",
+      "capabilities": {
+        "levels": [
+          "low",
+          "high",
+          "max"
+        ],
+        "default": "max"
+      },
+      "engines": [],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://www.kimi.ai/help/kimi-api/api-model-selection"
+      ],
+      "notes": "Always-thinking model. Direct CLI transport is not inferred; OpenCode must advertise its native variants."
+    },
+    {
+      "ids": [
+        "kimi-k2.6"
+      ],
+      "control": "thinking.type",
+      "capabilities": {
+        "levels": [],
+        "default": null
+      },
+      "engines": [],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://www.kimi.ai/help/kimi-api/api-model-selection"
+      ],
+      "notes": "Thinking on/off toggle, not a low/medium/high scale."
+    },
+    {
+      "ids": [
+        "glm-5.3"
+      ],
+      "control": "chat.reasoning_effort",
+      "capabilities": {
+        "levels": [
+          "low",
+          "high",
+          "max"
+        ],
+        "default": "max"
+      },
+      "engines": [],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://docs.z.ai/guides/llm/glm-5.3"
+      ],
+      "notes": "Reasoning cannot be disabled. Gateway/account-specific transports must publish their capability before enabling CLI options."
+    },
+    {
+      "ids": [
+        "qwen4-max"
+      ],
+      "control": "enable_thinking / thinking_budget",
+      "capabilities": {
+        "levels": [],
+        "default": null
+      },
+      "engines": [],
+      "verified_at": "2026-11-25",
+      "sources": [
+        "https://www.alibabacloud.com/help/en/model-studio/deep-thinking"
+      ],
+      "notes": "Boolean thinking switch and budget control; no guessed named effort levels."
+    }
+  ]
+}

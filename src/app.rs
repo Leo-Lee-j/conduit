@@ -42,7 +42,6 @@ use gpui_kit::{
         scroll::ScrollableElement,
         searchable_list::{SearchableListItem, SearchableVec},
         select::{Select, SelectEvent, SelectState},
-        slider::{Slider, SliderEvent, SliderState},
         spinner::Spinner,
         tab::{Tab, TabBar},
         text::{TextView, TextViewStyle},

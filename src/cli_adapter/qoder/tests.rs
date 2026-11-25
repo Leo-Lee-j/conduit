@@ -143,6 +143,21 @@ fn qoder_launch_preserves_cwd_and_never_puts_prompt_or_secret_on_command_line() 
 }
 
 #[test]
+fn qoder_follow_default_never_sends_an_unpublished_synthetic_variant() {
+    for variant in [None, Some("default")] {
+        let mut req = request();
+        req.route.acp_variant = variant.map(str::to_owned);
+        let (_, writes) = ready(req, true);
+        assert_eq!(writes.last().unwrap()["method"], "session/prompt");
+        assert!(
+            writes
+                .iter()
+                .all(|write| write["params"]["value"] != "default")
+        );
+    }
+}
+
+#[test]
 fn qoder_new_resume_and_load_configure_model_and_effort_before_prompt() {
     for (native, resume) in [
         (None, true),
@@ -535,6 +550,7 @@ fn qoder_native_modes_catalog_refresh_and_non_success_stops_are_checked() {
     assert_eq!(step.writes[0]["params"]["modeId"], "yolo");
     let mut refreshed = catalog();
     refreshed[1]["options"] = json!([{"value":"medium","name":"Medium"}]);
+    refreshed[1]["currentValue"] = json!("medium");
     refreshed[0]["_meta"] = json!({"secret":"never persisted"});
     adapter.accept(notification(
         "original",

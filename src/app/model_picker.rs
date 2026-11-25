@@ -3,6 +3,9 @@
 use super::generation::GenerationKind;
 use super::*;
 
+#[cfg(all(test, feature = "ui-tests"))]
+mod reasoning_tests;
+
 // Keep notifications local. Observing the parent ConduitApp here creates a
 // parent/child invalidation cycle while the popover is open.
 struct SessionModelPicker {
@@ -10,7 +13,6 @@ struct SessionModelPicker {
     session_id: u64,
     binding: composer::ComposerBinding,
     search: Entity<InputState>,
-    slider: Entity<SliderState>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -32,53 +34,23 @@ impl SessionModelPicker {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let effort = app.read(cx).composer_selection_for(&binding).effort;
-        let slider = cx.new(|_| {
-            SliderState::new()
-                .min(0.)
-                .max(4.)
-                .step(1.)
-                .default_value(effort.index() as f32)
-        });
         let search = cx.new(|cx| {
             InputState::new(window, cx).placeholder(conduit::i18n::text_static(
                 "model_picker.search_model_names_or_ids",
             ))
         });
-        let view = cx.entity();
         let subscriptions = vec![
             cx.subscribe(
                 &app,
                 |_, _, _: &crate::providers::ProviderCatalogChanged, cx| cx.notify(),
             ),
             cx.subscribe(&search, |_, _, _: &InputEvent, cx| cx.notify()),
-            window.subscribe(&slider, cx, move |_, event: &SliderEvent, window, cx| {
-                if let SliderEvent::Change(value) = event {
-                    let effort = ReasoningEffort::ALL[(value.start().round() as usize).min(4)];
-                    view.update(cx, |this, cx| {
-                        // SliderState snaps the emitted value to the configured
-                        // step, but keeps the pointer percentage while dragging.
-                        // Write the snapped value back so the thumb also moves in
-                        // the five discrete reasoning levels.
-                        this.slider.update(cx, |slider, cx| {
-                            slider.set_value(effort.index() as f32, window, cx)
-                        });
-                        this.update_app(cx, |app, cx| {
-                            app.update_composer_selection(this.session_id, cx, |s| {
-                                s.effort = effort
-                            });
-                        });
-                        cx.notify();
-                    });
-                }
-            }),
         ];
         Self {
             app,
             session_id,
             binding,
             search,
-            slider,
             _subscriptions: subscriptions,
         }
     }
@@ -88,10 +60,11 @@ impl Render for SessionModelPicker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let app = self.app.read(cx);
         let selection = app.composer_selection_for(&self.binding);
+        let capabilities = app.reasoning_capabilities(&selection);
         let engine = selection.engine;
         let channel = selection.channel;
         let selected = selection.model;
-        let effort = selection.effort;
+        let effort = capabilities.constrain(selection.effort);
         let native_models = if matches!(
             engine,
             Provider::OpenCode | Provider::Qoder | Provider::Gemini
@@ -127,7 +100,7 @@ impl Render for SessionModelPicker {
             app.composer_channel_models(&self.binding, engine, &channel)
         };
         let variants = selection.opencode.variants();
-        let variant = selection.opencode.effective_variant().map(str::to_owned);
+        let variant = selection.opencode.variant.clone();
         // Native OpenCode providers are encoded in provider/model IDs. Keep
         // the CLI route and filter within its actual catalog, never inventing
         // an API endpoint or copying credentials into a custom provider.
@@ -304,14 +277,6 @@ impl Render for SessionModelPicker {
                                         });
                                     });
                                     this.search.update(cx, |s, cx| s.set_value("", window, cx));
-                                    let effort = this
-                                        .app
-                                        .read(cx)
-                                        .composer_selection_for(&this.binding)
-                                        .effort;
-                                    this.slider.update(cx, |s, cx| {
-                                        s.set_value(effort.index() as f32, window, cx)
-                                    });
                                     cx.notify();
                                 });
                                 if let Some(p) = popover.upgrade() {
@@ -377,19 +342,11 @@ impl Render for SessionModelPicker {
                             )
                             .when(active, |r| r.child(Icon::new(IconName::Check).small())),
                     )
-                    .on_click(cx.listener(move |this, _, window, cx| {
+                    .on_click(cx.listener(move |this, _, _window, cx| {
                         this.update_app(cx, |app, cx| {
                             app.update_composer_selection(this.session_id, cx, |s| {
                                 s.set_model(model.clone())
                             });
-                        });
-                        let effort = this
-                            .app
-                            .read(cx)
-                            .composer_selection_for(&this.binding)
-                            .effort;
-                        this.slider.update(cx, |slider, cx| {
-                            slider.set_value(effort.index() as f32, window, cx)
                         });
                         cx.notify();
                     })),
@@ -493,19 +450,19 @@ impl Render for SessionModelPicker {
                                 .gap_1()
                                 .children(
                                     std::iter::once((
-                                        "default".to_string(),
-                                        conduit::i18n::text_static("chat.default").to_string(),
+                                        None,
+                                        conduit::i18n::text_static("model_picker.follow_default").to_string(),
                                     ))
                                     .chain(
                                         variants
                                             .into_iter()
-                                            .filter(|(value, _)| value != "default"),
+                                            .map(|(value, label)| (Some(value), label)),
                                     )
                                     .enumerate()
                                     .map(
                                         move |(index, (value, label))| {
                                             let selected =
-                                                variant.as_deref().unwrap_or("default") == value;
+                                                variant == value;
                                             let picker = picker.clone();
                                             Button::new(("opencode-effort", index))
                                                 .small()
@@ -530,7 +487,8 @@ impl Render for SessionModelPicker {
                                                                 cx,
                                                                 |s| {
                                                                     s.opencode.variant =
-                                                                        Some(value.clone());
+                                                                        value.clone();
+                                                                    s.effort = ReasoningEffort::Default;
                                                                 },
                                                             );
                                                         });
@@ -587,33 +545,37 @@ impl Render for SessionModelPicker {
                                 ),
                         )
                         .child(
-                            div()
+                            h_flex()
                                 .debug_selector(|| "session-effort-control".into())
                                 .w_full()
-                                .child(
-                                    Slider::new(&self.slider)
-                                        .w_full()
+                                .flex_wrap()
+                                .gap_1()
+                                .children(capabilities.choices().into_iter().map(|level| {
+                                    let picker = cx.entity();
+                                    let name = level.wire().unwrap_or("default");
+                                    Button::new(SharedString::from(format!("session-effort-{name}")))
+                                        .small()
+                                        .ghost()
+                                        .child(div().debug_selector(move || format!("session-effort-{name}")).child(level.label()))
                                         .disabled(disabled)
-                                        .accessibility_label(conduit::i18n::text_static(
-                                            "model_picker.model_reasoning_effort",
-                                        )),
-                                ),
+                                        .when(level == effort, |button| button.bg(rgb(palette().surface_hover)))
+                                        .on_click(move |_, _, cx| {
+                                            picker.update(cx, |this, cx| {
+                                                this.update_app(cx, |app, cx| {
+                                                    app.update_composer_selection(this.session_id, cx, |s| s.effort = level);
+                                                });
+                                                cx.notify();
+                                            });
+                                        })
+                                })),
                         )
-                        .child(h_flex().w_full().justify_between().children(
-                            ReasoningEffort::ALL.map(|level| {
-                                div()
-                                    .text_size(ui_text_size(12.))
-                                    .text_color(rgb(palette().faint))
-                                    .child(level.label())
-                            }),
-                        ))
                         .child(
                             div()
                                 .text_size(ui_text_size(12.))
                                 .line_height(relative(1.4))
                                 .text_color(rgb(palette().faint))
                                 .child(conduit::i18n::text_static(
-                                    "model_picker.higher_effort_may_take_longer_supported_levels",
+                                    if capabilities.levels.is_empty() { "model_picker.effort_default_only" } else { "model_picker.matched_effort_levels" },
                                 )),
                         ),
                 )
@@ -767,14 +729,6 @@ impl SessionModelPicker {
                                     app.select_composer_engine(option, cx)
                                 });
                                 this.search.update(cx, |s, cx| s.set_value("", window, cx));
-                                let effort = this
-                                    .app
-                                    .read(cx)
-                                    .composer_selection_for(&this.binding)
-                                    .effort;
-                                this.slider.update(cx, |slider, cx| {
-                                    slider.set_value(effort.index() as f32, window, cx)
-                                });
                                 cx.notify();
                             });
                             if let Some(popover) = popover.clone().upgrade() {
@@ -790,6 +744,66 @@ impl SessionModelPicker {
 }
 
 impl ConduitApp {
+    pub(super) fn reasoning_capabilities(
+        &self,
+        selection: &ComposerSelection,
+    ) -> models::reasoning::Capabilities {
+        use crate::providers::claude::{Role, split_one_m};
+        let engine = selection.engine;
+        let catalog = (selection.channel == ModelChannel::Cli)
+            .then(|| self.catalogs.get(&engine))
+            .flatten();
+        let provider_id = match &selection.channel {
+            ModelChannel::Cli => None,
+            ModelChannel::Provider(id) => Some(id.clone()),
+            ModelChannel::Ccs(id) => Some(ModelProvider::ccs_id(engine, id)),
+        };
+        let provider = provider_id.as_ref().and_then(|id| {
+            self.store
+                .providers
+                .iter()
+                .find(|p| p.engine == engine && p.id == *id)
+        });
+        let mapping = provider.and_then(|p| p.claude_models.as_ref());
+        let model = selection
+            .model
+            .as_deref()
+            .or_else(|| catalog.and_then(|c| c.current.as_deref()))
+            .or_else(|| {
+                mapping
+                    .map(|m| m.default_model.as_str())
+                    .filter(|id| !id.is_empty())
+            })
+            .or_else(|| provider.and_then(|p| p.models.first().map(String::as_str)))
+            .or_else(|| {
+                mapping.and_then(|m| {
+                    Role::ALL
+                        .into_iter()
+                        .filter(|role| *role != Role::Subagent)
+                        .map(|role| m.effective_model(role))
+                        .find(|id| !id.is_empty())
+                })
+            });
+        // Resolve explicit service aliases without reading credentials or guessing
+        // which version a provider's moving alias currently points to.
+        let model = model.map(|id| {
+            catalog
+                .and_then(|c| c.aliases.get(split_one_m(id).0).map(String::as_str))
+                .or_else(|| {
+                    mapping.and_then(|m| {
+                        Role::ALL
+                            .into_iter()
+                            .find(|role| role.alias() == split_one_m(id).0)
+                            .map(|role| m.effective_model(role))
+                            .filter(|id| !id.is_empty())
+                    })
+                })
+                .unwrap_or(id)
+        });
+        let published = model.and_then(|id| catalog.and_then(|c| c.reasoning.get(id)));
+        models::reasoning::resolve(engine, model, published)
+    }
+
     fn composer_channel_models(
         &self,
         binding: &composer::ComposerBinding,
@@ -910,6 +924,11 @@ impl ConduitApp {
         }
         let mut selection = self.composer_selection(session_id);
         update(&mut selection);
+        if matches!(selection.engine, Provider::Claude | Provider::Codex) {
+            selection.effort = self
+                .reasoning_capabilities(&selection)
+                .constrain(selection.effort);
+        }
         if let Some(session) = target.and_then(|id| self.session_mut(id)) {
             selection.apply(session);
             self.persist();
@@ -1129,6 +1148,9 @@ impl ConduitApp {
     ) -> AnyElement {
         let binding = self.composer_binding();
         let selection = self.composer_selection(session_id);
+        let selected_effort = self
+            .reasoning_capabilities(&selection)
+            .constrain(selection.effort);
         let provider = selection.engine;
         let selected_model = selection.model;
         let (_, mut models) = self.composer_channel_models(&binding, provider, &selection.channel);
@@ -1170,7 +1192,7 @@ impl ConduitApp {
                 .map(str::to_owned)
                 .unwrap_or_else(|| conduit::i18n::text_static("chat.default").into())
         } else {
-            selection.effort.label().to_owned()
+            selected_effort.label().to_owned()
         };
         let trigger = Button::new("composer-model-trigger")
             .ghost()
@@ -1224,7 +1246,7 @@ impl ConduitApp {
                         ) {
                             selection.opencode.effective_variant().is_some()
                         } else {
-                            selection.effort != ReasoningEffort::Default
+                            selected_effort != ReasoningEffort::Default
                         },
                         |row| {
                             row.child(

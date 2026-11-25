@@ -530,10 +530,18 @@ impl ConduitApp {
             .unwrap_or_default();
         let effort = self
             .session(id)
-            .map(|s| s.reasoning_effort)
+            .map(|s| {
+                if matches!(provider, Provider::Claude | Provider::Codex) {
+                    self.reasoning_capabilities(&ComposerSelection::from_session(s))
+                        .constrain(s.reasoning_effort)
+                } else {
+                    s.reasoning_effort
+                }
+            })
             .unwrap_or_default();
         let model = model.or_else(|| route.default_model.clone());
         let session = self.session_mut(id).unwrap();
+        session.reasoning_effort = effort;
         let prefix = next_turn_prefix(session);
         if append_user {
             if !session.messages.iter().any(|m| m.kind == ItemKind::User) {

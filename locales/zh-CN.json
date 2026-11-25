@@ -3547,6 +3547,12 @@
   "gemini.permission_read_only": "原生策略仅允许目录列表、文件读取、搜索及文件匹配；禁用 MCP、扩展及其他工具。这是工具策略，不是文件系统沙箱。",
   "gemini.permission_ask": "通过 ACP 审批工具调用。禁用扩展及代理/计划工具；批准的工具可以访问工作区外文件。",
   "gemini.permission_full_access": "自动批准单次工具请求；扩展及代理/计划工具仍被禁用。",
+  "model_picker.follow_default": "跟随默认",
+  "model_picker.effort_default_only": "尚未确认此模型在当前引擎下可设置的档位，使用引擎默认值。",
+  "model_picker.matched_effort_levels": "可选档位已按模型匹配；跟随默认保留引擎设置。",
+  "providers.no_reasoning": "关闭思考",
+  "providers.minimal": "极低",
+  "providers.maximum": "最大",
   "gemini.policy_conflict": "当前 Gemini 配置包含系统或附加管理员策略，Conduit 无法安全叠加本轮权限策略；请在原生 CLI 中使用此配置。",
   "gemini.unsafe_native_config": "Gemini 原生配置包含 ACP 无法监督的钩子、自定义工具发现、后台代理或自动执行项。请先从原生配置移除钩子/命令条目或关闭对应实验功能后再使用 Conduit。"
 }

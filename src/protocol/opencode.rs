@@ -16,15 +16,17 @@ pub struct AcpSettings {
 }
 
 impl AcpSettings {
-    /// Respect explicit choices, including the native "default" option.
-    /// Only choose medium automatically when the model advertises it.
+    /// Respect explicit choices and otherwise report the engine's current value.
+    /// The application's "follow default" is None, not a native variant string.
     pub fn effective_variant(&self) -> Option<&str> {
         self.variant.as_deref().or_else(|| {
-            self.effort_option()["options"]
+            let option = self.effort_option();
+            let current = option["currentValue"].as_str()?;
+            option["options"]
                 .as_array()?
                 .iter()
-                .any(|option| option["value"] == "medium")
-                .then_some("medium")
+                .any(|item| item["value"] == current)
+                .then_some(current)
         })
     }
 
@@ -593,21 +595,15 @@ impl Protocol {
 
     fn acp_next(&mut self, step: &mut Step) {
         while let Some((key, selection)) = self.acp.config.pop_front() {
-            let selection = if key == "effort"
-                && selection == "default"
-                && self.route.acp_variant.is_none()
-                && self.reasoning_effort == crate::providers::ReasoningEffort::Default
-            {
-                self.acp
-                    .options
-                    .effective_variant()
-                    .unwrap_or("default")
-                    .to_owned()
-            } else {
-                selection
-            };
             let option = self.acp.options.option(&key);
-            if key == "effort" && selection == "default" && option.is_null() {
+            // Some engines have a real `default` variant; others only have
+            // named levels. Never send the UI's synthetic default to the latter.
+            if key == "effort"
+                && selection == "default"
+                && !option["options"]
+                    .as_array()
+                    .is_some_and(|items| items.iter().any(|item| item["value"] == "default"))
+            {
                 continue;
             }
             let valid = if key == "model" {

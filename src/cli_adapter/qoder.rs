@@ -129,6 +129,9 @@ impl QoderAdapter {
             .route
             .acp_variant
             .clone()
+            .filter(|value| {
+                value != "default" || self.settings.variants().iter().any(|(id, _)| id == value)
+            })
             .or_else(|| self.request.effort.wire().map(str::to_owned));
         let effort = selected.or_else(|| self.settings.effective_variant().map(str::to_owned));
         if let Some(effort) = effort {

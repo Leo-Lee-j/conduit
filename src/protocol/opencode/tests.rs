@@ -272,11 +272,13 @@ fn opencode_unsupported_effort_fails_without_prompt_or_silent_fallback() {
 }
 
 #[test]
-fn opencode_automatic_effort_uses_medium_only_when_advertised() {
+fn opencode_follow_default_uses_only_an_advertised_native_default() {
     let _locale = crate::test_support::chinese();
     let (mut protocol, _) = connected(None, true, None);
     for (levels, explicit, expected) in [
-        (vec!["default", "medium", "high"], None, Some("medium")),
+        (vec!["default", "medium", "high"], None, Some("default")),
+        (vec!["low", "high"], None, None),
+        (vec!["low", "high"], Some("default"), None),
         (vec!["default", "high"], None, Some("default")),
         (vec![], None, None),
         (vec!["default", "medium"], Some("default"), Some("default")),

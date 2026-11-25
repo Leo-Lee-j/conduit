@@ -3547,6 +3547,12 @@
   "gemini.permission_read_only": "Native policy allows only directory listing, file reading, search and glob. MCP, extensions and all other tools are blocked. This is a tool policy, not a filesystem sandbox.",
   "gemini.permission_ask": "Ask before tool calls through ACP. Extensions and agent/plan tools are blocked; approved tools can access files outside the workspace.",
   "gemini.permission_full_access": "Automatically approve one-time tool requests. Extensions and agent/plan tools remain blocked.",
+  "model_picker.follow_default": "Follow default",
+  "model_picker.effort_default_only": "No configurable effort levels are confirmed for this model and engine. Using the engine default.",
+  "model_picker.matched_effort_levels": "Available levels match this model. Follow default preserves the engine setting.",
+  "providers.no_reasoning": "None",
+  "providers.minimal": "Minimal",
+  "providers.maximum": "Maximum",
   "gemini.policy_conflict": "This Gemini installation has system or supplemental administrator policies. Conduit cannot safely add its per-turn policy. Use the native CLI for this configuration.",
   "gemini.unsafe_native_config": "Gemini native settings contain hooks, custom tool discovery, background agents or automatic execution that ACP cannot supervise. Remove the hook/command entries or disable the experimental features in native settings before using Conduit."
 }

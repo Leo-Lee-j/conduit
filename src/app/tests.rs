@@ -799,17 +799,17 @@ pub(crate) fn session() -> SessionRecord {
 }
 
 #[test]
-fn composer_defaults_to_medium_and_preserves_explicit_effort_until_model_changes() {
+fn composer_follows_default_and_preserves_explicit_effort_until_model_changes() {
     let _locale = crate::test_support::chinese();
     for engine in [Provider::Claude, Provider::Codex] {
         let mut selection = super::ComposerSelection::new(engine);
-        assert_eq!(selection.effort, super::ReasoningEffort::Medium);
+        assert_eq!(selection.effort, super::ReasoningEffort::Default);
         selection.set_model(Some("model-a".into()));
         selection.effort = super::ReasoningEffort::High;
         selection.set_model(Some("model-a".into()));
         assert_eq!(selection.effort, super::ReasoningEffort::High);
         selection.set_model(Some("model-b".into()));
-        assert_eq!(selection.effort, super::ReasoningEffort::Medium);
+        assert_eq!(selection.effort, super::ReasoningEffort::Default);
         selection.effort = super::ReasoningEffort::Default;
         let mut session = session();
         session.provider = engine;
