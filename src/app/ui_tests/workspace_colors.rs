@@ -251,22 +251,29 @@ fn workspace_color_mouse_selection_updates_its_workspace_and_tab(cx: &mut TestAp
     let (app, cx) = fixture(cx);
     draw(cx);
 
-    let menu = cx.debug_bounds("workspace-menu-trigger-1").unwrap();
-    click(cx, menu.center());
+    let trigger = cx.debug_bounds("workspace-color-trigger-1").unwrap();
+    let original_name = cx.debug_bounds("workspace-name-1").unwrap();
+    cx.simulate_mouse_move(original_name.center(), None, Modifiers::default());
+    draw(cx);
+    cx.update(|_, cx| assert!(!app.read(cx).workspace_color_picker.read(cx).is_open()));
+    assert_eq!(cx.debug_bounds("workspace-name-1").unwrap(), original_name);
+    let session_visible = cx.debug_bounds("session-row-2").is_some();
+    click(cx, trigger.center());
     cx.update(|_, cx| {
         let app = app.read(cx);
         assert_eq!(app.selected_workspace, Some(0));
         assert_eq!(
             app.workspace_color_target.as_ref(),
             Some(&app.store.workspaces[1].path),
-            "opening a workspace menu must bind the picker before selection"
+            "clicking the folder slot must bind the picker before selection"
         );
+        assert_eq!(app.selected_session, Some(1));
+        assert!(app.workspace_color_picker.read(cx).is_open());
     });
+    assert_eq!(cx.debug_bounds("session-row-2").is_some(), session_visible);
 
-    let picker = cx
-        .debug_bounds("color-picker")
-        .expect("color picker trigger");
-    click(cx, picker.center());
+    assert!(cx.debug_bounds("color-picker").is_some());
+    assert_eq!(cx.debug_bounds("workspace-name-1").unwrap(), original_name);
     let color = cx.update(|_, cx| Theme::global(cx).red);
     let swatch_selector =
         Box::leak(format!("color-picker-swatch-{}", color.to_hex()).into_boxed_str());
@@ -277,7 +284,7 @@ fn workspace_color_mouse_selection_updates_its_workspace_and_tab(cx: &mut TestAp
     draw(cx);
     assert!(
         cx.debug_bounds(swatch_selector).is_some(),
-        "the outer menu must not unmount the palette before mouse release"
+        "the palette must remain mounted before mouse release"
     );
     cx.simulate_mouse_up(swatch.center(), MouseButton::Left, Modifiers::default());
     draw(cx);
@@ -304,8 +311,8 @@ fn workspace_color_mouse_selection_updates_its_workspace_and_tab(cx: &mut TestAp
     assert!(cx.debug_bounds("folder-tab-border-1").is_some());
     assert!(cx.debug_bounds("folder-tab-border-0").is_none());
 
-    let first_menu = cx.debug_bounds("workspace-menu-trigger-0").unwrap();
-    click(cx, first_menu.center());
+    let first_trigger = cx.debug_bounds("workspace-color-trigger-0").unwrap();
+    click(cx, first_trigger.center());
     cx.update(|_, cx| {
         let app = app.read(cx);
         assert_eq!(
@@ -314,8 +321,6 @@ fn workspace_color_mouse_selection_updates_its_workspace_and_tab(cx: &mut TestAp
         );
         assert!(app.workspace_color_picker.read(cx).value().is_none());
     });
-    let picker = cx.debug_bounds("color-picker").unwrap();
-    click(cx, picker.center());
     let blue = cx.update(|_, cx| Theme::global(cx).blue);
     let blue_selector =
         Box::leak(format!("color-picker-swatch-{}", blue.to_hex()).into_boxed_str());
@@ -341,7 +346,12 @@ fn workspace_color_mouse_selection_updates_its_workspace_and_tab(cx: &mut TestAp
     assert!(cx.debug_bounds("folder-tab-border-0").is_some());
     assert!(cx.debug_bounds("folder-tab-border-1").is_some());
 
+    let menu = cx.debug_bounds("workspace-menu-trigger-1").unwrap();
     click(cx, menu.center());
+    assert!(
+        cx.debug_bounds("color-picker").is_none(),
+        "the menu has no picker"
+    );
     let clear = cx
         .debug_bounds("workspace-clear-color-1")
         .expect("clear color action");
@@ -361,8 +371,38 @@ fn workspace_color_mouse_selection_updates_its_workspace_and_tab(cx: &mut TestAp
                 .get(&app.store.workspaces[0].path),
             Some(&workspace_color_rgba(blue))
         );
-        assert!(app.workspace_color_picker.read(cx).value().is_none());
+        assert_eq!(app.workspace_color_picker.read(cx).value(), Some(blue));
     });
     assert!(cx.debug_bounds("folder-tab-border-0").is_some());
     assert!(cx.debug_bounds("folder-tab-border-1").is_none());
+}
+
+#[gpui_kit::test]
+fn workspace_color_picker_dismisses_and_reopens_without_navigating(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx) = fixture(cx);
+    draw(cx);
+    let trigger = cx.debug_bounds("workspace-color-trigger-1").unwrap();
+    for escape in [true, false] {
+        click(cx, trigger.center());
+        cx.update(|_, cx| assert!(app.read(cx).workspace_color_picker.read(cx).is_open()));
+        if escape {
+            cx.simulate_keystrokes("escape");
+            draw(cx);
+        } else {
+            click(cx, point(px(900.), px(400.)));
+        }
+        cx.update(|_, cx| {
+            let app = app.read(cx);
+            assert!(!app.workspace_color_picker.read(cx).is_open());
+            assert_eq!(app.selected_workspace, Some(0));
+            assert_eq!(app.selected_session, Some(1));
+            assert!(app.store.ui.workspace_colors.is_empty());
+        });
+        assert!(cx.debug_bounds("color-picker").is_none());
+        assert_eq!(
+            cx.debug_bounds("workspace-color-trigger-1").unwrap(),
+            trigger
+        );
+    }
 }

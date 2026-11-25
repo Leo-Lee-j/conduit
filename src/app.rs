@@ -774,7 +774,8 @@ impl ConduitApp {
         let scroll = gpui_kit::ListState::new(0, ListAlignment::Bottom, px(240.));
         let app = cx.entity().downgrade();
         let timeline = cx.new(|_| shell::ChatTimeline::new(app.clone(), scroll.clone()));
-        let sidebar_view = cx.new(|cx| sidebar::SidebarView::new(app.clone(), window, cx));
+        let sidebar_view = cx
+            .new(|cx| sidebar::SidebarView::new(app.clone(), &workspace_color_picker, window, cx));
         let file_view =
             cx.new(|cx| files::FileDocumentView::new(app.clone(), files::Pane::Main, cx));
         let reference_file_view =

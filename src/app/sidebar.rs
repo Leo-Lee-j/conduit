@@ -135,6 +135,7 @@ impl Render for WorkspaceDragPreview {
 pub(super) struct SidebarView {
     app: WeakEntity<ConduitApp>,
     _subscription: Subscription,
+    _color_subscription: Subscription,
     _bounds_subscription: Subscription,
     was_workspace_navigation: bool,
     navigation_revision: Option<super::plugin_ui::NavigationRevision>,
@@ -147,6 +148,7 @@ pub(super) struct SidebarView {
 impl SidebarView {
     pub(super) fn new(
         app: WeakEntity<ConduitApp>,
+        color_picker: &Entity<ColorPickerState>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -182,6 +184,7 @@ impl SidebarView {
             view.pending_tasks = pending_tasks;
         });
         Self {
+            _color_subscription: cx.observe(color_picker, |_, _, cx| cx.notify()),
             app,
             _subscription: subscription,
             _bounds_subscription: cx.observe_window_bounds(window, |_, _, cx| cx.notify()),
@@ -1285,7 +1288,6 @@ impl ConduitApp {
             tint.a *= 0.24;
             tint
         });
-        let toggle_path = workspace.path.clone();
         let compact_path = workspace.path.clone();
         let drag_path = workspace.path.clone();
         let drop_path = workspace.path.clone();
@@ -1386,42 +1388,7 @@ impl ConduitApp {
                 ))
             })
             .on_click(cx.listener(move |this, _, window, cx| this.activate_sidebar_workspace(index, last, window, cx)))
-            .child(
-                Button::new(("workspace-collapse", index))
-                    .debug_selector(move || format!("workspace-collapse-{index}"))
-                    .ghost()
-                    .small()
-                    .compact()
-                    .w(px(TREE_TOGGLE_SIZE))
-                    .h(px(TREE_TOGGLE_SIZE))
-                    .p_0()
-                    .flex_shrink_0()
-                    .cursor_pointer()
-                    .child(
-                        div()
-                            .debug_selector(move || format!("workspace-folder-{index}"))
-                            .size(px(TREE_MARK_SIZE))
-                            .child(
-                                Icon::new(if collapsed { IconName::Folder } else { IconName::FolderOpen })
-                                    .size(px(TREE_MARK_SIZE))
-                                    .text_color(rgb(palette().muted)),
-                            ),
-                    )
-                    .tooltip(if collapsed {
-                        conduit::i18n::text_static("sidebar.expand_workspace")
-                    } else {
-                        conduit::i18n::text_static("sidebar.collapse_workspace")
-                    })
-                    .accessibility_label(if collapsed {
-                        conduit::i18n::text_static("sidebar.expand_workspace")
-                    } else {
-                        conduit::i18n::text_static("sidebar.collapse_workspace")
-                    })
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        cx.stop_propagation();
-                        this.toggle_sidebar_workspace(&toggle_path, window, cx);
-                    })),
-            )
+            .child(self.sidebar_workspace_icon(index, collapsed, can_edit, cx))
             .child(div().debug_selector(move || format!("workspace-name-{index}")).flex_1().min_w_0().font_semibold().truncate().child(workspace.name()))
             .child(
                 h_flex()
@@ -1489,7 +1456,7 @@ impl ConduitApp {
                                 this.new_session_here(index, window, cx)
                             })),
                     )
-                    .child(self.workspace_menu(index, app_entity.clone(), can_edit, cx)),
+                    .child(self.workspace_menu(index, app_entity.clone(), can_edit)),
             )
             .when(!collapsed && self.expanded_workspaces.contains(&index), |row| {
                 row.child(
@@ -1518,6 +1485,127 @@ impl ConduitApp {
                 )
             })
             .when(self.sidebar.keyboard_row.as_ref().is_some_and(|row| matches!(row, cache::Row::Workspace { path, .. } if *path == workspace.path)), |row| row.child(self.sidebar_focus_indicator()))
+            .into_any_element()
+    }
+
+    fn sidebar_workspace_icon(
+        &self,
+        index: usize,
+        collapsed: bool,
+        can_edit: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let path = self.store.workspaces[index].path.clone();
+        let picker_open = self.workspace_color_target.as_ref() == Some(&path)
+            && self.workspace_color_picker.read(cx).is_open();
+        let label = conduit::i18n::text_static("sessions.workspace_color");
+        let folder = div()
+            .debug_selector(move || format!("workspace-folder-{index}"))
+            .size(px(TREE_MARK_SIZE))
+            .child(
+                Icon::new(if collapsed {
+                    IconName::Folder
+                } else {
+                    IconName::FolderOpen
+                })
+                .size(px(TREE_MARK_SIZE))
+                .text_color(rgb(palette().muted)),
+            );
+        if !can_edit {
+            return Button::new(("workspace-collapse", index))
+                .debug_selector(move || format!("workspace-collapse-{index}"))
+                .ghost()
+                .small()
+                .compact()
+                .size(px(TREE_TOGGLE_SIZE))
+                .p_0()
+                .flex_shrink_0()
+                .cursor_pointer()
+                .child(folder)
+                .tooltip(if collapsed {
+                    conduit::i18n::text_static("sidebar.expand_workspace")
+                } else {
+                    conduit::i18n::text_static("sidebar.collapse_workspace")
+                })
+                .accessibility_label(if collapsed {
+                    conduit::i18n::text_static("sidebar.expand_workspace")
+                } else {
+                    conduit::i18n::text_static("sidebar.collapse_workspace")
+                })
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.toggle_sidebar_workspace(&path, window, cx);
+                }))
+                .into_any_element();
+        }
+        let palette_icon = Icon::new(FullIconName::Palette)
+            .size(px(TREE_MARK_SIZE))
+            .text_color(rgb(palette().muted));
+        let control = if picker_open {
+            gpui_kit::component::color_picker::ColorPicker::new(&self.workspace_color_picker)
+                .icon(palette_icon)
+                .with_size(Size::Small)
+                .accessibility_label(label)
+                .size(px(TREE_TOGGLE_SIZE))
+                .flex()
+                .items_center()
+                .justify_center()
+                .into_any_element()
+        } else {
+            Button::new(("workspace-color-trigger", index))
+                .ghost()
+                .small()
+                .compact()
+                .size(px(TREE_TOGGLE_SIZE))
+                .p_0()
+                .opacity(0.)
+                .group_hover("workspace-row", |style| style.opacity(1.))
+                .focus_visible(|style| style.opacity(1.).bg(rgb(palette().surface_hover)))
+                .child(palette_icon)
+                .tooltip(label)
+                .accessibility_label(label)
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    if !this.writable || this.closing {
+                        return;
+                    }
+                    this.workspace_color_target = Some(path.clone());
+                    let color = this.store.ui.workspace_colors.get(&path).copied();
+                    this.workspace_color_picker.update(cx, |picker, cx| {
+                        match color {
+                            Some(color) => picker.set_value(
+                                gpui_kit::Hsla::from(gpui_kit::rgba(color)),
+                                window,
+                                cx,
+                            ),
+                            None => picker.clear_value(window, cx),
+                        }
+                        picker.set_open(true, cx);
+                        picker.focus_handle(cx).focus(window, cx);
+                    });
+                    this.sidebar_view.update(cx, |_, cx| cx.notify());
+                    cx.notify();
+                }))
+                .into_any_element()
+        };
+        div()
+            .id(("workspace-color-slot", index))
+            .debug_selector(move || format!("workspace-color-trigger-{index}"))
+            .relative()
+            .size(px(TREE_TOGGLE_SIZE))
+            .flex_shrink_0()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(|_, _, cx| cx.stop_propagation())
+            .child(
+                folder
+                    .absolute()
+                    .top(px(4.))
+                    .left(px(4.))
+                    .when(picker_open, |folder| folder.opacity(0.))
+                    .group_hover("workspace-row", |style| style.opacity(0.)),
+            )
+            .child(control)
             .into_any_element()
     }
 }
