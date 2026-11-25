@@ -1047,6 +1047,7 @@ fn concurrent_sessions_isolate_events_approvals_cancellation_and_history(cx: &mu
             this.finish_history_import(
                 &root,
                 vec![crate::history::ImportedSession {
+                    usage: Default::default(),
                     task_list: None,
                     is_subagent: false,
                     provider: Provider::Claude,
@@ -1855,6 +1856,7 @@ mod history_and_search {
     }
     fn imported(messages: Vec<ChatItem>) -> crate::history::ImportedSession {
         crate::history::ImportedSession {
+            usage: Default::default(),
             task_list: None,
             is_subagent: false,
             provider: Provider::Claude,

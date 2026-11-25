@@ -63,6 +63,7 @@ impl Scanner {
                 sessions.push_back(Session {
                     cwd,
                     record: ImportedSession {
+                        usage: Default::default(),
                         task_list: None,
                         is_subagent: false,
                         provider: Provider::OpenCode,
@@ -193,6 +194,7 @@ fn read_parts(
             batch.add_opencode_bytes(data.len() as u64);
             pending.message = serde_json::from_str(&data)?;
             pending.message_id = message_id.clone();
+            super::usage::opencode(&mut pending.session.record.usage, &pending.message);
             let model = pending.message.get("model").unwrap_or(&pending.message);
             if let (Some(provider), Some(model)) =
                 (model["providerID"].as_str(), model["modelID"].as_str())

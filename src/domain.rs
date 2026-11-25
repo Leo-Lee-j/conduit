@@ -119,9 +119,22 @@ impl PermissionLevel {
     }
 }
 
+/// Token counts for one native request, which need not be a whole user turn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestUsage {
+    pub input: Option<u64>,
+    pub cached: Option<u64>,
+    pub cache_write: Option<u64>,
+    pub output: Option<u64>,
+}
+
 /// Cumulative consumption and an independent latest-request context snapshot.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Usage {
+    /// Latest request recovered from CLI history. Marks this snapshot as a
+    /// historical fallback; live usage replaces it and uses the local ledger.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<RequestUsage>,
     #[serde(default)]
     pub input_tokens_known: bool,
     #[serde(default)]

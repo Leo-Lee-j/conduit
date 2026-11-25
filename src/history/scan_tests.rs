@@ -106,6 +106,48 @@ impl Drop for Fixture {
         let _ = std::fs::remove_dir_all(&self.root);
     }
 }
+
+#[test]
+fn parser_upgrade_restores_usage_even_when_old_history_stamps_match() {
+    let fixture = Fixture::new();
+    let path = fixture.file(Provider::Codex, "usage");
+    std::fs::write(
+        &path,
+        super::usage_tests::codex_lines(&fixture.workspace, 1000, 100),
+    )
+    .unwrap();
+    let first = fixture.scan();
+    assert_eq!(first.sessions[0][0].usage.context_tokens, Some(105));
+    {
+        let connection = rusqlite::Connection::open(&fixture.index).unwrap();
+        connection
+            .execute(
+                "UPDATE history_files SET metadata = json_set(metadata, '$.version', 9)",
+                [],
+            )
+            .unwrap();
+    }
+    let mut scanner = Scanner::open(
+        Some(&fixture.root),
+        vec![fixture.workspace.clone()],
+        first.file_stamps,
+        &fixture.index,
+        None,
+        &AtomicBool::new(false),
+    );
+    let mut imported = Vec::new();
+    loop {
+        let batch = scanner.next(&AtomicBool::new(false));
+        assert!(batch.warnings.is_empty());
+        imported.extend(batch.sessions.into_iter().flatten());
+        if batch.done {
+            break;
+        }
+    }
+    assert_eq!(imported.len(), 1);
+    assert_eq!(imported[0].usage.context_tokens, Some(105));
+    assert_eq!(imported[0].usage.input_tokens, 1000);
+}
 fn append(path: &Path, text: &str) {
     File::options()
         .append(true)
@@ -154,6 +196,40 @@ fn opencode_part(
             ],
         )
         .unwrap();
+}
+
+#[test]
+fn opencode_usage_is_not_multiplied_by_message_parts_or_repeated_scans() {
+    let fixture = Fixture::new();
+    let connection = fixture.opencode();
+    opencode_session(&connection, &fixture, "usage");
+    connection
+        .execute(
+            "INSERT INTO message VALUES ('reply', 'usage', 1791619301390, ?1)",
+            [serde_json::json!({"role":"assistant","tokens":{
+                "input":10,"output":5,"reasoning":3,"cache":{"read":80,"write":10}
+            }})
+            .to_string()],
+        )
+        .unwrap();
+    for index in 1..=150 {
+        opencode_part(
+            &connection,
+            "usage",
+            "reply",
+            &index.to_string(),
+            serde_json::json!({"type":"text","text":"part"}),
+        );
+    }
+    for _ in 0..2 {
+        let batch = fixture.scan();
+        assert!(batch.warnings.is_empty());
+        let usage = batch.sessions[0][0].usage;
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 5);
+        assert_eq!(usage.history.unwrap().cached, Some(80));
+        assert_eq!(usage.context_tokens, Some(108));
+    }
 }
 
 #[test]
@@ -511,6 +587,7 @@ fn reclassifying_an_existing_subagent_preserves_metadata_and_cold_body_without_i
         "messages":[{"key":"local-reply", "kind":"Assistant", "text":"Locally preserved reply", "elapsed_ms":1234}]
     })).unwrap();
     let incoming = ImportedSession {
+        usage: Default::default(),
         task_list: None,
         is_subagent: true,
         provider: Provider::Codex,

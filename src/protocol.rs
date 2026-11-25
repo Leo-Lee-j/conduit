@@ -159,8 +159,8 @@ impl Step {
 
 /// Claude cache read/write are disjoint input components. Merge partial stream
 /// snapshots by response ID; output snapshots are cumulative, not deltas.
-#[derive(Default)]
-struct ClaudeUsage {
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+pub(crate) struct ClaudeUsage {
     input: u64,
     input_reported: bool,
     cache_reported: bool,
@@ -172,7 +172,7 @@ struct ClaudeUsage {
     output: u64,
 }
 impl ClaudeUsage {
-    fn merge(&mut self, value: &Value) {
+    pub(crate) fn merge(&mut self, value: &Value) {
         self.input_reported |= value["input_tokens"].as_u64().is_some();
         self.cache_reported |= value["cache_read_input_tokens"].as_u64().is_some();
         self.cache_write_reported |= value["cache_creation_input_tokens"].as_u64().is_some();
@@ -191,7 +191,7 @@ impl ClaudeUsage {
             self.output = self.output.max(output);
         }
     }
-    fn snapshot(&self) -> Usage {
+    pub(crate) fn snapshot(&self) -> Usage {
         let input = self
             .input
             .saturating_add(self.cache_read)

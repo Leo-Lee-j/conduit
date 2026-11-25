@@ -70,6 +70,43 @@ fn copied(cx: &mut VisualTestContext) -> String {
 }
 
 #[gpui_kit::test]
+fn session_data_restores_native_usage_cards_after_restart(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let disk = crate::transcript::tests::Fixture::new();
+    let mut store = disk.store(0);
+    let imported = serde_json::from_value(serde_json::json!({
+        "provider":"Codex", "native_id":"native-usage", "created_at":1,
+        "title":"Imported usage", "model":null, "subagents":[], "is_subagent":false,
+        "messages":[{"key":"import-user","kind":"User","text":"hello"}],
+        "usage":{
+            "history":{"input":1000,"cached":800,"cache_write":null,"output":100},
+            "input_tokens_known":true,"cached_input_tokens_known":true,"output_tokens_known":true,
+            "input_tokens":5000,"cached_input_tokens":4000,"output_tokens":500,
+            "total_tokens":5500,"context_tokens":1100,"context_window":200000
+        }
+    }))
+    .unwrap();
+    crate::history::merge_imported(&mut store.workspaces[0], &mut 1, vec![imported]);
+    store.save_to(&disk.state).unwrap();
+    let restored = Store::load_from(&disk.state).unwrap();
+    assert!(!restored.workspaces[0].sessions[0].transcript.loaded);
+    assert!(restored.usage_ledger.observations.is_empty());
+    let (app, cx) = fixture(cx, restored, PluginUi::new());
+    cx.simulate_resize(gpui_kit::size(px(1100.), px(1600.)));
+    draw(cx);
+    assert!(cx.element_bounds("session-data-context-card").is_some());
+    assert!(cx.element_bounds("session-data-usage-summary").is_some());
+    assert!(cx.element_bounds("session-data-empty-state").is_none());
+    app.read_with(cx, |app, _| {
+        let usage = app.session(1).unwrap().usage;
+        assert_eq!(usage.context_ratio(), Some(0.0055));
+        assert_eq!(usage.history.unwrap().input, Some(1000));
+        assert_eq!(usage.input_tokens, 5000);
+        assert!(app.store.usage_ledger.observations.is_empty());
+    });
+}
+
+#[gpui_kit::test]
 fn session_data_opens_on_session_entry_and_respects_manual_changes(cx: &mut TestAppContext) {
     let _locale = crate::test_support::chinese();
     let mut store = tool_store();

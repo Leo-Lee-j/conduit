@@ -18,6 +18,9 @@ mod questions;
 mod scan;
 #[cfg(test)]
 mod task_list_tests;
+mod usage;
+#[cfg(test)]
+mod usage_tests;
 pub(crate) use diagnostics::record_scan_summary;
 pub(crate) use scan::Scanner;
 
@@ -29,6 +32,8 @@ use std::path::{Path, PathBuf};
 /// A CLI-side session discovered on disk, ready to become a `SessionRecord`.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ImportedSession {
+    #[serde(default)]
+    pub usage: crate::domain::Usage,
     #[serde(default)]
     pub task_list: Option<crate::task_list::Snapshot>,
     pub is_subagent: bool,
@@ -156,6 +161,14 @@ fn merge_session(
             return 0;
         }
         existing.created_at = session.created_at;
+        // Repeated imports refresh native snapshots, but never replace usage
+        // measured by a live Conduit turn with a possibly older disk scan.
+        if session.usage.history.is_some()
+            && (existing.usage == crate::domain::Usage::default()
+                || existing.usage.history.is_some())
+        {
+            existing.usage = session.usage;
+        }
         if existing.title.is_empty() && !session.title.is_empty() {
             existing.title = session.title;
         }
@@ -207,7 +220,7 @@ fn merge_session(
         reasoning_effort: Default::default(),
         opencode: Default::default(),
         permission: crate::domain::PermissionLevel::default(),
-        usage: crate::domain::Usage::default(),
+        usage: session.usage,
     });
     1
 }
@@ -435,6 +448,8 @@ fn parse_claude_any(text: &str) -> Option<(Vec<String>, ImportedSession)> {
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 struct ClaudeState {
     #[serde(default)]
+    usage: usage::Claude,
+    #[serde(default)]
     task_list: Option<crate::task_list::Snapshot>,
     #[serde(default)]
     task_tracker: crate::task_list::claude::Tracker,
@@ -456,6 +471,7 @@ fn parse_claude_lines(
 
 fn extend_claude(lines: impl Iterator<Item = String>, state: ClaudeState) -> ClaudeState {
     let ClaudeState {
+        mut usage,
         mut task_list,
         mut task_tracker,
         mut native_id,
@@ -579,6 +595,7 @@ fn extend_claude(lines: impl Iterator<Item = String>, state: ClaudeState) -> Cla
                 }
             }
             Some("assistant") => {
+                usage.accept(&value);
                 let message = value.get("message");
                 if model.is_none()
                     && let Some(m) = message.and_then(|m| m.get("model")).and_then(Value::as_str)
@@ -657,6 +674,7 @@ fn extend_claude(lines: impl Iterator<Item = String>, state: ClaudeState) -> Cla
     }
 
     ClaudeState {
+        usage,
         task_list,
         task_tracker,
         native_id,
@@ -672,6 +690,7 @@ fn extend_claude(lines: impl Iterator<Item = String>, state: ClaudeState) -> Cla
 impl ClaudeState {
     fn finish(self) -> Option<(Vec<String>, ImportedSession)> {
         let Self {
+            usage,
             task_list,
             native_id,
             created_at,
@@ -694,6 +713,7 @@ impl ClaudeState {
         Some((
             cwds,
             ImportedSession {
+                usage: usage.finish(),
                 task_list,
                 is_subagent: false,
                 provider: Provider::Claude,
@@ -756,6 +776,8 @@ fn parse_codex_any(text: &str, workspace: Option<&Path>) -> Option<(String, Impo
 }
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 struct CodexState {
+    #[serde(default)]
+    usage: crate::domain::Usage,
     native_id: Option<String>,
     #[serde(default)]
     is_subagent: bool,
@@ -883,6 +905,7 @@ fn extend_codex(
         return state;
     }
     let CodexState {
+        mut usage,
         native_id,
         is_subagent,
         parent_thread_id,
@@ -961,6 +984,9 @@ fn extend_codex(
             }
         }
         match value.get("type").and_then(Value::as_str) {
+            Some("event_msg") if payload["type"] == "token_count" => {
+                usage::codex(&mut usage, &payload["info"]);
+            }
             Some("turn_context") => {
                 if let Some(entry) = payload.get("model").and_then(Value::as_str) {
                     current_model = Some(entry.to_owned());
@@ -1387,6 +1413,7 @@ fn extend_codex(
     }
 
     CodexState {
+        usage,
         native_id,
         is_subagent,
         parent_thread_id,
@@ -1418,6 +1445,7 @@ fn extend_codex(
 impl CodexState {
     fn finish(self) -> Option<(String, ImportedSession)> {
         let Self {
+            usage,
             native_id,
             is_subagent,
             parent_thread_id,
@@ -1459,6 +1487,7 @@ impl CodexState {
             return Some((
                 cwd,
                 ImportedSession {
+                    usage: Default::default(),
                     task_list: None,
                     is_subagent: true,
                     provider: Provider::Codex,
@@ -1556,6 +1585,7 @@ impl CodexState {
         Some((
             cwd,
             ImportedSession {
+                usage,
                 task_list: None,
                 is_subagent: false,
                 provider: Provider::Codex,
@@ -1933,6 +1963,7 @@ mod tests {
             sessions: vec![parent],
         };
         let imported = ImportedSession {
+            usage: Default::default(),
             task_list: None,
             is_subagent: true,
             provider: Provider::Codex,
@@ -2420,6 +2451,7 @@ mod tests {
         // through merge_imported instead.
         let imported = vec![
             ImportedSession {
+                usage: Default::default(),
                 task_list: None,
                 is_subagent: false,
                 provider: Provider::Claude,
@@ -2443,6 +2475,7 @@ mod tests {
                 })],
             },
             ImportedSession {
+                usage: Default::default(),
                 task_list: None,
                 is_subagent: false,
                 provider: Provider::Codex,

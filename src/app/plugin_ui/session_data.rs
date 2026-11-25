@@ -149,6 +149,24 @@ fn consumption<'a>(
     (total, latest.cloned())
 }
 
+fn history_consumption(usage: crate::domain::Usage) -> Consumption {
+    let input = usage.input_tokens_known.then_some(usage.input_tokens);
+    let cached = usage
+        .cached_input_tokens_known
+        .then_some(usage.cached_input_tokens);
+    let cache_hit = input.zip(cached).filter(|(input, cached)| cached <= input);
+    Consumption {
+        input,
+        cached,
+        cache_write: usage.cache_write_input_tokens,
+        output: usage.output_tokens_known.then_some(usage.output_tokens),
+        incomplete: input.is_none() || !usage.output_tokens_known,
+        cache_hit_input: cache_hit.map_or(0, |(input, _)| u128::from(input)),
+        cache_hit_cached: cache_hit.map_or(0, |(_, cached)| u128::from(cached)),
+        ..Default::default()
+    }
+}
+
 fn text(key: &'static str) -> &'static str {
     conduit::i18n::text_static(key)
 }
@@ -772,7 +790,11 @@ impl ConduitApp {
             .observations
             .iter()
             .filter(|turn| turn.session == *id && turn.workspace == workspace.path());
-        let (total, latest) = consumption(records.clone(), current.as_ref());
+        let (mut total, latest) = consumption(records.clone(), current.as_ref());
+        let history = (total.turns == 0).then_some(usage.history).flatten();
+        if history.is_some() {
+            total = history_consumption(usage);
+        }
         let model = match run {
             Some(run) => run.model.as_deref(),
             None => session.model.as_deref(),
@@ -1022,6 +1044,11 @@ impl ConduitApp {
                             )
                         }),
                 );
+        } else if let Some(used) = usage.context_tokens {
+            context = context.child(caption(conduit::i18n::format(
+                "session_data.context_limit_unknown",
+                &[("tokens", tokens(Some(used)))],
+            )));
         } else {
             context = context.child(
                 Empty::new().p_0().py_2().header(
@@ -1079,7 +1106,7 @@ impl ConduitApp {
                 })
                 .flatten()
         });
-        if total.turns == 0 {
+        if total.turns == 0 && history.is_none() {
             content = content.child(
                 card()
                     .id("session-data-empty-state")
@@ -1156,7 +1183,11 @@ impl ConduitApp {
             let mut usage_note = format!(
                 "{}\n{}",
                 text("session_data.cache_subset"),
-                text("session_data.recorded_note"),
+                text(if history.is_some() {
+                    "session_data.history_usage_note"
+                } else {
+                    "session_data.recorded_note"
+                }),
             );
             if total.incomplete {
                 usage_note.push('\n');
@@ -1175,7 +1206,9 @@ impl ConduitApp {
                         .gap_2()
                         .child(heading("session_data.usage", Some(usage_note.into())).flex_1())
                         .child(
-                            caption(text(if run.is_some() {
+                            caption(text(if history.is_some() {
+                                "session_data.latest_request"
+                            } else if run.is_some() {
                                 "session_data.current_turn"
                             } else {
                                 "session_data.latest_turn"
@@ -1185,34 +1218,41 @@ impl ConduitApp {
                             .text_right(),
                         )
                         .child(
-                            caption(text("session_data.recorded_total"))
-                                .w(px(78.))
-                                .flex_shrink_0()
-                                .text_right(),
+                            caption(text(if history.is_some() {
+                                "session_data.history_total"
+                            } else {
+                                "session_data.recorded_total"
+                            }))
+                            .w(px(78.))
+                            .flex_shrink_0()
+                            .text_right(),
                         ),
                 )
                 .child(usage_row(
                     "session_data.input",
-                    turn.and_then(|turn| turn.input),
+                    history.map_or_else(|| turn.and_then(|turn| turn.input), |usage| usage.input),
                     total.input,
                     cx,
                 ))
                 .child(usage_row(
                     "session_data.output",
-                    turn.and_then(|turn| turn.output),
+                    history.map_or_else(|| turn.and_then(|turn| turn.output), |usage| usage.output),
                     total.output,
                     cx,
                 ))
                 .child(divider())
                 .child(usage_row(
                     "session_data.cache_read",
-                    turn.and_then(|turn| turn.cached),
+                    history.map_or_else(|| turn.and_then(|turn| turn.cached), |usage| usage.cached),
                     total.cached,
                     cx,
                 ))
                 .child(usage_row(
                     "session_data.cache_write",
-                    turn.and_then(|turn| turn.cache_write),
+                    history.map_or_else(
+                        || turn.and_then(|turn| turn.cache_write),
+                        |usage| usage.cache_write,
+                    ),
                     total.cache_write,
                     cx,
                 ));
