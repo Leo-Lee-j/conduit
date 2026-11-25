@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::sync::LazyLock;
 
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Capabilities {
     pub levels: Vec<ReasoningEffort>,

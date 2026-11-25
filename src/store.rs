@@ -592,6 +592,7 @@ pub struct SessionDefaults {
 }
 
 impl Store {
+    #[cfg(test)]
     pub fn load_ccs_catalog(&mut self) -> crate::ccs::CcsCatalog {
         if let Some(catalog) = &self.ccs_catalog {
             return catalog.clone();

@@ -6,6 +6,7 @@ mod cache;
 mod chat_approval;
 mod conversation;
 mod scroll;
+mod sticky;
 mod timeline_source;
 pub(in crate::app) use timeline_source::TimelineSource;
 
@@ -92,7 +93,7 @@ impl ChatTimeline {
 }
 
 impl Render for ChatTimeline {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(app) = self.app.upgrade() {
             let app = app.read(cx);
             if self.source.following(app)
@@ -110,11 +111,17 @@ impl Render for ChatTimeline {
                 monitor.update(cx, |monitor, _| monitor.begin_message_frame());
             }
         }
+        let frame = sticky::Frame::default();
+        let row_frame = frame.clone();
+        let layout_frame = frame.clone();
+        let header_height = ui_text_size(32.).to_pixels(window.rem_size());
         let app = self.app.clone();
         let source = self.source.clone();
         let list = gpui_kit::list(self.scroll.clone(), move |index, window, cx| {
-            app.update(cx, |app, cx| source.render(app, index, window, cx).0)
-                .unwrap_or_else(|_| div().into_any_element())
+            let row = app
+                .update(cx, |app, cx| source.render(app, index, window, cx).0)
+                .unwrap_or_else(|_| div().into_any_element());
+            row_frame.track(index, row)
         })
         .size_full();
         let origin = std::rc::Rc::new(std::cell::Cell::new(self.scroll.logical_scroll_top()));
@@ -127,7 +134,8 @@ impl Render for ChatTimeline {
         div()
             .relative()
             .size_full()
-            .pt(px(5.))
+            // Keep the reading viewport stable when the prompt appears or changes.
+            .pt(header_height + px(5.))
             .on_scroll_wheel(cx.listener(move |this, event, _, cx| {
                 this.handle_scroll(event, origin.get(), cx);
                 cx.stop_propagation();
@@ -135,6 +143,7 @@ impl Render for ChatTimeline {
             .child(
                 canvas(
                     move |bounds, window, cx| {
+                        layout_frame.clear();
                         wheel.borrow_mut().prepare(
                             &layout_scroll,
                             &layout_app,
@@ -161,6 +170,12 @@ impl Render for ChatTimeline {
                 .inset_0(),
             )
             .child(list)
+            .child(frame.header(
+                self.app.clone(),
+                self.source.clone(),
+                self.scroll.clone(),
+                header_height,
+            ))
     }
 }
 

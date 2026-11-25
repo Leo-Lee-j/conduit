@@ -657,6 +657,7 @@ fn settings_service_actions_keep_history_and_revalidate_routes(cx: &mut TestAppC
             app.store.git.generation_channel = None;
             app.store.providers[0].source = ProviderSource::Ccs {
                 id: "external".into(),
+                protected_route: None,
             };
             assert!(
                 !app.delete_model_service(&provider.id, cx),
@@ -714,6 +715,7 @@ fn settings_services_inline_selection_resizes_without_changing_defaults(cx: &mut
     second.name = "Imported service".into();
     second.source = ProviderSource::Ccs {
         id: "external".into(),
+        protected_route: None,
     };
     let route = ModelChannel::Provider(first.id.clone());
     cx.simulate_resize(size(px(1500.), px(850.)));

@@ -7,6 +7,7 @@ use gpui_kit::{
 use std::time::Duration;
 
 mod split;
+mod sticky;
 
 fn draw(cx: &mut VisualTestContext) {
     cx.run_until_parked();
