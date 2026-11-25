@@ -2,7 +2,7 @@ use crate::app::{ConduitApp, DocumentTab, workspace_color_rgba};
 use crate::{domain::Workspace, store::Store};
 use gpui_kit::component::tab::folder_tab_border_geometry;
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::{Colorize as _, Theme};
+use gpui_kit::component::{Colorize as _, Theme, ThemeMode};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AppContext as _, Bounds, Context, Entity, InteractiveElement as _, IntoElement, Modifiers,
@@ -113,6 +113,98 @@ fn workspace_tab_border_spans_curves_and_follows_tab_selection(cx: &mut TestAppC
         assert!(cx.debug_bounds("folder-tab-border-0").is_some());
         assert!(cx.debug_bounds("folder-tab-border-1").is_some());
     }
+}
+
+#[gpui_kit::test]
+fn workspace_tab_border_keeps_custom_colors_across_themes(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx) = fixture(cx);
+    // Keep both the hue and alpha of opaque red and translucent pink.
+    let colors = [0xff0000ff, 0xff008080];
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            for (index, color) in colors.into_iter().enumerate() {
+                let root = app.store.workspaces[index].path.clone();
+                app.set_workspace_color(&root, Some(color), cx);
+            }
+        });
+    });
+    for (light, dark) in [
+        ("Slate & Teal", "Deep Slate & Teal"),
+        ("Graphite & Indigo", "Graphite & Indigo Dark"),
+        ("Warm Paper & Terracotta", "Warm Charcoal & Terracotta"),
+        ("Conduit Light", "Conduit Dark"),
+    ] {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            let name = if mode.is_dark() { dark } else { light };
+            cx.update(|_, cx| {
+                crate::app::apply_theme(mode, light, dark, cx);
+                app.update(cx, |_, cx| cx.notify());
+                assert_eq!(Theme::global(cx).theme_name().as_ref(), name);
+            });
+            draw(cx);
+            cx.update(|_, cx| {
+                let app = app.read(cx);
+                for (workspace, color) in app.store.workspaces.iter().zip(colors) {
+                    let stored = app.store.ui.workspace_colors.get(&workspace.path).copied();
+                    assert_eq!(stored, Some(color), "{name}: saved color is unchanged");
+                    assert_eq!(
+                        crate::app::theme::project_marker_color(&workspace.path, stored),
+                        Some(color),
+                        "{name}: tab border must use the explicit workspace color"
+                    );
+                }
+            });
+            assert!(cx.debug_bounds("folder-tab-border-0").is_some());
+            assert!(cx.debug_bounds("folder-tab-border-1").is_some());
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn workspace_tab_border_restores_theme_fallback_after_clearing_color(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx) = fixture(cx);
+    cx.update(|_, cx| {
+        crate::app::apply_theme(ThemeMode::Light, "Slate & Teal", "Deep Slate & Teal", cx);
+        app.update(cx, |_, cx| cx.notify());
+    });
+    draw(cx);
+    let (root, fallback) = cx.update(|_, cx| {
+        assert_eq!(Theme::global(cx).theme_name().as_ref(), "Slate & Teal");
+        let app = app.read(cx);
+        assert!(app.store.ui.workspace_colors.is_empty());
+        let root = app.store.workspaces[0].path.clone();
+        let fallback = crate::app::theme::project_marker_color(&root, None)
+            .expect("paired themes provide an automatic project color");
+        assert_eq!(
+            crate::app::theme::project_marker_color(&root, None),
+            Some(fallback),
+            "the automatic project color is stable"
+        );
+        (root, fallback)
+    });
+    assert!(cx.debug_bounds("folder-tab-border-0").is_some());
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.set_workspace_color(&root, Some(0xff0000ff), cx);
+            app.set_workspace_color(&root, None, cx);
+            assert!(!app.store.ui.workspace_colors.contains_key(&root));
+            assert_eq!(
+                crate::app::theme::project_marker_color(&root, None),
+                Some(fallback)
+            );
+        });
+    });
+    draw(cx);
+    assert!(cx.debug_bounds("folder-tab-border-0").is_some());
+    cx.update(|_, cx| {
+        crate::app::apply_theme(ThemeMode::Light, "Conduit Light", "Conduit Dark", cx);
+        app.update(cx, |_, cx| cx.notify());
+        assert_eq!(crate::app::theme::project_marker_color(&root, None), None);
+    });
+    draw(cx);
+    assert!(cx.debug_bounds("folder-tab-border-0").is_none());
 }
 
 struct ColorBorderTabs {

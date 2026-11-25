@@ -175,27 +175,18 @@ pub(super) fn is_dark_mode() -> bool {
     DARK_MODE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// Project identity follows the paired themes without rewriting saved colors.
+/// Explicit workspace colors win; paired themes only supply default project markers.
 pub(super) fn project_marker_color(path: &std::path::Path, stored: Option<u32>) -> Option<u32> {
-    if !palette().restrained_projects {
+    if stored.is_some() || !palette().restrained_projects {
         return stored;
     }
-    let hue = if let Some(color) = stored {
-        let color = gpui_kit::Hsla::from(gpui_kit::rgba(color));
-        if color.h < 0.12 || color.h > 0.84 {
-            0.70
-        } else {
-            color.h
-        }
-    } else {
-        let hash = path
-            .to_string_lossy()
-            .bytes()
-            .fold(2166136261_u32, |hash, byte| {
-                (hash ^ u32::from(byte)).wrapping_mul(16777619)
-            });
-        [0.62, 0.46, 0.70, 0.34, 0.54, 0.22][hash as usize % 6]
-    };
+    let hash = path
+        .to_string_lossy()
+        .bytes()
+        .fold(2166136261_u32, |hash, byte| {
+            (hash ^ u32::from(byte)).wrapping_mul(16777619)
+        });
+    let hue = [0.62, 0.46, 0.70, 0.34, 0.54, 0.22][hash as usize % 6];
     let (saturation, lightness) = if is_dark_mode() {
         (0.48, 0.68)
     } else {
