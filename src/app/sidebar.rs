@@ -570,6 +570,7 @@ impl ConduitApp {
                         .into_any_element(),
                     cache::Row::Loading(_) => {
                         let workspace = &self.store.workspaces[index];
+                        let loaded = workspace.visible_sessions().count();
                         h_flex()
                             .h(px(ROW_HEIGHT))
                             .flex_shrink_0()
@@ -580,26 +581,15 @@ impl ConduitApp {
                             .text_size(ui_text_size(12.))
                             .text_color(rgb(palette().faint))
                             .child(Spinner::new().small().color(rgb(palette().faint).into()))
-                            .child(
-                                self.session_control
-                                    .scan_progress
-                                    .get(&workspace.path)
-                                    .map(|(completed, total)| {
-                                        conduit::i18n::format(
-                                            "sidebar.loading_session_history",
-                                            &[
-                                                ("completed", format!("{}", completed)),
-                                                ("total", format!("{}", total)),
-                                            ],
-                                        )
-                                    })
-                                    .unwrap_or_else(|| {
-                                        conduit::i18n::text_static(
-                                            "sidebar.discovering_session_history",
-                                        )
-                                        .into()
-                                    }),
-                            )
+                            .child(if loaded > 0 {
+                                conduit::i18n::format(
+                                    "sidebar.loading_session_history",
+                                    &[("completed", loaded.to_string())],
+                                )
+                            } else {
+                                conduit::i18n::text_static("sidebar.discovering_session_history")
+                                    .into()
+                            })
                             .into_any_element()
                     }
                     cache::Row::Session { id, .. } => {

@@ -1439,7 +1439,7 @@
   "sidebar.search_files_double_shift": "搜索文件（双击 Shift）",
   "sidebar.no_workspaces_yet": "还没有工作区",
   "sidebar.click_above_to_add_a_local_directory": "点击上方 + 添加一个本地目录",
-  "sidebar.loading_session_history": "正在加载会话历史：%{completed}/%{total}",
+  "sidebar.loading_session_history": "正在加载 · 已载入 %{completed} 条会话",
   "sidebar.discovering_session_history": "正在发现会话历史…",
   "sidebar.running": " · 运行中",
   "sidebar.active_tasks": "进行中 / 待处理",

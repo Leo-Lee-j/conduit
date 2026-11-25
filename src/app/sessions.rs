@@ -1390,12 +1390,8 @@ impl ConduitApp {
                         }
                         if done {
                             this.session_control.scan_cancels.remove(path);
-                            this.session_control.scan_progress.remove(path);
                         } else {
                             this.history_loading.insert(path.clone());
-                            this.session_control
-                                .scan_progress
-                                .insert(path.clone(), (batch.completed, batch.total));
                         }
                     }
                     if done {

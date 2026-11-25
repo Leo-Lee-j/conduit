@@ -1439,7 +1439,7 @@
   "sidebar.search_files_double_shift": "Search files (double Shift)",
   "sidebar.no_workspaces_yet": "No workspaces yet",
   "sidebar.click_above_to_add_a_local_directory": "Click + above to add a local directory",
-  "sidebar.loading_session_history": "Loading session history: %{completed}/%{total}",
+  "sidebar.loading_session_history": "Loading · %{completed} sessions loaded",
   "sidebar.discovering_session_history": "Discovering session history…",
   "sidebar.running": " · Running",
   "sidebar.active_tasks": "In progress / Waiting",
