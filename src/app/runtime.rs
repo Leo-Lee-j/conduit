@@ -789,6 +789,7 @@ impl ConduitApp {
         self.prune_composer_editors();
         self.poll_terminals(window, cx);
         self.poll_persistence(cx);
+        self.auto_archive_sessions(false, cx);
         if self.store.ui.auto_cleanup_empty_sessions
             && self
                 .last_empty_session_cleanup

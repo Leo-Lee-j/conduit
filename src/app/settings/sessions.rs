@@ -1,6 +1,7 @@
 //! Conversation preferences grouped by their scope of effect.
 
 use super::*;
+use gpui_kit::component::switch::Switch;
 
 impl ConduitApp {
     /// Stable route 10 groups: defaults, permission, chat display, automatic naming.
@@ -28,8 +29,71 @@ impl ConduitApp {
                     "settings.general.naming_runs_in_the_background_failures_keep",
                 )
             }),
-            self.settings_empty_session_cleanup_group(disabled, view),
+            self.settings_empty_session_cleanup_group(disabled, view.clone()),
+            self.settings_auto_archive_group(disabled, view),
         ])
+    }
+
+    fn settings_auto_archive_group(&self, disabled: bool, view: Entity<Self>) -> SettingGroup {
+        let enabled_view = view.clone();
+        let enabled = SettingField::render(move |_, _, cx| {
+            let view = enabled_view.clone();
+            Switch::new("session-auto-archive-enabled")
+                .checked(view.read(cx).store.ui.auto_archive.enabled)
+                .accessibility_label(conduit::i18n::text_static(
+                    "settings.sessions.auto_archive_enabled",
+                ))
+                .disabled(disabled)
+                .on_click(move |enabled, _, cx| {
+                    view.update(cx, |app, cx| app.set_auto_archive_enabled(*enabled, cx));
+                })
+        });
+        let period = SettingField::render(move |_, _, cx| {
+            let view = view.clone();
+            let policy = &view.read(cx).store.ui.auto_archive;
+            let selected = policy.after;
+            Button::new("session-auto-archive-days")
+                .debug_selector(|| "session-auto-archive-days".into())
+                .outline()
+                .w(px(160.))
+                .justify_between()
+                .label(selected.label())
+                .icon(FullIconName::ChevronDown)
+                .accessibility_label(conduit::i18n::text_static(
+                    "settings.sessions.auto_archive_after",
+                ))
+                .disabled(disabled)
+                .dropdown_menu(move |mut menu, _, _| {
+                    for after in crate::store::AutoArchiveDays::ALL {
+                        let view = view.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(after.label())
+                                .checked(after == selected)
+                                .on_click(move |_, _, cx| {
+                                    view.update(cx, |app, cx| app.set_auto_archive_days(after, cx));
+                                }),
+                        );
+                    }
+                    menu
+                })
+        });
+        settings_section(conduit::i18n::text_static("settings.sessions.auto_archive"))
+            .items(vec![
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.sessions.auto_archive_enabled"),
+                    enabled,
+                )
+                .description(settings_description(conduit::i18n::text_static(
+                    "settings.sessions.auto_archive_description",
+                )))
+                .disabled(disabled),
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.sessions.auto_archive_after"),
+                    period,
+                )
+                .disabled(disabled),
+            ])
+            .footer(|_, _| conduit::i18n::text_static("settings.sessions.auto_archive_scope"))
     }
 
     fn settings_empty_session_cleanup_group(

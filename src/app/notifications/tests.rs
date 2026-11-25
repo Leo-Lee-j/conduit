@@ -7,6 +7,7 @@ use gpui_kit::{
 };
 
 mod approvals;
+mod auto_archive;
 
 #[gpui_kit::test]
 fn git_results_wait_for_toast_capacity_and_clear_progress(cx: &mut TestAppContext) {

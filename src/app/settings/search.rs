@@ -227,6 +227,32 @@ impl ConduitApp {
                 target: None,
             })
             .collect();
+        let archive_title = conduit::i18n::text_static("settings.sessions.auto_archive");
+        let archive_description =
+            conduit::i18n::text_static("settings.sessions.auto_archive_description");
+        let mut archive_search = format!(
+            "{archive_title} {archive_description} 自动归档 会话 时间 天 archive automatic sessions days 3 7 15 30"
+        );
+        for language in conduit::i18n::languages() {
+            let locale = language.id.clone().into();
+            for key in [
+                "settings.sessions.auto_archive",
+                "settings.sessions.auto_archive_description",
+            ] {
+                archive_search.push(' ');
+                archive_search.push_str(&conduit::i18n::text_for(&locale, key));
+            }
+        }
+        if matches_search(&archive_search, query) {
+            results.push(SettingsResult {
+                page: 10,
+                group: Some(5),
+                title: archive_title.into(),
+                description: archive_description.into(),
+                engine: None,
+                target: None,
+            });
+        }
         let notification_title =
             conduit::i18n::text_static("settings.general.system_notifications");
         let notification_description =

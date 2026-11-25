@@ -49,6 +49,7 @@ pub(crate) enum Target {
         native_id: Option<String>,
     },
     Workspace(PathBuf),
+    ArchivedSessions(PathBuf),
     Settings,
     Updates,
 }
@@ -233,6 +234,7 @@ impl Center {
             }
             if let Some(
                 Target::Workspace(path)
+                | Target::ArchivedSessions(path)
                 | Target::Session {
                     workspace: path, ..
                 },

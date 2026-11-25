@@ -7,6 +7,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod session_archive;
+pub use session_archive::{AutoArchiveDays, AutoArchiveSettings};
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AppearanceMode {
@@ -146,6 +149,9 @@ pub struct UiSettings {
     /// Remove stale, unused sessions that have no conversation history.
     #[serde(default)]
     pub auto_cleanup_empty_sessions: bool,
+    /// Automatic archival policy and durable daily-check/restoration state.
+    #[serde(default)]
+    pub auto_archive: AutoArchiveSettings,
     /// CLI engine used to auto-name sessions; `None` follows the session's
     /// own engine.
     #[serde(default)]
@@ -334,6 +340,7 @@ impl Default for UiSettings {
             naming_mode: NamingMode::default(),
             auto_rename: true,
             auto_cleanup_empty_sessions: false,
+            auto_archive: AutoArchiveSettings::default(),
             naming_provider: None,
             naming_model: None,
             naming_channel: None,

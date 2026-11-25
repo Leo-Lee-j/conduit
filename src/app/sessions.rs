@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod auto_archive;
+
 const EMPTY_SESSION_RETENTION_SECS: u64 = 24 * 60 * 60;
 
 fn eligible_for_empty_session_cleanup(session: &SessionRecord, now: u64) -> bool {
@@ -244,9 +246,28 @@ impl ConduitApp {
     }
 
     pub(super) fn toggle_archive(&mut self, id: u64, cx: &mut Context<Self>) {
-        if let Some(session) = self.session_mut(id) {
-            session.archived = !session.archived;
+        if !self.writable || self.closing {
+            return;
         }
+        let Some(archived) = self.session(id).map(|session| !session.archived) else {
+            return;
+        };
+        if let Some(session) = self.session_mut(id) {
+            session.archived = archived;
+        }
+        if archived {
+            self.store.ui.auto_archive.restored_at.remove(&id);
+        } else {
+            self.store
+                .ui
+                .auto_archive
+                .restored_at
+                .insert(id, unix_now());
+        }
+        self.finish_archiving_sessions(cx);
+    }
+
+    fn finish_archiving_sessions(&mut self, cx: &mut Context<Self>) {
         let archived_tabs: Vec<u64> = self
             .open_tabs
             .iter()
@@ -543,6 +564,7 @@ impl ConduitApp {
         for workspace in &mut self.store.workspaces {
             workspace.sessions.retain(|session| session.id != id);
         }
+        self.store.ui.auto_archive.restored_at.remove(&id);
         self.session_control.agent_navigation.forget_root(id);
         self.store
             .child_bindings

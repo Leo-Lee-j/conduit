@@ -3515,5 +3515,15 @@
   "github.detail_show_activity": "Show discussion",
   "github.detail_close_diff": "Close diff",
   "github.detail_base": "PR/MR comparison base",
-  "github.detail_no_description": "No description"
+  "github.detail_no_description": "No description",
+  "settings.sessions.auto_archive": "Automatic archival",
+  "settings.sessions.auto_archive_enabled": "Automatically archive inactive sessions",
+  "settings.sessions.auto_archive_after": "Inactive days before archiving",
+  "settings.sessions.archive_days": "%{days} days",
+  "settings.sessions.auto_archive_description": "Archive sessions with no message activity for the selected number of days. Pinned sessions, active tasks, drafts, and queued messages are kept.",
+  "settings.sessions.auto_archive_scope": "Applies to all workspaces. Checks once per local calendar day, including across restarts. Enabling or changing the period checks immediately. Restoring a session restarts its inactivity period. Results appear in the notification center by workspace.",
+  "notifications.sessions_auto_archived": "Sessions automatically archived",
+  "notifications.sessions_auto_archived_summary": "Workspace: %{workspace}\nArchived %{count} sessions inactive for %{days} days\n%{titles}",
+  "notifications.archived_sessions_more": "… (%{count} more sessions)",
+  "notifications.untitled_archived_session": "Untitled session"
 }

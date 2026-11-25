@@ -598,7 +598,9 @@ impl ConduitApp {
             })
             .unwrap_or_default();
         let location = match &record.target {
-            Some(Target::Session { workspace, .. }) | Some(Target::Workspace(workspace)) => {
+            Some(Target::Session { workspace, .. })
+            | Some(Target::Workspace(workspace))
+            | Some(Target::ArchivedSessions(workspace)) => {
                 format!(" · {}", display_path(workspace))
             }
             _ => String::new(),
@@ -877,6 +879,25 @@ impl ConduitApp {
                         self.close_settings(window, cx);
                     }
                     self.switch(index, Some(session), window, cx);
+                    true
+                } else {
+                    false
+                }
+            }
+            Some(Target::ArchivedSessions(path)) => {
+                if let Some(index) = self
+                    .store
+                    .workspaces
+                    .iter()
+                    .position(|workspace| workspace.path == path)
+                {
+                    window.close_all_dialogs(cx);
+                    if self.settings_ui.open {
+                        self.close_settings(window, cx);
+                    }
+                    self.show_archived = true;
+                    self.collapsed_workspaces.remove(&path);
+                    self.switch(index, None, window, cx);
                     true
                 } else {
                     false

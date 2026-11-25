@@ -3515,5 +3515,15 @@
   "github.detail_show_activity": "显示讨论",
   "github.detail_close_diff": "关闭 diff",
   "github.detail_base": "PR/MR 比较基准",
-  "github.detail_no_description": "暂无描述"
+  "github.detail_no_description": "暂无描述",
+  "settings.sessions.auto_archive": "自动归档",
+  "settings.sessions.auto_archive_enabled": "自动归档不活跃会话",
+  "settings.sessions.auto_archive_after": "归档前的未活动天数",
+  "settings.sessions.archive_days": "%{days} 天",
+  "settings.sessions.auto_archive_description": "将超过指定天数没有消息活动的会话归档。已固定、正在运行、含草稿或待发送消息的会话会保留。",
+  "settings.sessions.auto_archive_scope": "适用于全部工作空间，按本地日期每天检查一次，重启后当天不重复执行。开启或修改归档时间后立即检查；手动取消归档后重新计时。归档结果按工作空间发送到通知中心。",
+  "notifications.sessions_auto_archived": "会话已自动归档",
+  "notifications.sessions_auto_archived_summary": "工作空间：%{workspace}\n已归档 %{count} 个超过 %{days} 天未活动的会话\n%{titles}",
+  "notifications.archived_sessions_more": "…（另 %{count} 个会话）",
+  "notifications.untitled_archived_session": "未命名会话"
 }
