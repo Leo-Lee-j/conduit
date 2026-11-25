@@ -15,7 +15,6 @@ use std::{cell::RefCell, rc::Rc};
 
 #[derive(Default)]
 pub(super) struct Sections {
-    tokens: bool,
     tools: bool,
     timing: bool,
     scroll: ScrollHandle,
@@ -535,14 +534,6 @@ fn section(
 ) -> Button {
     let state = state.clone();
     let note = match label {
-        "session_data.token_details" => Some(
-            format!(
-                "{}\n{}",
-                text("session_data.cache_subset"),
-                text("session_data.recorded_note"),
-            )
-            .into(),
-        ),
         "session_data.timing" => Some(text("session_data.speed_note").into()),
         _ => None,
     };
@@ -745,7 +736,6 @@ impl ConduitApp {
             })
             .or_insert_with(|| {
                 cx.new(|_| Sections {
-                    tokens: true,
                     tools: true,
                     timing: true,
                     ..Sections::default()
@@ -771,7 +761,6 @@ impl ConduitApp {
             });
         let expanded = state.read(cx);
         let scroll = expanded.scroll.clone();
-        let show_tokens = expanded.tokens;
         let show_tools = expanded.tools;
         let show_timing = expanded.timing;
         let usage = run.map_or(session.usage, |run| run.usage);
@@ -1140,15 +1129,15 @@ impl ConduitApp {
                         .truncate(),
                     )),
             );
-            let usage_note = if total.incomplete {
-                format!(
-                    "{}\n{}",
-                    text("session_data.recorded_note"),
-                    text("session_data.partial_note"),
-                )
-            } else {
-                text("session_data.recorded_note").to_owned()
-            };
+            let mut usage_note = format!(
+                "{}\n{}",
+                text("session_data.cache_subset"),
+                text("session_data.recorded_note"),
+            );
+            if total.incomplete {
+                usage_note.push('\n');
+                usage_note.push_str(text("session_data.partial_note"));
+            }
             let summary = card()
                 .id("session-data-usage-summary")
                 .test_support()
@@ -1240,36 +1229,6 @@ impl ConduitApp {
                         .child(api_quality_chart(&quality_samples, request_quality)),
                 ),
         );
-        let token_summary = conduit::i18n::format(
-            "session_data.cache_read_summary",
-            &[("count", tokens(total.cached))],
-        );
-        let mut details = card().child(section(
-            "session-data-token-toggle",
-            "session_data.token_details",
-            token_summary,
-            show_tokens,
-            &state,
-            |state| state.tokens = !state.tokens,
-            cx,
-        ));
-        if show_tokens {
-            details = details.child(
-                disclosure_details()
-                    .id("session-data-token-details")
-                    .test_support()
-                    .debug_selector(|| "session-data-token-details".into())
-                    .child(row("session_data.input", tokens(total.input), cx))
-                    .child(row("session_data.output", tokens(total.output), cx))
-                    .child(row("session_data.cache_read", tokens(total.cached), cx))
-                    .child(row(
-                        "session_data.cache_write",
-                        tokens(total.cache_write),
-                        cx,
-                    )),
-            );
-        }
-
         let stats = session.transcript.loaded.then(|| {
             expanded.tools(
                 ToolStatsKey {
@@ -1298,7 +1257,7 @@ impl ConduitApp {
         } else {
             text("session_data.loading_history").into()
         };
-        let mut tools = details.child(divider()).child(section(
+        let mut tools = card().child(section(
             "session-data-tool-toggle",
             "session_data.tools_tasks",
             tool_summary,
@@ -1308,7 +1267,10 @@ impl ConduitApp {
             cx,
         ));
         if show_tools {
-            let mut tool_details = disclosure_details();
+            let mut tool_details = disclosure_details()
+                .id("session-data-tool-details")
+                .test_support()
+                .debug_selector(|| "session-data-tool-details".into());
             if let Some(stats) = &stats {
                 let mut categories: Vec<_> = stats.categories.iter().collect();
                 categories.sort_by_key(|(_, (count, _))| std::cmp::Reverse(*count));
