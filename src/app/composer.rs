@@ -605,7 +605,12 @@ impl ConduitApp {
         let main = self.composer_is_main();
         let app_entity = cx.entity();
         let typography = self.chat_typography();
-        let blocked = self.composer_send_blocked();
+        let host_command_ready = self.host_chat_command_ready(cx);
+        let blocked = if host_command_ready {
+            None
+        } else {
+            self.composer_send_blocked()
+        };
         let busy = blocked.is_some();
         let has_workspace = self.composer_workspace().is_some();
         let can_edit = self.writable && !self.closing && !self.composer_read_only();
@@ -617,7 +622,8 @@ impl ConduitApp {
         self.refresh_chat_commands(cx);
         self.refresh_file_mentions(cx);
         let commands_open = self.chat_commands_open(window, cx);
-        let mentions_open = !commands_open && self.file_mentions_open(window, cx);
+        let command_menu_open = self.chat_command_menu_open(window, cx);
+        let mentions_open = !command_menu_open && self.file_mentions_open(window, cx);
         let has_content = !self.composer_input().read(cx).value().trim().is_empty()
             || self
                 .current_files()
@@ -626,7 +632,7 @@ impl ConduitApp {
         let selected_run = self
             .composer_session()
             .and_then(|id| self.session_control.runs.get(&id));
-        let show_stop = selected_run.is_some();
+        let show_stop = selected_run.is_some() && !host_command_ready;
         let stopping = selected_run.is_some_and(|run| run.runtime.is_cancelled());
         let model_picker = self.composer_model_picker(cx.entity(), session_id, !can_edit);
         // One composer for every state: an active session, a workspace without
@@ -790,6 +796,8 @@ impl ConduitApp {
                     // on sibling subagent and composer action buttons.
                     .key_context(if commands_open {
                         "ConduitComposer ChatCommand"
+                    } else if command_menu_open {
+                        "ConduitComposer EmptyChatCommand"
                     } else if mentions_open {
                         "ConduitComposer FileMention"
                     } else {
@@ -1020,7 +1028,7 @@ impl ConduitApp {
                             .when(mentions_open, |area| {
                                 area.child(self.render_file_mentions(window, cx))
                             })
-                            .when(commands_open, |area| {
+                            .when(command_menu_open, |area| {
                                 area.child(self.render_chat_commands(window, cx))
                             }),
                     ),

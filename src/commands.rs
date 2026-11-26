@@ -4,6 +4,7 @@ use std::{collections::VecDeque, ops::Range, path::PathBuf};
 
 pub const MAX_COMMANDS: usize = 512;
 pub const MAX_BYTES: usize = 512 * 1024;
+pub const MAX_INPUT_BYTES: usize = 256 * 1024;
 const MAX_CONTEXTS: usize = 8;
 
 #[derive(Clone, Copy)]
@@ -28,6 +29,28 @@ pub enum Arguments {
 pub enum HostAction {
     NewChat,
     Settings,
+    Help,
+    Stop,
+    Rename,
+    Pin,
+    Unpin,
+    Skill,
+    Mcp,
+}
+
+impl HostAction {
+    pub fn preserves_attachments(self) -> bool {
+        matches!(
+            self,
+            Self::Help
+                | Self::Stop
+                | Self::Rename
+                | Self::Pin
+                | Self::Unpin
+                | Self::Skill
+                | Self::Mcp
+        )
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -77,31 +100,35 @@ impl Descriptor {
 
 pub fn host_commands() -> Vec<Descriptor> {
     [
-        (
-            "new",
-            "conduit:new",
-            "commands.new_chat",
-            HostAction::NewChat,
-        ),
-        (
-            "settings",
-            "conduit:settings",
-            "commands.settings",
-            HostAction::Settings,
-        ),
+        ("new", "commands.new_chat", HostAction::NewChat),
+        ("settings", "commands.settings", HostAction::Settings),
+        ("help", "commands.help", HostAction::Help),
+        ("skill", "commands.skill", HostAction::Skill),
+        ("mcp", "commands.mcp", HostAction::Mcp),
+        ("stop", "commands.stop", HostAction::Stop),
+        ("rename", "commands.rename", HostAction::Rename),
+        ("pin", "commands.pin", HostAction::Pin),
+        ("unpin", "commands.unpin", HostAction::Unpin),
     ]
     .into_iter()
-    .map(|(id, name, summary, action)| Descriptor {
+    .map(|(name, summary, action)| Descriptor {
         revision: 1,
         unavailable: None,
         id: CommandId {
             source: "conduit".into(),
-            local: id.into(),
+            local: name.into(),
         },
         name: name.into(),
         aliases: vec![],
         summary: conduit::i18n::text(summary),
-        arguments: Arguments::None,
+        arguments: if action == HostAction::Rename {
+            Arguments::TailText {
+                required: false,
+                hint: conduit::i18n::text("commands.rename_hint"),
+            }
+        } else {
+            Arguments::None
+        },
         execution: Execution::Host(action),
     })
     .collect()
@@ -279,6 +306,7 @@ impl Catalog {
                 item.id.source != ticket.context.source
                     || item.execution != Execution::Engine
                     || !valid_name(&item.name)
+                    || item.aliases.iter().any(|alias| !valid_name(alias))
                     || !ids.insert(item.id.clone())
             }) {
                 return Err(conduit::i18n::text("commands.invalid_catalog"));
@@ -316,6 +344,9 @@ impl Catalog {
         selected: &Descriptor,
         text: String,
     ) -> Result<CommandCall, String> {
+        if text.len() > MAX_INPUT_BYTES {
+            return Err(conduit::i18n::text("commands.arguments"));
+        }
         if let Some(reason) = &selected.unavailable {
             return Err(reason.clone());
         }

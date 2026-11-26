@@ -29,6 +29,7 @@ cargo run --locked
 | 核心行为 | 定向检查范围 |
 | --- | --- |
 | 发送前保存、失败回滚、草稿与附件、队列恢复 | `app::runtime::saves::tests`、`app::queue::tests`、`persistence::` |
+| 聊天命令补全、空结果与普通输入、目录刷新、参数限制、通用命令分屏归属与附件保留、Skill/MCP 小窗搜索和扫描生命周期 | `commands::`、`app::commands::tests`、`app::commands::extensions::tests`、`app::composer::tests`、`app::runtime::saves::tests`、`protocol::codex_commands::`、`protocol::opencode::commands::` |
 | 子代理键盘展开、历史、任务复制与草稿保护 | `app::subagents::`、`app::ui_tests::subagent_panel_tracks_concurrent_tasks_and_disconnects_without_false_success` |
 | 数据持久化、迁移、正文完整性、过期加载隔离 | `store::`、`transcript::`、`app::transcripts::tests` |
 | 多引擎协议、权限审批、用户输入、会话恢复 | `protocol::`、`cli_adapter::`、`chat_runtime::` |

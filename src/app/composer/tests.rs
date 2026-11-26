@@ -1,6 +1,7 @@
 use super::ComposerBinding;
 use crate::app::queue::tests::{fixture, running};
 use crate::app::{ConduitApp, DocumentTab, Store};
+use gpui_kit::component::WindowExt as _;
 use gpui_kit::{
     Context, Modifiers, MouseButton, TestAppContext, VisualTestContext, Window, px, size,
 };
@@ -53,6 +54,100 @@ fn reference(
     app.show_chat_beside(2, window, cx);
     let input = app.reference_chat_view(2).unwrap().read(cx).input.clone();
     app.composer_binding_for_session(2, input).unwrap()
+}
+
+#[gpui_kit::test]
+fn reference_host_chat_commands_preserve_files_and_only_control_their_bound_session(
+    cx: &mut TestAppContext,
+) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx, root) = fixture(cx, "composer-reference-host-commands");
+    let file = root.join("attached.txt");
+    std::fs::write(&file, "reference").unwrap();
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.persistence = crate::persistence::Persistence::with_writer(|_| Ok(()));
+            let binding = reference(app, &root, window, cx);
+            app.input
+                .update(cx, |input, cx| input.set_value("main draft", window, cx));
+            app.attach_paths(std::slice::from_ref(&file), window, cx);
+            let main_files = app.current_files().unwrap().references.clone();
+            let main_title = app.session(1).unwrap().title.clone();
+            let message_count = app.session(2).unwrap().messages.len();
+            app.with_composer(binding.clone(), cx, |app, cx| {
+                app.attach_paths(std::slice::from_ref(&file), window, cx);
+            });
+            let reference_files = app.composer_files[binding.target.as_ref().unwrap()]
+                .references
+                .clone();
+            for text in ["/rename  新标题 中文  ", "/pin", "/pin"] {
+                binding
+                    .input
+                    .update(cx, |input, cx| input.set_value(text, window, cx));
+                app.send_prompt_for(binding.clone(), window, cx);
+                assert!(binding.input.read(cx).value().is_empty());
+            }
+            assert_eq!(app.session(2).unwrap().title, "新标题 中文");
+            assert!(app.session(2).unwrap().pinned);
+            for _ in 0..2 {
+                binding
+                    .input
+                    .update(cx, |input, cx| input.set_value("/unpin", window, cx));
+                app.send_prompt_for(binding.clone(), window, cx);
+                assert!(!app.session(2).unwrap().pinned);
+                assert!(binding.input.read(cx).value().is_empty());
+            }
+            binding
+                .input
+                .update(cx, |input, cx| input.set_value("/rename", window, cx));
+            app.send_prompt_for(binding.clone(), window, cx);
+            assert_eq!(app.rename_target, Some(2));
+            app.apply_rename("窗口重命名".into(), cx);
+            window.close_dialog(cx);
+            assert_eq!(app.session(2).unwrap().title, "窗口重命名");
+
+            let _main = running(app, 1);
+            let _reference = running(app, 2);
+            for id in [1, 2] {
+                app.queued_messages.insert(
+                    id,
+                    crate::store::QueuedMessage {
+                        text: "queued follow-up".into(),
+                        references: vec![],
+                        paused: None,
+                    },
+                );
+            }
+            binding
+                .input
+                .update(cx, |input, cx| input.set_value("/stop", window, cx));
+            app.send_prompt_for(binding.clone(), window, cx);
+            assert!(app.session_control.runs[&2].runtime.is_cancelled());
+            assert!(!app.session_control.runs[&1].runtime.is_cancelled());
+            assert!(app.queued_messages[&2].paused.is_some());
+            assert!(app.queued_messages[&1].paused.is_none());
+            assert!(binding.input.read(cx).value().is_empty());
+            assert_eq!(app.queued_messages[&2].text, "queued follow-up");
+
+            let invalid = "/rename first\nsecond";
+            binding
+                .input
+                .update(cx, |input, cx| input.set_value(invalid, window, cx));
+            app.send_prompt_for(binding.clone(), window, cx);
+            assert_eq!(binding.input.read(cx).value().as_ref(), invalid);
+            assert_eq!(app.session(2).unwrap().title, "窗口重命名");
+            assert_eq!(app.session(2).unwrap().messages.len(), message_count);
+            assert_eq!(
+                app.composer_files[binding.target.as_ref().unwrap()].references,
+                reference_files
+            );
+            assert_eq!(app.current_files().unwrap().references, main_files);
+            assert_eq!(app.input.read(cx).value(), "main draft");
+            assert_eq!(app.session(1).unwrap().title, main_title);
+            assert_eq!(app.selected_session, Some(1));
+            app.persistence.flush();
+        })
+    });
 }
 
 #[gpui_kit::test]

@@ -381,6 +381,11 @@ impl ConduitApp {
             KeyBinding::new("tab", AcceptChatCommand, Some("ChatCommand > Input")),
             KeyBinding::new("enter", SendPrompt, Some("ChatCommand > Input")),
             KeyBinding::new("escape", DismissChatCommand, Some("ChatCommand > Input")),
+            KeyBinding::new(
+                "escape",
+                DismissChatCommand,
+                Some("EmptyChatCommand > Input"),
+            ),
         ]);
         terminal::init(cx);
         let (mut store, load_error, writable) = match loaded {

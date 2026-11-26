@@ -6,6 +6,8 @@ use crate::commands::{
 };
 use std::hash::{Hash, Hasher};
 
+mod extensions;
+
 #[derive(Default)]
 pub(super) struct ChatCommands {
     pub catalog: Catalog,
@@ -144,10 +146,132 @@ impl ConduitApp {
 
     fn command_items(&self, context: &CommandContext) -> Vec<Descriptor> {
         let mut items = core::host_commands();
+        for item in &mut items {
+            if let Execution::Host(action) = item.execution {
+                item.unavailable = self.host_chat_command_unavailable(action, context);
+            }
+        }
         if let Some(snapshot) = self.chat_commands.catalog.get(context) {
             items.extend(snapshot.commands.iter().cloned());
         }
         items
+    }
+
+    fn host_chat_command_unavailable(
+        &self,
+        action: HostAction,
+        context: &CommandContext,
+    ) -> Option<String> {
+        if matches!(
+            action,
+            HostAction::NewChat
+                | HostAction::Settings
+                | HostAction::Help
+                | HostAction::Skill
+                | HostAction::Mcp
+        ) {
+            return None;
+        }
+        let Some(id) = context.session.filter(|id| self.session(*id).is_some()) else {
+            return Some(conduit::i18n::text("commands.requires_session"));
+        };
+        if action == HostAction::Stop {
+            match self.session_control.runs.get(&id) {
+                None => return Some(conduit::i18n::text("commands.nothing_running")),
+                Some(run) if run.runtime.is_cancelled() => {
+                    return Some(conduit::i18n::text("commands.stopping"));
+                }
+                Some(_) => {}
+            }
+        }
+        None
+    }
+
+    pub(super) fn host_chat_command_ready(&self, cx: &App) -> bool {
+        if self.composer_save_pending() {
+            return false;
+        }
+        let text = self.composer_input().read(cx).value();
+        let Some(query) = core::parse(&text) else {
+            return false;
+        };
+        let Ok(Some((command, _))) = self.prepare_chat_submission(&text, &query) else {
+            return false;
+        };
+        let Execution::Host(action) = command.execution else {
+            return false;
+        };
+        command.unavailable.is_none()
+            && command.accepts(&text[query.range.end..])
+            && (action.preserves_attachments()
+                || self
+                    .current_files()
+                    .is_none_or(|files| files.references.is_empty()))
+    }
+
+    /// Help replaces the command with a fresh query; other successful actions
+    /// consume only the captured draft, using the existing composer guard.
+    fn execute_host_chat_command(
+        &mut self,
+        action: HostAction,
+        context: &CommandContext,
+        arguments: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        match (action, context.session) {
+            (HostAction::Help, _) => {
+                self.chat_commands.editor = CommandEditor::default();
+                self.composer_input().update(cx, |input, cx| {
+                    input.set_value("/", window, cx);
+                    input.set_selected_range(1..1, cx);
+                    input.focus_handle(cx).focus(window, cx);
+                });
+                self.refresh_chat_commands(cx);
+                return false;
+            }
+            (HostAction::NewChat, _) => self.new_composer_session(window, cx),
+            (HostAction::Settings, _) => self.open_settings(window, cx),
+            (HostAction::Skill | HostAction::Mcp, _) => {
+                let kind = if action == HostAction::Skill {
+                    crate::extensions::Kind::Skill
+                } else {
+                    crate::extensions::Kind::Mcp
+                };
+                let context = self.chat_extension_context(context);
+                let probe = crate::extensions::Probe::start(context.clone());
+                extensions::show(context, kind, probe, window, cx);
+            }
+            (HostAction::Stop, Some(id)) => {
+                self.stop_session_run(id);
+            }
+            (HostAction::Rename, Some(id)) => {
+                let title = arguments.trim();
+                if title.is_empty() {
+                    self.open_rename_dialog(id, window, cx);
+                } else if title.chars().any(char::is_control) {
+                    self.notify_composer_warning(
+                        conduit::i18n::text("commands.rename_single_line"),
+                        cx,
+                    );
+                    return false;
+                } else {
+                    self.set_session_title(id, title);
+                    self.persist();
+                }
+            }
+            (HostAction::Pin | HostAction::Unpin, Some(id)) => {
+                let pinned = action == HostAction::Pin;
+                if self
+                    .session(id)
+                    .is_some_and(|session| session.pinned != pinned)
+                {
+                    self.toggle_pin(id, cx);
+                }
+            }
+            (_, None) => return false,
+        }
+        true
     }
 
     pub(super) fn refresh_chat_commands(&mut self, cx: &mut Context<Self>) {
@@ -160,20 +284,31 @@ impl ConduitApp {
             .as_ref()
             .map(|(context, query)| core::filter(self.command_items(context), &query.name))
             .unwrap_or_default();
-        let changed = active != self.chat_commands.active || results != self.chat_commands.results;
+        let query_changed = active != self.chat_commands.active;
+        let changed = query_changed || results != self.chat_commands.results;
         self.chat_commands.active = active;
         self.chat_commands.results = results;
-        if !self
-            .chat_commands
-            .results
-            .iter()
-            .any(|item| Some(&item.id) == self.chat_commands.selected.as_ref())
+        if query_changed
+            || !self
+                .chat_commands
+                .results
+                .iter()
+                .any(|item| Some(&item.id) == self.chat_commands.selected.as_ref())
         {
             self.chat_commands.selected = self
                 .chat_commands
                 .results
                 .first()
                 .map(|item| item.id.clone());
+        }
+        if changed
+            && let Some(index) = self
+                .chat_commands
+                .results
+                .iter()
+                .position(|item| Some(&item.id) == self.chat_commands.selected.as_ref())
+        {
+            self.chat_commands.scroll.scroll_to_item(index);
         }
         if let Some((_, accepted)) = &self.chat_commands.accepted
             && core::parse(&self.composer_input().read(cx).value())
@@ -187,8 +322,11 @@ impl ConduitApp {
     }
 
     pub(super) fn chat_commands_open(&self, window: &Window, cx: &App) -> bool {
+        !self.chat_commands.results.is_empty() && self.chat_command_menu_open(window, cx)
+    }
+
+    pub(super) fn chat_command_menu_open(&self, window: &Window, cx: &App) -> bool {
         self.chat_commands.active.is_some()
-            && !self.chat_commands.results.is_empty()
             && self.chat_commands.active == self.chat_command_query(cx)
             && self
                 .composer_input()
@@ -276,9 +414,14 @@ impl ConduitApp {
         match result {
             Ok(None) => return false,
             Ok(Some((command, context))) => {
+                let preserve_attachments = matches!(
+                    command.execution,
+                    Execution::Host(action) if action.preserves_attachments()
+                );
                 if self
                     .current_files()
                     .is_some_and(|files| !files.references.is_empty())
+                    && !preserve_attachments
                 {
                     self.notify_composer_warning(conduit::i18n::text("commands.attachments"), cx);
                 } else if let Some(reason) = &command.unavailable {
@@ -289,15 +432,20 @@ impl ConduitApp {
                     match command.execution {
                         Execution::Host(action) => {
                             let sent = self.sent_composer(cx);
-                            match action {
-                                HostAction::Settings => self.open_settings(window, cx),
-                                HostAction::NewChat => self.new_composer_session(window, cx),
+                            if self.execute_host_chat_command(
+                                action,
+                                &context,
+                                &text[query.range.end..],
+                                window,
+                                cx,
+                            ) {
+                                if let Some(mut sent) = sent {
+                                    sent.preserve_attachments = preserve_attachments;
+                                    self.clear_saved_composer(&sent, window, cx);
+                                }
+                                self.chat_commands.accepted = None;
+                                self.dismiss_chat_commands(cx);
                             }
-                            if let Some(sent) = sent {
-                                self.clear_saved_composer(&sent, window, cx);
-                            }
-                            self.chat_commands.accepted = None;
-                            self.dismiss_chat_commands(cx);
                         }
                         Execution::Engine => {
                             match self.chat_commands.catalog.prepare(
@@ -336,26 +484,32 @@ impl ConduitApp {
         let context = self
             .chat_command_context()
             .ok_or_else(|| conduit::i18n::text("commands.stale"))?;
-        if let Some((captured, item)) = &self.chat_commands.accepted
+        let mut command = if let Some((captured, item)) = &self.chat_commands.accepted
             && item.matches_name(&query.name)
         {
             if captured != &context {
                 return Err(conduit::i18n::text("commands.stale"));
             }
-            return Ok(Some((item.clone(), context)));
-        }
-        let mut exact = self
-            .command_items(&context)
-            .into_iter()
-            .filter(|item| item.matches_name(&query.name));
-        let Some(command) = exact.next() else {
-            return Ok(None);
+            item.clone()
+        } else {
+            let mut exact = self
+                .command_items(&context)
+                .into_iter()
+                .filter(|item| item.matches_name(&query.name));
+            let Some(command) = exact.next() else {
+                return Ok(None);
+            };
+            if exact.next().is_some() {
+                return Err(conduit::i18n::text("commands.ambiguous"));
+            }
+            command
         };
-        if exact.next().is_some() {
-            return Err(conduit::i18n::text("commands.ambiguous"));
-        }
-        if text.len() > 256 * 1024 {
+        if text.len() > core::MAX_INPUT_BYTES {
             return Err(conduit::i18n::text("commands.arguments"));
+        }
+        if let Execution::Host(action) = command.execution {
+            // The run can finish or start after completion was accepted.
+            command.unavailable = self.host_chat_command_unavailable(action, &context);
         }
         Ok(Some((command, context)))
     }
@@ -392,6 +546,8 @@ impl ConduitApp {
             error
         } else if snapshot.is_some_and(|s| s.loading) {
             conduit::i18n::text("commands.loading")
+        } else if snapshot.is_some_and(|s| s.loaded) && self.chat_commands.results.is_empty() {
+            conduit::i18n::text("commands.no_match_keys")
         } else if snapshot.is_some_and(|s| s.loaded) {
             conduit::i18n::text("commands.keys")
         } else {
@@ -479,6 +635,16 @@ impl ConduitApp {
                     .text_size(ui_text_size(12.))
                     .child(conduit::i18n::text_static("commands.title")),
             )
+            .when(self.chat_commands.results.is_empty(), |menu| {
+                menu.child(
+                    div()
+                        .debug_selector(|| "chat-command-empty".into())
+                        .px_2()
+                        .py_2()
+                        .text_size(ui_text_size(12.))
+                        .child(conduit::i18n::text_static("commands.no_matches")),
+                )
+            })
             .child(
                 v_flex()
                     .id("chat-command-rows")
@@ -497,6 +663,7 @@ impl ConduitApp {
             .when(engine.commands.is_some(), |menu| {
                 menu.child(
                     Button::new("connect-chat-commands")
+                        .debug_selector(|| "connect-chat-commands".into())
                         .ghost()
                         .small()
                         .label(conduit::i18n::text_static("commands.connect"))

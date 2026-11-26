@@ -8,6 +8,7 @@ mod tests;
 #[derive(Clone)]
 pub(in crate::app) struct SentComposer {
     pub(in crate::app) preserve: bool,
+    pub(in crate::app) preserve_attachments: bool,
     binding: composer::ComposerBinding,
     target: ComposerTarget,
     text: String,
@@ -36,6 +37,7 @@ impl ConduitApp {
     pub(in crate::app) fn sent_composer(&self, cx: &Context<Self>) -> Option<SentComposer> {
         Some(SentComposer {
             preserve: false,
+            preserve_attachments: false,
             binding: self.composer_binding(),
             target: self.composer_target()?,
             text: self.composer_input().read(cx).value().to_string(),
@@ -113,7 +115,9 @@ impl ConduitApp {
                 this.prompt_history = None;
             });
         }
-        self.composer_files.remove(&sent.target);
+        if !sent.preserve_attachments {
+            self.composer_files.remove(&sent.target);
+        }
         if let Some(id) = sent.target.session {
             self.drafts.remove(&id);
         } else {

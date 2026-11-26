@@ -90,6 +90,19 @@ pub struct Probe {
 }
 
 impl Probe {
+    #[cfg(all(test, feature = "ui-tests"))]
+    pub(crate) fn test_pending(context: Context) -> (Self, mpsc::Sender<Catalog>) {
+        let (sender, events) = mpsc::channel();
+        (
+            Self {
+                context,
+                events,
+                cancelled: Arc::new(AtomicBool::new(false)),
+            },
+            sender,
+        )
+    }
+
     /// A completed discovery event for deterministic workspace lifecycle tests.
     #[cfg(all(test, feature = "ui-tests"))]
     pub(crate) fn ready(context: Context, catalog: Catalog) -> Self {

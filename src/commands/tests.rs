@@ -1,5 +1,22 @@
 use super::*;
 
+#[test]
+fn extension_commands_are_local_and_preserve_attachments() {
+    let commands = host_commands();
+    for (name, action) in [("skill", HostAction::Skill), ("mcp", HostAction::Mcp)] {
+        let command = commands
+            .iter()
+            .find(|command| command.name == name)
+            .unwrap();
+        assert_eq!(command.execution, Execution::Host(action));
+        assert!(action.preserves_attachments());
+        assert!(command.aliases.is_empty());
+        assert!(command.accepts(" "));
+        assert!(!command.accepts(" unexpected"));
+        assert!(filter(commands.clone(), name).contains(command));
+    }
+}
+
 fn context(source: &str) -> CommandContext {
     CommandContext {
         workspace: "C:/fixture".into(),
@@ -118,6 +135,13 @@ fn budgets_reject_whole_snapshots_and_bound_contexts() {
     cache.publish(&ticket, Ok(vec![huge]));
     assert!(cache.get(&key).unwrap().error.is_some());
     assert!(!cache.get(&key).unwrap().loaded);
+    let item = command("fake", "review");
+    cache.publish(&ticket, Ok(vec![item.clone()]));
+    let mut text = "/review ".to_owned();
+    text.push_str(&"x".repeat(MAX_INPUT_BYTES - text.len()));
+    assert!(cache.prepare(&key, &item, text.clone()).is_ok());
+    text.push('x');
+    assert!(cache.prepare(&key, &item, text).is_err());
     for id in 0..MAX_CONTEXTS + 2 {
         let mut key = context("fake");
         key.session = Some(id as u64);
@@ -125,6 +149,25 @@ fn budgets_reject_whole_snapshots_and_bound_contexts() {
     }
     assert_eq!(cache.entries.len(), MAX_CONTEXTS);
     assert!(!cache.publish(&ticket, Ok(vec![])));
+}
+
+#[test]
+fn catalog_rejects_invalid_aliases_without_replacing_the_last_good_snapshot() {
+    let mut cache = Catalog::default();
+    let key = context("fake");
+    let ticket = cache.begin(key.clone());
+    let mut item = command("fake", "review");
+    item.aliases = vec!["rev".into(), "插件:审查".into()];
+    cache.publish(&ticket, Ok(vec![item.clone()]));
+    assert!(cache.prepare(&key, &item, "/rev target".into()).is_ok());
+    for alias in ["", "two words", "/review", "a\\b", "review\0"] {
+        let mut invalid = item.clone();
+        invalid.aliases.push(alias.into());
+        cache.publish(&ticket, Ok(vec![invalid]));
+        let snapshot = cache.get(&key).unwrap();
+        assert!(snapshot.error.is_some(), "{alias:?}");
+        assert_eq!(snapshot.commands, [item.clone()]);
+    }
 }
 
 #[test]
