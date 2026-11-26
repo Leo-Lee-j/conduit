@@ -206,7 +206,8 @@ jobs:
           $installer = "target/dist/Conduit-$($env:RELEASE_TAG.Substring(1))-windows-x64-setup.exe"
           & ./target/release/release-manifest.exe $installer target/dist/release-notes.md
           if ($LASTEXITCODE) { throw 'Manifest signing failed.' }
-      - name: Upload complete draft and publish
+      - name: Upload and verify draft assets
+        id: draft
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -216,15 +217,75 @@ jobs:
             gh release create $env:RELEASE_TAG --verify-tag --draft --title "Conduit $env:RELEASE_TAG" --notes-file target/dist/release-notes.md
             if ($LASTEXITCODE) { throw 'Cannot create draft release.' }
           }
+          $release = gh release view $env:RELEASE_TAG --json isDraft | ConvertFrom-Json
+          if ($LASTEXITCODE -or $release.isDraft -ne $true) { throw 'Expected a draft release before changing notes or assets.' }
+          gh release edit $env:RELEASE_TAG --notes-file target/dist/release-notes.md
+          if ($LASTEXITCODE) { throw 'Cannot update draft release notes.' }
           $installer = "target/dist/Conduit-$($env:RELEASE_TAG.Substring(1))-windows-x64-setup.exe"
           gh release upload $env:RELEASE_TAG $installer "$installer.sha256" target/dist/update.json target/dist/update.json.sig --clobber
           if ($LASTEXITCODE) { throw 'Release upload failed; draft retained.' }
-          $release = gh release view $env:RELEASE_TAG --json assets,isDraft | ConvertFrom-Json
-          if ($LASTEXITCODE -or -not $release.isDraft) { throw 'Expected a draft release.' }
+          $release = gh release view $env:RELEASE_TAG --json assets,isDraft,databaseId | ConvertFrom-Json
+          if ($LASTEXITCODE -or $release.isDraft -ne $true) { throw 'Expected a draft release.' }
           foreach ($file in @($installer, "$installer.sha256", 'target/dist/update.json', 'target/dist/update.json.sig')) {
             $local = Get-Item -LiteralPath $file
             $asset = $release.assets | Where-Object name -eq $local.Name
             if (-not $asset -or $asset.size -ne $local.Length) { throw "Asset verification failed: $file" }
           }
-          gh release edit $env:RELEASE_TAG --draft=false --latest --notes-file target/dist/release-notes.md
-          if ($LASTEXITCODE) { throw 'Release publication failed.' }
+          "release-id=$($release.databaseId)" >> $env:GITHUB_OUTPUT
+      - name: Publish verified draft with retry
+        shell: pwsh
+        env:
+          RELEASE_ID: ${{ steps.draft.outputs.release-id }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          if ($env:RELEASE_ID -notmatch '^\d+$') { throw 'Missing verified draft release ID.' }
+          $endpoint = "repos/$env:GITHUB_REPOSITORY/releases/$env:RELEASE_ID"
+          $latestEndpoint = "repos/$env:GITHUB_REPOSITORY/releases/latest"
+          function Invoke-ReleaseApi([string[]]$Arguments) {
+            $response = & gh api @Arguments 2>&1
+            if ($LASTEXITCODE) { throw ($response -join "`n") }
+            return ($response -join "`n") | ConvertFrom-Json
+          }
+          function Assert-Release($Release) {
+            if ($Release.tag_name -cne $env:RELEASE_TAG -or $Release.prerelease -ne $false -or $Release.draft -isnot [bool]) {
+              throw 'Release identity or stability does not match the verified draft.'
+            }
+          }
+          $published = $false
+          for ($attempt = 1; $attempt -le 5; $attempt++) {
+            try {
+              # A failed PATCH may already have published the draft. Read it by ID
+              # before retrying; never upload assets or rewrite notes in this loop.
+              $release = Invoke-ReleaseApi @($endpoint)
+              Assert-Release $release
+              if ($release.draft) {
+                $null = Invoke-ReleaseApi @('--method', 'PATCH', $endpoint, '-F', 'draft=false', '-f', "tag_name=$env:RELEASE_TAG", '-f', 'make_latest=true')
+                $release = Invoke-ReleaseApi @($endpoint)
+                Assert-Release $release
+                if ($release.draft) { throw 'Release is still a draft after publication.' }
+              }
+              $latest = Invoke-ReleaseApi @($latestEndpoint)
+              if ($latest.id -ne $release.id) {
+                # Publication may have succeeded without the Latest update.
+                $null = Invoke-ReleaseApi @('--method', 'PATCH', $endpoint, '-f', "tag_name=$env:RELEASE_TAG", '-f', 'make_latest=true')
+                $latest = Invoke-ReleaseApi @($latestEndpoint)
+              }
+              if ($latest.id -ne $release.id) { throw 'Release is not yet Latest.' }
+              $published = $true
+              Write-Host "Published $env:RELEASE_TAG and verified Latest."
+              break
+            }
+            catch {
+              $message = $_.Exception.Message
+              # Retry transient API/network failures and delayed state visibility.
+              $transient = $message -match '(?i)HTTP (408|429|5\d\d)\b|\b(timeout|timed out|connection|TLS|EOF)\b|still a draft|not yet Latest'
+              if (-not $transient -or $attempt -eq 5) {
+                throw "Release publication could not be confirmed (release $env:RELEASE_ID). Uploaded assets were retained; inspect the release before retrying. $message"
+              }
+              $delay = 5 * [math]::Pow(2, $attempt - 1)
+              Write-Warning "Publication attempt $attempt failed; checking state again in $delay seconds. $message"
+              Start-Sleep -Seconds $delay
+            }
+          }
+          if (-not $published) { throw 'Release publication was not confirmed.' }
