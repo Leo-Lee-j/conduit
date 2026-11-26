@@ -372,6 +372,7 @@ fn session_data_api_quality_tracks_live_replies_completion_and_session_switches(
 fn session_data_preserves_agent_history_statuses_and_session_isolation(cx: &mut TestAppContext) {
     use crate::subagents::{Agent, Status};
     use gpui_kit::base::test_support::find;
+    use gpui_kit::{ScrollDelta, ScrollWheelEvent};
 
     let _locale = crate::test_support::chinese();
     let mut store = store();
@@ -412,7 +413,6 @@ fn session_data_preserves_agent_history_statuses_and_session_isolation(cx: &mut 
             let element = cx.update(|window, _| find(window, &[], &id.into()));
             if present {
                 let element = element.expect("every recorded agent must remain inspectable");
-                assert!(element.visible());
                 assert!(element.label().unwrap().contains(agent.status.label()));
             } else {
                 assert!(
@@ -423,6 +423,20 @@ fn session_data_preserves_agent_history_statuses_and_session_isolation(cx: &mut 
         }
     };
     assert_agents(cx, true);
+    let viewport = cx.element_bounds("session-data-tools-scroll").unwrap();
+    assert_eq!(viewport.size.height, px(320.));
+    let header = cx.element_bounds("session-data-tool-toggle").unwrap();
+    let last = agents.last().unwrap();
+    let last_id = format!("session-data-agent-{}-{}", last.run, last.id);
+    assert!(cx.element_bounds(&last_id).is_none());
+    cx.simulate_event(ScrollWheelEvent {
+        position: viewport.center(),
+        delta: ScrollDelta::Pixels(point(px(0.), px(-1000.))),
+        ..Default::default()
+    });
+    draw(cx);
+    assert!(cx.element_bounds(&last_id).is_some());
+    assert_eq!(cx.element_bounds("session-data-tool-toggle"), Some(header));
     click_labeled(cx, Role::Button, "工具与子代理");
     assert_agents(cx, false);
     click_labeled(cx, Role::Button, "工具与子代理");

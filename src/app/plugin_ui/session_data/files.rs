@@ -254,7 +254,15 @@ pub(super) fn render(
     if loading {
         rows = rows.child(caption(text("session_data.files_loading")));
     }
-    card = card.child(rows);
+    card = card.child(
+        div()
+            .id("session-data-files-scroll")
+            .test_support()
+            .max_h(px(MAX_DETAILS_HEIGHT))
+            .overflow_y_scroll()
+            .track_scroll(&sections.files_scroll)
+            .child(rows),
+    );
     card
 }
 

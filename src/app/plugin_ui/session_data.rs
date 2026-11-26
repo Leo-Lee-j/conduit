@@ -15,11 +15,15 @@ use gpui_kit::component::{
 };
 use std::{cell::RefCell, rc::Rc};
 
+const MAX_DETAILS_HEIGHT: f32 = 320.;
+
 #[derive(Default)]
 pub(super) struct Sections {
     files_expanded: bool,
     files: files::Cache,
+    files_scroll: ScrollHandle,
     tools: bool,
+    tools_scroll: ScrollHandle,
     timing: bool,
     scroll: ScrollHandle,
     tool_stats: RefCell<Option<(ToolStatsKey, Rc<ToolStats>)>>,
@@ -1375,7 +1379,7 @@ impl ConduitApp {
             } else {
                 tool_details = tool_details.child(caption(text("session_data.loading_history")));
             }
-            tools = tools.child(tool_details);
+            let mut details = v_flex().child(tool_details);
             if !session.subagents.is_empty() {
                 // History and terminal results remain inspectable after the run ends.
                 // Only the active count above is scoped to the current run.
@@ -1395,8 +1399,17 @@ impl ConduitApp {
                         cx,
                     ))
                     .children(session.subagents.iter().map(agent_row));
-                tools = tools.child(agents);
+                details = details.child(agents);
             }
+            tools = tools.child(
+                div()
+                    .id("session-data-tools-scroll")
+                    .test_support()
+                    .max_h(px(MAX_DETAILS_HEIGHT))
+                    .overflow_y_scroll()
+                    .track_scroll(&expanded.tools_scroll)
+                    .child(details),
+            );
         }
 
         let timing_summary = conduit::i18n::format(
