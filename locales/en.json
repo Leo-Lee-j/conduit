@@ -310,6 +310,8 @@
   "files.copy_file_contents": "Copy file contents",
   "files.unable_to_preview_this_file": "Unable to preview this file",
   "files.reveal_in_file_manager": "Show in File Explorer",
+  "files.open_in_browser": "Open in default browser",
+  "files.unable_to_open_browser": "Unable to open in default browser",
   "files.copy_file_path": "Copy file path",
   "files.empty_file": "Empty file",
   "files.settings": "Settings",

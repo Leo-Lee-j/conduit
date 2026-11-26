@@ -310,6 +310,8 @@
   "files.copy_file_contents": "复制文件内容",
   "files.unable_to_preview_this_file": "无法预览此文件",
   "files.reveal_in_file_manager": "在资源管理器中显示",
+  "files.open_in_browser": "在默认浏览器中打开",
+  "files.unable_to_open_browser": "无法在默认浏览器中打开",
   "files.copy_file_path": "复制文件路径",
   "files.empty_file": "空文件",
   "files.settings": "设置",

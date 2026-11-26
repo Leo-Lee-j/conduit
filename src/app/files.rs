@@ -6,6 +6,7 @@ use conduit::plugins::{builtins, ids::ViewId};
 use gpui_kit::component::{tag::Tag, tooltip::Tooltip};
 use std::ops::Range;
 
+mod browser;
 mod observations;
 mod panes;
 mod proposals;
@@ -1893,6 +1894,8 @@ impl ConduitApp {
             .collect();
         let file_name = parts.pop().unwrap_or_default();
         let markdown = is_markdown(&document.key.relative);
+        let html = browser::is_html(&document.key.relative);
+        let browser_path = path.clone();
         let is_image = document.is_image;
         let parent_label = parts.join(" / ");
         let text = document.text.clone();
@@ -2106,6 +2109,47 @@ impl ConduitApp {
                             .cursor_pointer()
                             .on_click(cx.listener(move |this, _, _, cx| this.load_file(id, cx))),
                     )
+                    .when(html, |toolbar| {
+                        toolbar.child(
+                            Button::new(("file-open-browser", id))
+                                .debug_selector(|| "file-open-browser".into())
+                                .ghost()
+                                .small()
+                                .compact()
+                                .icon(FullIconName::Globe)
+                                .tooltip(conduit::i18n::text_static("files.open_in_browser"))
+                                .accessibility_label(conduit::i18n::text_static(
+                                    "files.open_in_browser",
+                                ))
+                                .cursor_pointer()
+                                .on_click(cx.listener(move |_, _, _, cx| {
+                                    let path = browser_path.clone();
+                                    cx.spawn(async move |this, cx| {
+                                        let result = cx
+                                            .background_executor()
+                                            .spawn(async move { browser::open(&path) })
+                                            .await;
+                                        if let Err(error) = result {
+                                            let _ = this.update(cx, |this, cx| {
+                                                this.notify_feedback(
+                                                    crate::notifications::Source::App,
+                                                    crate::notifications::Level::Error,
+                                                    format!(
+                                                        "{}: {error:#}",
+                                                        conduit::i18n::text_static(
+                                                            "files.unable_to_open_browser"
+                                                        ),
+                                                    ),
+                                                    None,
+                                                    cx,
+                                                );
+                                            });
+                                        }
+                                    })
+                                    .detach();
+                                })),
+                        )
+                    })
                     .child(
                         Button::new(("file-reveal-in-file-manager", id))
                             .debug_selector(|| "file-reveal-in-file-manager".into())
