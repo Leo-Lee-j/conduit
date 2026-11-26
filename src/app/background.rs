@@ -106,6 +106,26 @@ impl Render for BackgroundLayer {
 }
 
 impl ConduitApp {
+    pub(super) fn reset_background_preferences(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.writable || self.closing {
+            return;
+        }
+        self.close_background_browser(cx);
+        self.set_background_enabled(false, window, cx);
+        let defaults = wallpaper::Settings::default();
+        self.store.ui.background.id = defaults.id;
+        self.store.ui.background.strength = defaults.strength;
+        self.background
+            .layer
+            .update(cx, |layer, cx| layer.replace(None, defaults.strength, cx));
+        self.persist();
+        cx.notify();
+    }
+
     fn choose_local_background(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.writable || self.closing || self.background.operation.is_some() {
             return;

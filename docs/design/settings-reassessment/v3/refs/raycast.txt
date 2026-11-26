@@ -1,0 +1,144 @@
+Raycast Manual
+Skip to content
+Manual
+Extensions API
+Manual
+Extensions API
+Search Manual
+⌘
+K
+Ctrl
+K
+Manual
+Extensions API
+Basics
+Quickstart
+Search Bar
+Action Panel
+Command Aliases & Hotkeys
+Keyboard Shortcuts
+Import & Export
+Settings
+New in Raycast v2
+Core Features
+Snippets
+Quicklinks
+Clipboard History
+Notes
+Focus
+File Search
+Applications
+Extensions
+Translate
+Emoji & Symbols
+Calendar
+Calculator
+Screenshots
+Window Management
+Navigation
+Power Features
+Hyper Key
+Cloud Sync
+Dynamic Placeholders
+Browser Extension
+New
+System Commands
+Script Commands
+Themes
+Auto Quit
+Run
+Games
+AI
+Quick AI
+AI Chat
+Dictation
+Screen Awareness
+AI Commands
+AI Extensions
+Automations
+Agents
+MCP
+Skills
+Projects
+Personalization
+AI Credits
+Local Models
+Extension Models
+Custom Providers
+Bring Your Own Key
+Bring Your Own Subscription
+Raycast AI Privacy & Security
+iOS
+Keyboard
+Updated
+Widgets & Controls
+Apple Shortcuts
+Share Extension
+Account
+Account Management
+Billing
+Teams & Enterprise
+Quickstart with Teams
+Roles & Permissions
+Shared Features
+API Keys
+Enterprise
+Quickstart with Enterprise
+MDM Deployment
+Identity & Access Management
+SAML Single Sign-On (SSO)
+SCIM Provisioning
+Domain Capture
+MDM Sign-In Enforcement
+Admin Controls
+2FA Enforcement
+Cloud Sync Control
+Dictation Control
+Invitations Control
+Private Extension Publishing
+Clipboard History Control
+IP Allow-List
+AI Control Centre
+Organization-Wide AI Toggle
+AI Memory Control
+Screen Awareness Control
+Raycast MCP Server Control
+AI Provider Allow-List
+Custom API Keys (BYOK)
+Custom Provider Configuration
+Extensions Allow-List
+Security & Compliance
+Troubleshooting
+Community Guidelines
+Extensions Guidelines
+Contact Support
+Raycast Manual
+Raycast puts apps, files, extensions, AI, and dictation one keystroke away. From your first launch to pro-level workflows, this Manual shows you how to get the most out of Raycast on Mac, Windows, and iOS.
+Quickstart
+Chat with Raycast AI
+Start Here
+Basics
+Get up and running in minutes
+Account
+Keep your account and billing sorted
+Teams
+Share workflows with your whole team
+Explore Raycast
+Core Features
+Discover what Raycast can do for you
+Power Features
+Push your workflows to the extreme
+AI
+Get answers without leaving your keyboard
+iOS
+Take Raycast with you on iPhone
+Latest Releases
+View all changelogs
+Get in Touch
+Contact Support
+Get help straight from the team
+Troubleshooting
+Fix common issues in minutes
+Community Guidelines
+Help keep the community welcoming
+Platform

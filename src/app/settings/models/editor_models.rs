@@ -411,7 +411,7 @@ impl ProviderModels {
                     .min_w_0()
                     .debug_selector(move || format!("provider-model-input-{id}"))
                     .child(
-                        Input::new(&row.model)
+                        settings_input(&row.model)
                             .disabled(self.disabled)
                             .aria_label(label),
                     ),
@@ -423,6 +423,7 @@ impl ProviderModels {
                     .debug_selector(move || format!("provider-model-picker-{id}"))
                     .child(
                         Combobox::new(&row.picker)
+                            .settings_control()
                             .w(px(32.))
                             // Balance Combobox's reserved trailing gap for an icon-only trigger.
                             .pl_1()
@@ -513,7 +514,7 @@ impl ProviderModels {
                     ))
                     .into_any_element()
             } else {
-                Input::new(&row.name)
+                settings_input(&row.name)
                     .disabled(self.disabled)
                     .aria_label(format!(
                         "{} {}",
@@ -725,9 +726,11 @@ impl Render for ProviderModels {
                     )
                     .child(
                         div().flex_1().min_w_0().when(narrow, |d| d.w_full()).child(
-                            Input::new(&row.name).disabled(self.disabled).aria_label(
-                                conduit::i18n::text_static("settings.models.display_name"),
-                            ),
+                            settings_input(&row.name)
+                                .disabled(self.disabled)
+                                .aria_label(conduit::i18n::text_static(
+                                    "settings.models.display_name",
+                                )),
                         ),
                     )
                     .child(div().flex_1().min_w_0().when(narrow, |d| d.w_full()).child(

@@ -439,6 +439,18 @@ fn settings_connections_switch_engines_and_guard_service_editors(cx: &mut TestAp
             if selector == "settings-nav-8" && compact {
                 super::settings::redesign_tests::keyboard_category(cx, 8);
             } else {
+                if selector.starts_with("settings-engine-")
+                    && cx.debug_bounds(selector).is_none()
+                    && let Some(back) = cx.debug_bounds("engine-detail-back")
+                {
+                    cx.simulate_mouse_down(back.center(), MouseButton::Left, Modifiers::default());
+                    cx.simulate_mouse_up(back.center(), MouseButton::Left, Modifiers::default());
+                    cx.run_until_parked();
+                    cx.update(|window, cx| {
+                        let _ = window.draw(cx);
+                    });
+                }
+                super::settings::redesign_tests::open_engine_picker_if_needed(cx, selector);
                 let bounds = cx.debug_bounds(selector).unwrap();
                 cx.simulate_mouse_down(bounds.center(), MouseButton::Left, Modifiers::default());
                 cx.simulate_mouse_up(bounds.center(), MouseButton::Left, Modifiers::default());

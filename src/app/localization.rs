@@ -43,6 +43,7 @@ impl ConduitApp {
         for (input, original) in [
             (&self.search, "搜索会话"),
             (&self.settings_ui.search, "搜索设置…"),
+            (&self.settings_ui.appearance_filter, "筛选外观属性…"),
             (
                 &self.connection_settings.model_search,
                 "搜索模型名称、ID 或备注…",

@@ -1,0 +1,46 @@
+{
+  "url": "https://zed.dev/docs/reference/all-settings",
+  "title": [
+    "All Settings | All Settings"
+  ],
+  "images": [
+    {
+      "src": "https://zed.dev/logo_icon.webp",
+      "class": "icon-logo-img",
+      "alt": "Zed Industries",
+      "style": "height: 26px;"
+    },
+    {
+      "src": "https://zed.dev/logo_icon.webp",
+      "class": "footer-logo",
+      "alt": "Zed Industries"
+    }
+  ],
+  "links": [
+    "https://zed.dev/docs/reference/all-settings#all-settings",
+    "https://zed.dev/docs/extensions.html",
+    "https://zed.dev/docs/reference/all-settings#settings",
+    "https://zed.dev/docs/reference/all-settings#auto-install-extensions",
+    "https://zed.dev/docs/extensions/installing-extensions.html#installation-location",
+    "https://zed.dev/docs/reference/all-settings#suggest-extensions",
+    "https://zed.dev/docs/reference/all-settings#auto-update-extensions",
+    "https://zed.dev/docs/reference/all-settings#granted-extension-capabilities",
+    "https://zed.dev/docs/extensions/capabilities.html#restricting-capabilities",
+    "https://zed.dev/docs/collaboration/overview.html#audio-settings",
+    "https://zed.dev/docs/reference/all-settings#global-lsp-settings",
+    "https://zed.dev/docs/reference/all-settings#preferred-line-length",
+    "https://zed.dev/docs/windows-and-projects.html#via-settings",
+    "https://zed.dev/docs/reference/all-settings#preferred-line-length",
+    "https://zed.dev/docs/reference/all-settings#vim-settings",
+    "https://zed.dev/docs/vim.html#changing-vim-mode-settings",
+    "https://zed.dev/docs/ai/agent-settings.html#model-temperature",
+    "https://zed.dev/docs/ai/agent-settings.html#automatic-compaction",
+    "https://zed.dev/docs/ai/agent-profiles.html#settings",
+    "https://zed.dev/docs/ai/agent-settings.html#subagent-models",
+    "https://zed.dev/docs/reference/all-settings#settings-profiles",
+    "https://zed.dev/docs/ai/agent-settings.html",
+    "https://zed.dev/docs/extensions.html",
+    "https://zed.dev/docs/extensions/installing-extensions.html",
+    "https://zed.dev/docs/extensions/developing-extensions.html"
+  ]
+}

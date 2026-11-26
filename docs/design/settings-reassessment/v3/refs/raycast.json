@@ -1,0 +1,93 @@
+{
+  "url": "https://manual.raycast.com",
+  "title": [
+    "Raycast Manual"
+  ],
+  "images": [
+    {
+      "src": "https://manual.raycast.com/wordmark-light.svg",
+      "alt": "Raycast",
+      "width": "130",
+      "height": "50",
+      "class": "EKN27G_logoWordmark EKN27G_logoWordmarkLight"
+    },
+    {
+      "src": "https://manual.raycast.com/wordmark-dark.svg",
+      "alt": "Raycast",
+      "width": "130",
+      "height": "50",
+      "class": "EKN27G_logoWordmark EKN27G_logoWordmarkDark"
+    },
+    {
+      "src": "https://manual.raycast.com/wordmark-light.svg",
+      "alt": "Raycast",
+      "class": "lUN8Fa_logoWordmark lUN8Fa_logoWordmarkLight"
+    },
+    {
+      "src": "https://manual.raycast.com/wordmark-dark.svg",
+      "alt": "Raycast",
+      "class": "lUN8Fa_logoWordmark lUN8Fa_logoWordmarkDark"
+    },
+    {
+      "alt": "Screen of Raycast on Root Search",
+      "data-platform-image": "mac",
+      "width": "2000",
+      "height": "1250",
+      "decoding": "async",
+      "data-nimg": "1",
+      "class": "UQ0s-W_image",
+      "style": "color:transparent;background-size:cover;background-position:50% 50%;background-repeat:no-repeat;background-image:url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2000 1250'%3E%3Cfilter id='b' color-interpolation-filters='sRGB'%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3CfeColorMatrix values='1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 100 -1' result='s'/%3E%3CfeFlood x='0' y='0' width='100%25' height='100%25'/%3E%3CfeComposite operator='out' in='s'/%3E%3CfeComposite in2='SourceGraphic'/%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3C/filter%3E%3Cimage width='100%25' height='100%25' x='0' y='0' preserveAspectRatio='none' style='filter: url(%23b);' href='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAGCAYAAAD68A/GAAAACXBIWXMAAAsSAAALEgHS3X78AAAA00lEQVQImTWNTWqDYABEPxciBhTxX2pQNLZQS0pBElyk0HZbSQs16QGEdOWitltP4gnSO+aVfJDFLObxmBHTNJ3GcaTve4bhm8Phi7Zt2b69c3u3RJ/NsB33JI5/R3b7PZvNI3VdU5YlaZoyn8dkWcZikeO6LqLrOnYfn6xWa5IkkTCKIvI8lymKgiAMEaqqcn1TSOg4DrZtSzEIAjzPk11RFMT57v5hSRxfybWLfI7v+1iWRVVViN+fgW3zytPzC34Qomkauq5jmiaGYRBGEU3T8A/Do1x2dLBNAQAAAABJRU5ErkJggg=='/%3E%3C/svg%3E\")",
+      "sizes": "(max-width: 768px) 100vw, (max-width: 1200px) 80vw, 800px",
+      "srcset": "/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fmac-hero.png&w=640&q=75 640w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fmac-hero.png&w=750&q=75 750w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fmac-hero.png&w=828&q=75 828w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fmac-hero.png&w=1080&q=75 1080w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fmac-hero.png&w=1200&q=75 1200w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fmac-hero.png&w=1920&q=75 1920w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fmac-hero.png&w=2048&q=75 2048w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fmac-hero.png&w=3840&q=75 3840w",
+      "src": "https://manual.raycast.com/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fmac-hero.png&w=3840&q=75"
+    },
+    {
+      "alt": "Screen of Raycast on Root Search",
+      "data-platform-image": "windows",
+      "width": "1750",
+      "height": "1130",
+      "decoding": "async",
+      "data-nimg": "1",
+      "class": "UQ0s-W_image",
+      "style": "color:transparent;background-size:cover;background-position:50% 50%;background-repeat:no-repeat;background-image:url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1750 1130'%3E%3Cfilter id='b' color-interpolation-filters='sRGB'%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3CfeColorMatrix values='1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 100 -1' result='s'/%3E%3CfeFlood x='0' y='0' width='100%25' height='100%25'/%3E%3CfeComposite operator='out' in='s'/%3E%3CfeComposite in2='SourceGraphic'/%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3C/filter%3E%3Cimage width='100%25' height='100%25' x='0' y='0' preserveAspectRatio='none' style='filter: url(%23b);' href='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAGCAYAAAD68A/GAAAACXBIWXMAAAsSAAALEgHS3X78AAAApUlEQVQImT1PywqDQBDb+1YRoa5v3Fl0xdfJB4X6BaWX/v+3NGUG7CEMTDJJRumbhjEGSZIgyzIQEZqmQVVVKIpCOK31V92NwbYfmKcJXdeJkOGcA1mC9x5RFEFtx4rjsaNtW5Rl+Qe75XkuByI8zyf63qOua4lmkmeapgKuEIYh1Of1xjrOsM7J8hJf4BriaIkwDCOWZYG1VpzjOBYRx/NjQRDgB96lUZImu4tWAAAAAElFTkSuQmCC'/%3E%3C/svg%3E\")",
+      "sizes": "(max-width: 768px) 100vw, (max-width: 1200px) 80vw, 800px",
+      "srcset": "/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fwindows-hero.png&w=640&q=75 640w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fwindows-hero.png&w=750&q=75 750w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fwindows-hero.png&w=828&q=75 828w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fwindows-hero.png&w=1080&q=75 1080w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fwindows-hero.png&w=1200&q=75 1200w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fwindows-hero.png&w=1920&q=75 1920w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fwindows-hero.png&w=2048&q=75 2048w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fwindows-hero.png&w=3840&q=75 3840w",
+      "src": "https://manual.raycast.com/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fwindows-hero.png&w=3840&q=75"
+    },
+    {
+      "alt": "Screen of Raycast on Root Search",
+      "data-platform-image": "ios",
+      "width": "2800",
+      "height": "1824",
+      "decoding": "async",
+      "data-nimg": "1",
+      "class": "UQ0s-W_image",
+      "style": "color:transparent;background-size:cover;background-position:50% 50%;background-repeat:no-repeat;background-image:url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2800 1824'%3E%3Cfilter id='b' color-interpolation-filters='sRGB'%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3CfeColorMatrix values='1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 100 -1' result='s'/%3E%3CfeFlood x='0' y='0' width='100%25' height='100%25'/%3E%3CfeComposite operator='out' in='s'/%3E%3CfeComposite in2='SourceGraphic'/%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3C/filter%3E%3Cimage width='100%25' height='100%25' x='0' y='0' preserveAspectRatio='none' style='filter: url(%23b);' href='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAHCAYAAAAxrNxjAAAACXBIWXMAABYlAAAWJQFJUiTwAAAAy0lEQVQYlVWKy06EQBREbz9oYIDZTANNGnmTaHQxcaFGFyb6If7/VxwjunFxqk5SJVZpnNJkStOUZ/rTmZiXvBUX3lXBi+R8SYZUKqEQQ2kd8zSybRvzurPe3dK5HC+aR3HIaCoWXRJdxVA3PI0rz9dPHl4/ODlHJkIlGgkmJ+qc3hXsw0SMPSF0tKEjtQmJCEYUYpXCipDbhH1euRkm6qY9MMYiIiiRnz4C41KW+yvbstO0HRffYIw5tj9+JXEp/bgR2oj3Ae/rf8dv6npS4yzeHCsAAAAASUVORK5CYII='/%3E%3C/svg%3E\")",
+      "sizes": "(max-width: 768px) 100vw, (max-width: 1200px) 80vw, 800px",
+      "srcset": "/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fios-hero.png&w=640&q=75 640w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fios-hero.png&w=750&q=75 750w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fios-hero.png&w=828&q=75 828w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fios-hero.png&w=1080&q=75 1080w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fios-hero.png&w=1200&q=75 1200w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fios-hero.png&w=1920&q=75 1920w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fios-hero.png&w=2048&q=75 2048w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fios-hero.png&w=3840&q=75 3840w",
+      "src": "https://manual.raycast.com/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fios-hero.png&w=3840&q=75"
+    },
+    {
+      "src": "https://manual.raycast.com/logo-light.svg",
+      "alt": "Raycast",
+      "class": "CgEBhW_logoMark CgEBhW_logoMarkLight"
+    },
+    {
+      "src": "https://manual.raycast.com/logo-dark.svg",
+      "alt": "Raycast",
+      "class": "CgEBhW_logoMark CgEBhW_logoMarkDark"
+    }
+  ],
+  "links": [
+    "https://manual.raycast.com/settings",
+    "https://manual.raycast.com/extensions",
+    "https://manual.raycast.com/browser-extension",
+    "https://manual.raycast.com/ai/ai-extensions",
+    "https://manual.raycast.com/ai/extension-models",
+    "https://manual.raycast.com/ios/share-extension",
+    "https://manual.raycast.com/enterprise/private-extension-publishing",
+    "https://manual.raycast.com/enterprise/extensions-allow-list",
+    "https://manual.raycast.com/extensions-guidelines",
+    "raycast://extensions/raycast/ai/ai-chat?fallbackText=Read%20https%3A%2F%2Fmanual.raycast.com%2Fllms.txt.%20I%20want%20to%20ask%20you%20questions%20about%20the%20Raycast%20Manual."
+  ]
+}

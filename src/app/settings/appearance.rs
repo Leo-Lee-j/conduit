@@ -37,7 +37,7 @@ impl ConduitApp {
     }
 }
 
-fn auto_collapse_field(view: Entity<ConduitApp>) -> SettingField<SharedString> {
+pub(super) fn auto_collapse_field(view: Entity<ConduitApp>) -> SettingField<SharedString> {
     SettingField::render(move |options, _, cx| {
         let app = view.read(cx);
         let enabled = app.store.ui.auto_collapse_inactive_workspaces;
@@ -52,9 +52,9 @@ fn auto_collapse_field(view: Entity<ConduitApp>) -> SettingField<SharedString> {
                     .debug_selector(|| "auto-collapse-inactive-days".into())
                     .gap_2()
                     .child(
-                        div().w(px(104.)).flex_shrink_0().child(
+                        div().w(ui_text_size(104.)).flex_shrink_0().child(
                             NumberInput::new(&input)
-                                .small()
+                                .settings_control()
                                 .accessibility_label(conduit::i18n::text_static(
                                     "settings.appearance.auto_collapse_inactive_days",
                                 ))
@@ -96,217 +96,49 @@ mod tests;
 #[path = "appearance_redesign_tests.rs"]
 mod redesign_tests;
 
-fn theme_options(
-    selected: AppearanceMode,
-    view: Entity<ConduitApp>,
-    disabled: bool,
-    cx: &App,
-) -> AnyElement {
-    let ui = &view.read(cx).store.ui;
-    let theme_option = |mode: AppearanceMode,
-                        label: &'static str,
-                        detail: &'static str,
-                        icon: gpui_kit::assets::IconName,
-                        id: &'static str|
-     -> AnyElement {
+pub(super) mod editor;
+
+fn theme_options(selected: AppearanceMode, view: Entity<ConduitApp>, disabled: bool) -> AnyElement {
+    let mut choices = h_flex().gap_1().flex_wrap();
+    for (mode, key, id) in [
+        (
+            AppearanceMode::System,
+            "settings.appearance.system",
+            "appearance-theme-system",
+        ),
+        (
+            AppearanceMode::Light,
+            "settings.appearance.light",
+            "appearance-theme-light",
+        ),
+        (
+            AppearanceMode::Dark,
+            "settings.appearance.dark",
+            "appearance-theme-dark",
+        ),
+    ] {
         let view = view.clone();
-        let active = selected == mode;
-        let preview_mode = match mode {
-            AppearanceMode::Light => gpui_kit::component::ThemeMode::Light,
-            AppearanceMode::Dark => gpui_kit::component::ThemeMode::Dark,
-            AppearanceMode::System => gpui_kit::component::ThemeMode::from(cx.window_appearance()),
-        };
-        let name = if preview_mode.is_dark() {
-            &ui.dark_theme
-        } else {
-            &ui.light_theme
-        };
-        let preview = theme_preview(name, preview_mode, cx);
-        let label_color = if disabled {
-            palette().faint
-        } else {
-            palette().text
-        };
-        let icon_color = if disabled {
-            palette().faint
-        } else if active {
-            palette().text
-        } else {
-            palette().muted
-        };
-        let check_color = if disabled {
-            palette().faint
-        } else {
-            palette().text
-        };
-        div()
-            .w_full()
-            .debug_selector(move || id.into())
-            .child(
-                Button::new(id)
-                    .outline()
-                    .h_auto()
-                    .min_h(rems(8.))
-                    .w_full()
-                    .p_3()
-                    .rounded(px(8.))
-                    .border_color(rgb(if active {
-                        palette().focus
-                    } else {
-                        palette().border
-                    }))
-                    .bg(rgb(if active {
-                        palette().surface_strong
-                    } else {
-                        palette().surface
-                    }))
-                    .selected(active)
-                    .accessibility_label(label)
-                    .disabled(disabled)
-                    .when(!disabled, |button| button.cursor_pointer())
-                    .on_click(move |_, window, cx| {
-                        view.update(cx, |this, cx| {
-                            if !this.writable || this.closing {
-                                return;
-                            }
-                            if this.store.ui.appearance != mode {
-                                this.store.ui.appearance = mode;
-                                this.persist();
-                            }
-                            this.apply_appearance(window, cx);
-                        });
+        choices = choices.child(
+            Button::new(id)
+                .debug_selector(move || id.into())
+                .small()
+                .ghost()
+                .selected(selected == mode)
+                .label(conduit::i18n::text_static(key))
+                .disabled(disabled)
+                .on_click(move |_, window, cx| {
+                    view.update(cx, |app, cx| {
+                        if !app.writable || app.closing || app.store.ui.appearance == mode {
+                            return;
+                        }
+                        app.store.ui.appearance = mode;
+                        app.apply_appearance(window, cx);
+                        app.persist();
                     })
-                    .child(
-                        v_flex()
-                            .w_full()
-                            .min_w_0()
-                            .whitespace_normal()
-                            .gap_2()
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .h(px(48.))
-                                    .rounded(px(4.))
-                                    .overflow_hidden()
-                                    .border_1()
-                                    .border_color(rgb(preview.border))
-                                    .bg(rgb(preview.canvas))
-                                    .child(
-                                        div()
-                                            .w(px(24.))
-                                            .h_full()
-                                            .bg(rgb(preview.sidebar_bg))
-                                            .border_r_1()
-                                            .border_color(rgb(preview.border)),
-                                    )
-                                    .child(
-                                        v_flex()
-                                            .flex_1()
-                                            .px_2()
-                                            .gap_1()
-                                            .child(
-                                                div()
-                                                    .w(relative(0.65))
-                                                    .h(px(4.))
-                                                    .rounded(px(2.))
-                                                    .bg(rgb(preview.muted)),
-                                            )
-                                            .child(
-                                                div()
-                                                    .w_full()
-                                                    .h(px(4.))
-                                                    .rounded(px(2.))
-                                                    .bg(rgb(preview.border)),
-                                            )
-                                            .child(
-                                                div()
-                                                    .w(relative(0.8))
-                                                    .h(px(4.))
-                                                    .rounded(px(2.))
-                                                    .bg(rgb(preview.border)),
-                                            ),
-                                    ),
-                            )
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .gap_2()
-                                    .child(Icon::new(icon).small().text_color(rgb(icon_color)))
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .text_size(ui_text_size(13.))
-                                            .font_medium()
-                                            .text_color(rgb(label_color))
-                                            .child(label),
-                                    )
-                                    .when(active, |row| {
-                                        row.child(
-                                            Icon::new(gpui_kit::assets::IconName::Check)
-                                                .small()
-                                                .text_color(rgb(check_color)),
-                                        )
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .text_size(ui_text_size(11.))
-                                    .text_color(rgb(palette().muted))
-                                    .child(detail),
-                            ),
-                    ),
-            )
-            .into_any_element()
-    };
-    h_flex()
-        .w_full()
-        .min_w_0()
-        .flex_wrap()
-        .items_start()
-        .gap_3()
-        .child(
-            div()
-                .flex_1()
-                .flex_basis(rems(10.))
-                .min_w_0()
-                .child(theme_option(
-                    AppearanceMode::System,
-                    conduit::i18n::text_static("settings.appearance.system"),
-                    conduit::i18n::text_static(
-                        "settings.appearance.match_system_appearance_automatically",
-                    ),
-                    gpui_kit::assets::IconName::Monitor,
-                    "appearance-theme-system",
-                )),
-        )
-        .child(
-            div()
-                .flex_1()
-                .flex_basis(rems(10.))
-                .min_w_0()
-                .child(theme_option(
-                    AppearanceMode::Light,
-                    conduit::i18n::text_static("settings.appearance.light"),
-                    conduit::i18n::text_static("settings.appearance.bright_and_clear"),
-                    gpui_kit::assets::IconName::Sun,
-                    "appearance-theme-light",
-                )),
-        )
-        .child(
-            div()
-                .flex_1()
-                .flex_basis(rems(10.))
-                .min_w_0()
-                .child(theme_option(
-                    AppearanceMode::Dark,
-                    conduit::i18n::text_static("settings.appearance.dark"),
-                    conduit::i18n::text_static("settings.appearance.soft_dark_background"),
-                    gpui_kit::assets::IconName::Moon,
-                    "appearance-theme-dark",
-                )),
-        )
-        .into_any_element()
+                }),
+        );
+    }
+    choices.into_any_element()
 }
 
 #[derive(Clone, Copy)]
@@ -359,12 +191,12 @@ fn theme_select_field(
         };
         div()
             .debug_selector(move || selector.into())
-            .w(rems(14.))
+            .w(rems(12.))
             .max_w(relative(1.))
             .min_w_0()
             .child(
                 Select::new(select)
-                    .with_size(Size::Small)
+                    .settings_control()
                     .w_full()
                     .menu_width(px(280.))
                     .menu_max_h(px(320.))
@@ -422,7 +254,7 @@ fn font_select_item(view: Entity<ConduitApp>, target: FontTarget, disabled: bool
             .child(
                 div()
                     .flex_1()
-                    .flex_basis(rems(16.))
+                    .flex_basis(rems(8.))
                     .min_w_0()
                     .text_size(ui_text_size(14.))
                     .child(conduit::i18n::text_static(title)),
@@ -435,7 +267,7 @@ fn font_select_item(view: Entity<ConduitApp>, target: FontTarget, disabled: bool
                     .min_w_0()
                     .child(
                         Select::new(select)
-                            .with_size(Size::Small)
+                            .settings_control()
                             .w_full()
                             .menu_width(px(260.))
                             .menu_max_h(px(320.))
@@ -459,92 +291,12 @@ fn font_select_item(view: Entity<ConduitApp>, target: FontTarget, disabled: bool
     .disabled(disabled)
 }
 
-// These are subheadings inside the typography group, not new settings groups.
-// Keep font selectors and steppers on the shared SettingItem layout.
-fn font_settings_heading(
-    target: FontTarget,
-    disabled: bool,
-    view: Entity<ConduitApp>,
-) -> SettingItem {
-    let (id, title, scope) = match target {
-        FontTarget::Interface => (
-            "appearance-interface-heading",
-            conduit::i18n::text_static("settings.appearance.interface_typography"),
-            conduit::i18n::text_static("settings.appearance.interface_typography_scope"),
-        ),
-        FontTarget::Chat => (
-            "appearance-chat-heading",
-            conduit::i18n::text_static("settings.appearance.chat_text"),
-            conduit::i18n::text_static("settings.appearance.chat_typography_scope"),
-        ),
-        FontTarget::Code => (
-            "appearance-code-heading",
-            conduit::i18n::text_static("settings.appearance.code_blocks"),
-            conduit::i18n::text_static("settings.appearance.code_typography_scope"),
-        ),
-    };
-    let mut keywords = vec![title, scope];
-    if matches!(target, FontTarget::Interface) {
-        keywords.extend([
-            conduit::i18n::text_static("settings.appearance.typography"),
-            conduit::i18n::text_static("settings.appearance.typography_preview"),
-            conduit::i18n::text_static("settings.appearance.chat_preview"),
-            conduit::i18n::text_static("settings.appearance.code_preview"),
-            conduit::i18n::text_static("mermaid.preview"),
-        ]);
-    }
-    SettingItem::render(move |_, _, _| {
-        h_flex()
-            .debug_selector(move || id.into())
-            .w_full()
-            .min_w_0()
-            .pt_3()
-            .gap_3()
-            .flex_wrap()
-            .items_center()
-            .child(
-                div()
-                    .flex_1()
-                    .flex_basis(rems(16.))
-                    .min_w_0()
-                    .text_size(ui_text_size(13.))
-                    .font_semibold()
-                    .text_color(rgb(palette().text))
-                    .child(title),
-            )
-            .when(matches!(target, FontTarget::Interface), |row| {
-                let view = view.clone();
-                row.child(
-                    Button::new("appearance-ui-reset")
-                        .debug_selector(|| "appearance-ui-reset".into())
-                        .label(conduit::i18n::text_static(
-                            "settings.appearance.restore_interface_defaults",
-                        ))
-                        .tooltip(conduit::i18n::text_static(
-                            "settings.appearance.reset_only_the_interface_font_and_size",
-                        ))
-                        .small()
-                        .ghost()
-                        .disabled(disabled)
-                        .when(!disabled, |button| button.cursor_pointer())
-                        .on_click(move |_, window, cx| {
-                            view.update(cx, |app, cx| app.reset_ui_typography(window, cx));
-                        }),
-                )
-            })
-    })
-    .keywords(keywords)
-    .disabled(disabled)
-}
-
 // A local, inert source sample: rendering this never executes the JavaScript.
 const CODE_TYPOGRAPHY_SAMPLE: &str = r#"```javascript
-function previewTypography(settings) {
-  return {
-    fontFamily: settings.codeFont,
-    fontSize: settings.codeSize,
-  };
-}
+const sizes = [13, 15];
+const label = sizes
+  .map(n => `${n}px`)
+  .join(' / ');
 ```"#;
 
 // The preview accepts only resolved typography, not sessions, input state or
@@ -558,7 +310,7 @@ fn typography_previews(typography: &ChatTypography) -> AnyElement {
             .flex_basis(rems(18.))
             .min_w_0()
             .max_w(relative(1.))
-            .rounded(px(8.))
+            .rounded(px(4.))
             .border_1()
             .border_color(rgb(palette().border))
             .bg(rgb(palette().surface))
@@ -590,19 +342,7 @@ fn typography_previews(typography: &ChatTypography) -> AnyElement {
         .debug_selector(|| "appearance-typography-previews".into())
         .w_full()
         .min_w_0()
-        .pt_4()
-        .border_t_1()
-        .border_color(rgb(palette().border))
         .gap_3()
-        .child(
-            div()
-                .text_size(ui_text_size(13.))
-                .font_semibold()
-                .text_color(rgb(palette().text))
-                .child(conduit::i18n::text_static(
-                    "settings.appearance.typography_preview",
-                )),
-        )
         .child(
             h_flex()
                 .w_full()
@@ -615,7 +355,7 @@ fn typography_previews(typography: &ChatTypography) -> AnyElement {
                     conduit::i18n::text_static("settings.appearance.chat_preview"),
                     chat_markdown_view(
                         "appearance-chat-preview".into(),
-                        conduit::i18n::text_static("settings.appearance.chat_preview_sample"),
+                        conduit::i18n::text_static("settings.appearance.compact_preview_sample"),
                         typography,
                         "appearance-preview-chat",
                         false,
@@ -824,281 +564,44 @@ impl ConduitApp {
         cx.notify();
     }
 
-    pub(in crate::app) fn reset_typography(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::app) fn reset_chat_typography(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.writable || self.closing {
             return;
         }
-        self.store.ui.chat_font_family = None;
-        self.store.ui.chat_font_size = 15.0;
-        self.store.ui.chat_line_height = 1.5;
-        self.store.ui.code_font_family = None;
-        self.store.ui.code_font_size = 13.0;
-        self.store.ui.code_copy_button = true;
-        self.store.ui.code_syntax_highlight = true;
-        self.store.ui.code_line_numbers = false;
-        for select in [&self.chat_font_select, &self.code_font_select] {
-            select.update(cx, |state, cx| {
-                state.set_selected_index(Some(IndexPath::new(0)), window, cx);
-            });
-        }
-        self.apply_code_font(cx);
+        let defaults = crate::store::UiSettings::default();
+        self.store.ui.chat_font_family = defaults.chat_font_family;
+        self.store.ui.chat_font_size = defaults.chat_font_size;
+        self.store.ui.chat_line_height = defaults.chat_line_height;
+        self.chat_font_select.update(cx, |select, cx| {
+            select.set_selected_index(Some(IndexPath::new(0)), window, cx);
+        });
         self.persist();
         cx.notify();
     }
 
-    pub(in crate::app) fn settings_appearance_page(
-        &self,
-        disabled: bool,
-        view: Entity<Self>,
-    ) -> SettingPage {
-        let selected = self.store.ui.appearance;
-        let theme_view = view.clone();
-        let chat = self.chat_typography();
-        let ui_font = font_select_item(view.clone(), FontTarget::Interface, disabled);
-        let ui_size = typography_field(
-            "ui-font-size",
-            self.store
-                .ui
-                .ui_font_size
-                .clamp(MIN_UI_FONT_SIZE, MAX_UI_FONT_SIZE),
-            disabled,
-            TypographyField::UiSize,
-            view.clone(),
-        );
-        let icon_view = view.clone();
-        let icon_size = SettingField::render(move |_, _, cx| {
-            icon_size_options(
-                icon_view.read(cx).store.ui.icon_size,
-                icon_view.clone(),
-                disabled,
-            )
+    pub(in crate::app) fn reset_code_typography(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.writable || self.closing {
+            return;
+        }
+        let defaults = crate::store::UiSettings::default();
+        self.store.ui.code_font_family = defaults.code_font_family;
+        self.store.ui.code_font_size = defaults.code_font_size;
+        self.store.ui.code_copy_button = defaults.code_copy_button;
+        self.store.ui.code_syntax_highlight = defaults.code_syntax_highlight;
+        self.store.ui.code_line_numbers = defaults.code_line_numbers;
+        self.code_font_select.update(cx, |select, cx| {
+            select.set_selected_index(Some(IndexPath::new(0)), window, cx);
         });
-        let chat_font = font_select_item(view.clone(), FontTarget::Chat, disabled);
-        let chat_size = typography_field(
-            "chat-font-size",
-            chat.body_size,
-            disabled,
-            TypographyField::ChatSize,
-            view.clone(),
-        );
-        let chat_line_height = typography_field(
-            "chat-line-height",
-            chat.line_height,
-            disabled,
-            TypographyField::ChatLineHeight,
-            view.clone(),
-        );
-        let code_font = font_select_item(view.clone(), FontTarget::Code, disabled);
-        let code_size = typography_field(
-            "code-font-size",
-            chat.code_size,
-            disabled,
-            TypographyField::CodeSize,
-            view.clone(),
-        );
-        let preview_view = view.clone();
-        let reset_view = view.clone();
-        let reset = SettingItem::render(move |_, _, _| {
-            let view = reset_view.clone();
-            h_flex()
-                .w_full()
-                .min_w_0()
-                .gap_3()
-                .flex_wrap()
-                .items_center()
-                .justify_end()
-                .child(
-                    Button::new("appearance-typography-reset")
-                        .debug_selector(|| "appearance-typography-reset".into())
-                        .label(conduit::i18n::text_static(
-                            "settings.appearance.restore_chat_code_defaults",
-                        ))
-                        .small()
-                        .ghost()
-                        .disabled(disabled)
-                        .when(!disabled, |button| button.cursor_pointer())
-                        .on_click(move |_, window, cx| {
-                            view.update(cx, |app, cx| app.reset_typography(window, cx));
-                        }),
-                )
-        })
-        .keywords([
-            conduit::i18n::text_static("settings.appearance.restore_chat_code_defaults"),
-            conduit::i18n::text_static("settings.appearance.reset_chat_code_scope"),
-        ])
-        .disabled(disabled);
-        let code_copy = switch_field(
-            view.clone(),
-            |app| app.store.ui.code_copy_button,
-            |app, value| app.store.ui.code_copy_button = value,
-        );
-        let code_line_numbers = switch_field(
-            view.clone(),
-            |app| app.store.ui.code_line_numbers,
-            |app, value| app.store.ui.code_line_numbers = value,
-        );
-        let code_syntax = switch_field(
-            view.clone(),
-            |app| app.store.ui.code_syntax_highlight,
-            |app, value| app.store.ui.code_syntax_highlight = value,
-        );
-        let auto_sort = switch_field(
-            view.clone(),
-            |app| app.store.ui.auto_sort_workspaces,
-            |app, value| app.store.ui.auto_sort_workspaces = value,
-        );
-        let auto_collapse = auto_collapse_field(view.clone());
-
-        // Search/navigation depend on these indices: 0 appearance, 1 typography,
-        // 2 background. Font subsections and previews must not add top-level groups.
-        settings_page(
-            conduit::i18n::text_static("settings.appearance.appearance"),
-            FullIconName::Palette,
-        )
-        .groups(vec![
-            settings_section(conduit::i18n::text_static("settings.appearance.appearance"))
-                .item(
-                    SettingItem::render(move |_, _, cx| {
-                        theme_options(selected, theme_view.clone(), disabled, cx)
-                    })
-                    .keywords([
-                        conduit::i18n::text_static("settings.appearance.theme"),
-                        conduit::i18n::text_static("settings.appearance.light"),
-                        conduit::i18n::text_static("settings.appearance.dark"),
-                        conduit::i18n::text_static("settings.appearance.system"),
-                    ]),
-                )
-                .item(
-                    SettingItem::new(
-                        conduit::i18n::text_static("settings.appearance.light_theme"),
-                        theme_select_field(
-                            view.clone(),
-                            gpui_kit::component::ThemeMode::Light,
-                            disabled,
-                        ),
-                    )
-                    .disabled(disabled),
-                )
-                .item(
-                    SettingItem::new(
-                        conduit::i18n::text_static("settings.appearance.dark_theme"),
-                        theme_select_field(
-                            view.clone(),
-                            gpui_kit::component::ThemeMode::Dark,
-                            disabled,
-                        ),
-                    )
-                    .disabled(disabled),
-                )
-                .item(
-                    SettingItem::render(|_, _, _| {
-                        div()
-                            .pt_3()
-                            .text_size(ui_text_size(13.))
-                            .font_semibold()
-                            .text_color(rgb(palette().text))
-                            .child(conduit::i18n::text_static(
-                                "settings.appearance.application_interface",
-                            ))
-                    })
-                    .keywords([conduit::i18n::text_static(
-                        "settings.appearance.application_interface",
-                    )]),
-                )
-                .item(
-                    SettingItem::new(
-                        conduit::i18n::text_static("settings.appearance.auto_sort_workspaces"),
-                        auto_sort,
-                    )
-                    .disabled(disabled),
-                )
-                .item(
-                    SettingItem::new(
-                        conduit::i18n::text_static(
-                            "settings.appearance.auto_collapse_inactive_workspaces",
-                        ),
-                        auto_collapse,
-                    )
-                    .disabled(disabled),
-                ),
-            settings_section(conduit::i18n::text_static("settings.appearance.typography"))
-                .items(vec![
-                    font_settings_heading(FontTarget::Interface, disabled, view.clone()),
-                    ui_font,
-                    SettingItem::new(
-                        conduit::i18n::text_static("settings.appearance.interface_font_size"),
-                        ui_size,
-                    )
-                    .keywords([
-                        conduit::i18n::text_static("settings.appearance.application"),
-                        conduit::i18n::text_static("settings.appearance.interface"),
-                        conduit::i18n::text_static("settings.appearance.font_size"),
-                        conduit::i18n::text_static("settings.appearance.size"),
-                        "font",
-                        "size",
-                    ])
-                    .disabled(disabled),
-                    SettingItem::new(
-                        conduit::i18n::text_static("settings.appearance.functional_icon_size"),
-                        icon_size,
-                    )
-                    .keywords([
-                        conduit::i18n::text_static("settings.appearance.functional_icon_size"),
-                        "icon",
-                        "sidebar",
-                        "toolbar",
-                    ])
-                    .disabled(disabled),
-                    font_settings_heading(FontTarget::Chat, disabled, view.clone()),
-                    chat_font,
-                    SettingItem::new(
-                        conduit::i18n::text_static("settings.appearance.font_size"),
-                        chat_size,
-                    )
-                    .disabled(disabled),
-                    SettingItem::new(
-                        conduit::i18n::text_static("settings.appearance.line_height"),
-                        chat_line_height,
-                    )
-                    .disabled(disabled),
-                    font_settings_heading(FontTarget::Code, disabled, view.clone()),
-                    code_font,
-                    SettingItem::new(
-                        conduit::i18n::text_static("settings.appearance.code_font_size"),
-                        code_size,
-                    )
-                    .disabled(disabled),
-                    SettingItem::new(
-                        conduit::i18n::text_static("settings.appearance.copy_button"),
-                        code_copy,
-                    )
-                    .disabled(disabled),
-                    SettingItem::new(
-                        conduit::i18n::text_static("settings.appearance.line_numbers"),
-                        code_line_numbers,
-                    )
-                    .disabled(disabled),
-                    SettingItem::new(
-                        conduit::i18n::text_static("settings.appearance.syntax_highlighting"),
-                        code_syntax,
-                    )
-                    .disabled(disabled),
-                    reset,
-                ])
-                // Previews sit outside the settings surface; they contain no
-                // preference actions and remain readable in read-only mode.
-                .footer(move |_, cx| typography_previews(&preview_view.read(cx).chat_typography())),
-            settings_section(conduit::i18n::text_static("wallpaper.title")).item(
-                SettingItem::render(move |_, _, cx| {
-                    view.read(cx).background_controls(view.clone())
-                })
-                .keywords([
-                    conduit::i18n::text_static("wallpaper.title"),
-                    "Wallhaven",
-                    "wallpaper",
-                    "background",
-                ]),
-            ),
-        ])
+        self.apply_code_font(cx);
+        self.persist();
+        cx.notify();
     }
 }

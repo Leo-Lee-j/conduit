@@ -88,10 +88,25 @@ const DEFAULT_CHANNEL_SELECTORS: [&str; Provider::ALL.len()] = [
 ];
 
 fn click(cx: &mut VisualTestContext, selector: &'static str) {
+    open_engine_picker_if_needed(cx, selector);
     let center = cx.debug_bounds(selector).expect(selector).center();
     cx.simulate_mouse_down(center, MouseButton::Left, Modifiers::default());
     cx.simulate_mouse_up(center, MouseButton::Left, Modifiers::default());
     draw(cx);
+}
+
+pub(in crate::app) fn open_engine_picker_if_needed(
+    cx: &mut VisualTestContext,
+    selector: &'static str,
+) {
+    if (selector.starts_with("settings-engine-") || selector.starts_with("extensions-engine-"))
+        && cx.debug_bounds(selector).is_none()
+        && let Some(picker) = cx.debug_bounds("management-engine-picker")
+    {
+        cx.simulate_mouse_down(picker.center(), MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(picker.center(), MouseButton::Left, Modifiers::default());
+        draw(cx);
+    }
 }
 
 fn select_page(app: &Entity<ConduitApp>, cx: &mut VisualTestContext, page: usize) {
@@ -189,6 +204,12 @@ pub(in crate::app) fn keyboard_category(cx: &mut VisualTestContext, page: usize)
 
 fn assert_target(cx: &mut VisualTestContext, page: usize, group: usize) {
     match (page, group) {
+        (0, 2) => {
+            let label = conduit::i18n::text_static("settings.appearance.auto_sort_workspaces");
+            assert!(elements(cx).iter().any(|element| element.visible()
+                && element.role() == Some(Role::Switch)
+                && element.label() == Some(label)));
+        }
         (10, 1) => {
             let permission = control(cx, "default-session-permission");
             assert!(
@@ -226,7 +247,7 @@ fn assert_target(cx: &mut VisualTestContext, page: usize, group: usize) {
 
         (1, 1) => {
             assert!(
-                cx.debug_bounds("appearance-ui-reset").is_some(),
+                cx.debug_bounds("appearance-reset-group-1").is_some(),
                 "font search must reveal the merged typography controls"
             );
         }
@@ -241,7 +262,7 @@ fn settings_redesign_compact_readonly_categories_and_search_work_with_keyboard(
     let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, Store::default());
     let before = business_state(&app, cx);
-    cx.simulate_resize(size(px(850.), px(500.)));
+    cx.simulate_resize(size(px(640.), px(500.)));
     draw(cx);
     keyboard_category(cx, 1);
     cx.update(|_, cx| {
@@ -354,6 +375,8 @@ fn settings_redesign_legacy_naming_route_and_migrated_search_reveal_real_targets
     assert_target(cx, 10, 3);
 
     for (text, page, group) in [
+        ("自动将活跃工作空间排到前面", 0, 2),
+        ("自动折叠非活跃工作空间", 0, 2),
         ("默认会话权限", 10, 1),
         ("思考", 10, 2),
         ("问答", 10, 2),
@@ -501,9 +524,9 @@ fn settings_redesign_resize_and_categories_preserve_engines_and_pending_draft_en
     let before = business_state(&app, cx);
 
     for (width, height, page, compact) in [
-        (850., 500., 10, true),
+        (640., 500., 10, true),
         (1400., 900., 1, false),
-        (850., 500., 8, true),
+        (640., 500., 8, true),
         (1400., 900., 10, false),
     ] {
         cx.simulate_resize(size(px(width), px(height)));
@@ -536,7 +559,7 @@ fn settings_redesign_resize_and_categories_preserve_engines_and_pending_draft_en
 
     query(&app, cx, "自动命名");
     let search_range = cx.update(|_, cx| app.read(cx).settings_ui.search.read(cx).selected_range());
-    for (width, height) in [(1400., 900.), (850., 500.), (1400., 900.)] {
+    for (width, height) in [(1400., 900.), (640., 500.), (1400., 900.)] {
         cx.simulate_resize(size(px(width), px(height)));
         draw(cx);
         cx.update(|window, cx| {
@@ -614,7 +637,7 @@ fn settings_redesign_ui_font_reset_does_not_reset_chat_or_code_preferences(
     });
     draw(cx);
     let readonly = business_state(&app, cx);
-    click(cx, "appearance-ui-reset");
+    click(cx, "appearance-reset-group-1");
     assert_eq!(
         business_state(&app, cx),
         readonly,
@@ -631,13 +654,13 @@ fn settings_redesign_ui_font_reset_does_not_reset_chat_or_code_preferences(
         })
     });
     draw(cx);
-    click(cx, "appearance-ui-reset");
+    click(cx, "appearance-reset-group-1");
     cx.update(|_, cx| {
         let app = app.read(cx);
         assert_eq!(
             serde_json::to_value(&app.store.ui).unwrap(),
             expected,
-            "UI reset may only reset the interface font family/size, not chat/code typography"
+            "Interface group reset must preserve chat/code typography"
         );
     });
 }

@@ -80,13 +80,10 @@ impl ConduitApp {
             .unwrap_or_else(|| "English".into());
         let language_field = SettingField::render(move |_, _, _| {
             let view = language_view.clone();
-            Button::new("application-language")
+            settings_dropdown("application-language")
                 .debug_selector(|| "application-language".into())
-                .outline()
-                .w(px(160.))
-                .justify_between()
+                .w(ui_text_size(160.))
                 .label(language_label.clone())
-                .icon(FullIconName::ChevronDown)
                 .disabled(disabled)
                 .dropdown_menu(move |mut menu, _, _| {
                     for entry in conduit::i18n::languages() {
@@ -147,6 +144,27 @@ impl ConduitApp {
             settings_section(conduit::i18n::text("language.section")).items(vec![
                 SettingItem::new(conduit::i18n::text("language.title"), language_field)
                     .disabled(disabled),
+            ]),
+            settings_section(conduit::i18n::text_static(
+                "settings.general.workspace_behavior",
+            ))
+            .items([
+                SettingItem::new(
+                    conduit::i18n::text_static("settings.appearance.auto_sort_workspaces"),
+                    switch_field(
+                        view.clone(),
+                        |app| app.store.ui.auto_sort_workspaces,
+                        |app, value| app.store.ui.auto_sort_workspaces = value,
+                    ),
+                )
+                .disabled(disabled),
+                SettingItem::new(
+                    conduit::i18n::text_static(
+                        "settings.appearance.auto_collapse_inactive_workspaces",
+                    ),
+                    appearance::auto_collapse_field(view.clone()),
+                )
+                .disabled(disabled),
             ]),
             #[cfg(feature = "remote")]
             self.remote_settings_section(view, disabled),
@@ -288,10 +306,10 @@ impl ConduitApp {
         });
         let prompt_input = self.git_prompt_input.clone();
         let prompt = SettingField::render(move |_, _, _| {
-            Textarea::new(&prompt_input)
+            settings_textarea(&prompt_input)
                 .h(px(180.))
                 .w_full()
-                .text_size(ui_text_size(12.))
+                .text_size(ui_text_size(14.))
                 .aria_label(conduit::i18n::text_static(
                     "settings.general.commit_message_generation_prompt",
                 ))
@@ -352,8 +370,8 @@ impl ConduitApp {
         let tag_increment = self.store.git.tag_increment;
         let tag_strategy = SettingField::render(move |_, _, _| {
             let app = tag_settings_view.clone();
-            Button::new("git-tag-strategy")
-                .small()
+            settings_dropdown("git-tag-strategy")
+                .w(ui_text_size(104.))
                 .label(match tag_increment {
                     crate::store::TagIncrement::Patch => "Patch +1",
                     crate::store::TagIncrement::Minor => "Minor +1",
@@ -501,11 +519,10 @@ impl ConduitApp {
                 "settings.general.generation_model",
             ))
             .item(generation),
-            SettingGroup::new()
-                .title(conduit::i18n::text_static(
-                    "settings.general.commit_message_prompt",
-                ))
-                .item(edit),
+            settings_section(conduit::i18n::text_static(
+                "settings.general.commit_message_prompt",
+            ))
+            .item(edit),
             settings_section(conduit::i18n::text_static(
                 "settings.general.branch_updates",
             ))

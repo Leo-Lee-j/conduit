@@ -1,4 +1,4 @@
-use super::list::{service_avatar, service_badge};
+use super::list::service_badge;
 use super::*;
 
 impl ConduitApp {
@@ -44,60 +44,44 @@ impl ConduitApp {
             .items_start()
             .justify_between()
             .flex_wrap()
-            .gap_3()
-            .p_3()
+            .gap_2()
+            .pb_3()
             .child(
-                h_flex()
-                    .flex_1()
-                    .min_w(px(160.))
-                    .items_start()
-                    .gap_3()
-                    .child(service_avatar(&label, true))
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .gap_1()
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .gap_2()
-                                    .flex_wrap()
-                                    .child(
-                                        div()
-                                            .font_semibold()
-                                            .text_size(ui_text_size(16.))
-                                            .child(label),
-                                    )
-                                    .when(current, |row| {
-                                        row.child(service_badge(service_text(
-                                            "settings.services.current_default",
-                                        )))
-                                    }),
-                            )
-                            .when_some(provider, |description, provider| {
-                                description.child(
+                h_flex().flex_1().min_w_0().items_start().gap_2().child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap_1()
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .gap_2()
+                                .flex_wrap()
+                                .child(
                                     div()
-                                        .w_full()
-                                        .truncate()
-                                        .text_size(ui_text_size(11.))
-                                        .text_color(rgb(palette().muted))
-                                        .child(provider.base_url.clone()),
+                                        .font_semibold()
+                                        .text_size(ui_text_size(14.))
+                                        .child(label),
                                 )
-                            })
-                            .child(
-                                div()
-                                    .text_size(ui_text_size(11.))
-                                    .text_color(rgb(palette().muted))
-                                    .child(service_text(if imported {
-                                        "settings.services.imported_readonly"
-                                    } else if native {
-                                        "settings.services.native_catalog"
-                                    } else {
-                                        "settings.services.edit_here"
-                                    })),
-                            ),
-                    ),
+                                .when(current, |row| {
+                                    row.child(service_badge(service_text(
+                                        "settings.services.current_default",
+                                    )))
+                                }),
+                        )
+                        .child(
+                            div()
+                                .text_size(ui_text_size(12.))
+                                .text_color(rgb(palette().muted))
+                                .child(service_text(if imported {
+                                    "settings.services.imported_readonly"
+                                } else if native {
+                                    "settings.services.native_catalog"
+                                } else {
+                                    "settings.services.edit_here"
+                                })),
+                        ),
+                ),
             );
         header = header.child(self.service_detail_actions(engine, channel, view.clone()));
         let mut detail = v_flex()
@@ -106,14 +90,34 @@ impl ConduitApp {
             .debug_selector(|| "service-details".into())
             .w_full()
             .min_w_0()
-            .rounded_lg()
-            .overflow_hidden()
-            .border_1()
-            .border_color(rgb(palette().border))
-            .bg(rgb(palette().surface))
+            .refine_style(&settings_group_style().p_0().border_0())
+            .text_size(ui_text_size(14.))
             .child(header);
+        if let Some(provider) = provider {
+            detail = detail.child(
+                v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .pb_3()
+                    .gap_2()
+                    .child(service_property(
+                        "service-endpoint",
+                        service_text("settings.models.request_address"),
+                        provider.base_url.clone(),
+                    ))
+                    .child(service_property(
+                        "service-source",
+                        service_text("settings.services.source"),
+                        if imported {
+                            format!("cc-switch · {}", display_path(&self.ccs.database_path))
+                        } else {
+                            service_text("settings.services.local").into()
+                        },
+                    )),
+            );
+        }
         if native && engine.descriptor().capabilities.model_services {
-            let mut tabs = h_flex().w_full().px_3().pb_2().gap_2().flex_wrap();
+            let mut tabs = h_flex().w_full().pb_2().gap_2().flex_wrap();
             for (index, (candidate, title)) in [
                 (
                     DetailTab::Models,
@@ -133,6 +137,8 @@ impl ConduitApp {
                         .debug_selector(move || format!("service-detail-tab-{index}"))
                         .ghost()
                         .small()
+                        .h(ui_text_size(32.))
+                        .text_size(ui_text_size(14.))
                         .label(title)
                         .selected(tab == candidate)
                         .on_click(move |_, _, cx| {
@@ -145,16 +151,13 @@ impl ConduitApp {
             }
             detail = detail.child(tabs);
         }
-        let models = if native && tab == DetailTab::Sources {
-            detail_settings(
-                "service-source-settings",
-                self.models_source_group(engine, view.clone()),
-            )
-        } else if native {
-            detail_settings(
-                "service-native-model-settings",
-                self.models_provider_group(engine, view.clone()),
-            )
+        let models = if native {
+            NativeServiceContent {
+                engine,
+                sources: tab == DetailTab::Sources,
+                view: view.clone(),
+            }
+            .into_any_element()
         } else {
             self.service_models_detail(engine, channel, provider, view.clone())
         };
@@ -164,7 +167,7 @@ impl ConduitApp {
                     .debug_selector(|| "service-models-section".into())
                     .w_full()
                     .gap_2()
-                    .p_3()
+                    .py_3()
                     .border_t_1()
                     .border_color(rgb(palette().border))
                     .child(
@@ -186,7 +189,7 @@ impl ConduitApp {
                     .debug_selector(|| "service-sessions-section".into())
                     .w_full()
                     .gap_2()
-                    .p_3()
+                    .py_3()
                     .border_t_1()
                     .border_color(rgb(palette().border))
                     .child(
@@ -252,12 +255,14 @@ impl ConduitApp {
                         .border_color(rgb(palette().border))
                         .child(
                             div()
-                                .text_size(ui_text_size(13.))
+                                .min_w_0()
+                                .truncate()
+                                .text_size(ui_text_size(14.))
                                 .child(session.title.clone()),
                         )
                         .child(
                             div()
-                                .text_size(ui_text_size(11.))
+                                .text_size(ui_text_size(12.))
                                 .text_color(rgb(palette().muted))
                                 .child(workspace.name()),
                         ),
@@ -272,7 +277,7 @@ impl ConduitApp {
                         div()
                             .pt_2()
                             .font_medium()
-                            .text_size(ui_text_size(13.))
+                            .text_size(ui_text_size(14.))
                             .child(service_text("settings.services.other_uses")),
                     )
                     .children(uses.into_iter().map(|label| {
@@ -312,8 +317,8 @@ impl ConduitApp {
         let use_view = view.clone();
         let use_channel = channel;
         let mut footer = h_flex()
-            .flex_shrink_0()
-            .justify_end()
+            .min_w_0()
+            .max_w_full()
             .gap_2()
             .flex_wrap()
             .items_start();
@@ -322,6 +327,8 @@ impl ConduitApp {
                 footer = footer.child(
                     Button::new("service-edit-cc-switch")
                         .small()
+                        .h(ui_text_size(32.))
+                        .text_size(ui_text_size(14.))
                         .outline()
                         .icon(FullIconName::ExternalLink)
                         .label(service_text("settings.services.edit_cc_switch"))
@@ -352,6 +359,8 @@ impl ConduitApp {
                             Button::new("service-edit-local")
                                 .debug_selector(|| "service-edit-local".into())
                                 .small()
+                                .h(ui_text_size(32.))
+                                .text_size(ui_text_size(14.))
                                 .outline()
                                 .label(service_text("settings.extensions.edit"))
                                 .disabled(disabled)
@@ -375,6 +384,8 @@ impl ConduitApp {
                             Button::new("service-delete-local")
                                 .debug_selector(|| "service-delete-local".into())
                                 .small()
+                                .h(ui_text_size(32.))
+                                .text_size(ui_text_size(14.))
                                 .ghost()
                                 .icon(FullIconName::Trash)
                                 .accessibility_label(service_text(
@@ -403,6 +414,8 @@ impl ConduitApp {
                 Button::new("service-detail-default")
                     .debug_selector(|| "service-detail-default".into())
                     .small()
+                    .h(ui_text_size(32.))
+                    .text_size(ui_text_size(14.))
                     .primary()
                     .label(service_text(if current {
                         "settings.services.current_default"
@@ -435,27 +448,91 @@ fn service_section_heading(label: &'static str, count: Option<usize>) -> Div {
         .when_some(count, |heading, count| {
             heading.child(
                 div()
-                    .text_size(ui_text_size(11.))
+                    .text_size(ui_text_size(12.))
                     .text_color(rgb(palette().muted))
                     .child(count.to_string()),
             )
         })
 }
 
-fn detail_settings(id: &'static str, group: SettingGroup) -> AnyElement {
-    // Settings uses a virtual list, which needs a bounded viewport inside this
-    // otherwise content-sized card. Keep native model/source scrolling local.
-    div()
+fn service_property(id: &'static str, label: &'static str, value: String) -> impl IntoElement {
+    h_flex()
         .w_full()
-        .h(px(400.))
-        .child(settings_controls(
-            id,
-            gpui_kit::component::setting::SettingPage::new("")
-                .resettable(false)
-                .header_style(&StyleRefinement::default().hidden())
-                .group(group),
-        ))
-        .into_any_element()
+        .min_w_0()
+        .gap_2()
+        .flex_wrap()
+        .child(
+            div()
+                .w(ui_text_size(120.))
+                .text_size(ui_text_size(12.))
+                .text_color(rgb(palette().muted))
+                .child(label),
+        )
+        .child(
+            div()
+                .id(id)
+                .debug_selector(move || id.into())
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_size(ui_text_size(14.))
+                .tooltip({
+                    let value = value.clone();
+                    move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(value.clone()).build(window, cx)
+                    }
+                })
+                .child(value),
+        )
+}
+
+/// Render native fields in the page's own scroll area instead of reserving a
+/// fixed-height nested settings viewport for a potentially empty catalog.
+#[derive(IntoElement)]
+struct NativeServiceContent {
+    engine: Provider,
+    sources: bool,
+    view: Entity<ConduitApp>,
+}
+
+impl RenderOnce for NativeServiceContent {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let app = self.view.read(cx);
+        let (items, note) = if self.sources {
+            (
+                app.models_source_items(self.engine, self.view.clone()),
+                None,
+            )
+        } else {
+            app.models_provider_items(self.engine, self.view.clone())
+        };
+        let options = gpui_kit::component::setting::RenderOptions::new()
+            .with_size(gpui_kit::component::Size::Small)
+            .with_layout(Axis::Vertical)
+            .with_group_variant(GroupBoxVariant::Normal);
+        v_flex()
+            .id(if self.sources {
+                "service-source-settings"
+            } else {
+                "service-native-model-settings"
+            })
+            .w_full()
+            .min_w_0()
+            .gap_2()
+            .children(
+                items.into_iter().enumerate().map(|(index, item)| {
+                    item.render_item(&options.with_item_ix(index), window, cx)
+                }),
+            )
+            .when_some(note, |body, note| {
+                body.child(
+                    div()
+                        .text_size(ui_text_size(12.))
+                        .text_color(rgb(palette().muted))
+                        .child(note),
+                )
+            })
+    }
 }
 
 fn confirm_delete(view: Entity<ConduitApp>, id: String, window: &mut Window, cx: &mut App) {
@@ -575,10 +652,10 @@ impl RenderOnce for ServiceModels {
         let mut list = v_flex().w_full().gap_0().child(
             div()
                 .w_full()
+                .max_w(ui_text_size(320.))
                 .debug_selector(|| "service-model-search".into())
                 .child(
-                    Input::new(&search)
-                        .small()
+                    settings_input(&search)
                         .aria_label(service_text("settings.services.search_models")),
                 ),
         );
@@ -608,7 +685,7 @@ impl RenderOnce for ServiceModels {
                     .gap_2()
                     .flex_wrap()
                     .py_2()
-                    .px_3()
+                    .px_1()
                     .when(index + 1 < matches, |row| row.border_b_1())
                     .border_color(settings_group_border())
                     .when(model.id.to_lowercase() == query.trim(), |row| {
@@ -621,18 +698,18 @@ impl RenderOnce for ServiceModels {
                     .child(
                         v_flex()
                             .flex_1()
-                            .min_w(px(120.))
+                            .min_w(ui_text_size(120.))
                             .gap_1()
                             .child(
                                 div()
                                     .font_medium()
-                                    .text_size(ui_text_size(13.))
+                                    .text_size(ui_text_size(14.))
                                     .child(model.label.clone()),
                             )
                             .when(model.label != model.id, |row| {
                                 row.child(
                                     div()
-                                        .text_size(ui_text_size(11.))
+                                        .text_size(ui_text_size(12.))
                                         .text_color(rgb(palette().muted))
                                         .child(model.id),
                                 )
@@ -640,7 +717,7 @@ impl RenderOnce for ServiceModels {
                             .when(!model.note.is_empty(), |row| {
                                 row.child(
                                     div()
-                                        .text_size(ui_text_size(11.))
+                                        .text_size(ui_text_size(12.))
                                         .text_color(rgb(palette().muted))
                                         .child(model.note),
                                 )
@@ -650,6 +727,8 @@ impl RenderOnce for ServiceModels {
                         Button::new(("service-model-default", index))
                             .debug_selector(move || format!("service-model-default-{index}"))
                             .small()
+                            .h(ui_text_size(32.))
+                            .text_size(ui_text_size(14.))
                             .ghost()
                             .label(service_text(if selected {
                                 "settings.services.current_default"

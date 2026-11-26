@@ -1,0 +1,26 @@
+%%{init: {"flowchart":{"htmlLabels":false},"fontFamily":"Noto Sans CJK SC, Microsoft YaHei, sans-serif"}}%%
+flowchart TB
+    R["产品任务<br/>需求修订 · 稳定验收项"]
+    D["Design<br/>方案探索 · 交互原型 · 修改反馈"]
+    B["确认设计版本 r3<br/>文件与素材快照 · 交互约定"]
+    C["Coding<br/>绑定 r3 · 复用组件 · 接入真实功能"]
+    I["实现快照<br/>实际文件版本 · 设计与代码关联"]
+    T["Test（后续）<br/>验收项 · 被测版本 · 验证证据"]
+
+    R --> D
+    D --> B
+    B -->|结构化交接| C
+    C --> I
+    I -.-> T
+    C -.->|技术约束反馈；生成新设计版本| D
+    T -.->|实现问题| C
+    T -.->|需求或设计问题| D
+
+    classDef shared fill:#eaf0f6,stroke:#52677f,color:#182c40
+    classDef design fill:#e9f5ef,stroke:#347356,color:#153c2b
+    classDef coding fill:#eaf1fb,stroke:#3a69a0,color:#17395f
+    classDef future fill:#f6f2e9,stroke:#8d7546,color:#5b4722,stroke-dasharray:5 4
+    class R shared
+    class D,B design
+    class C,I coding
+    class T future

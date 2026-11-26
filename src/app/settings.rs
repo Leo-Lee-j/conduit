@@ -71,6 +71,9 @@ pub(super) fn settings_content_inset() -> f32 {
     16.
 }
 
+/// Wider windows add breathing room, not larger forms or controls.
+pub(super) const SETTINGS_CONTENT_MAX_WIDTH: f32 = 1120.;
+
 fn settings_actions_style() -> StyleRefinement {
     StyleRefinement::default()
         .px(px(settings_content_inset()))
@@ -115,11 +118,17 @@ impl SettingsContent {
     }
 }
 
+mod controls;
+pub(in crate::app) use controls::{
+    SettingsControl, settings_dropdown, settings_input, settings_textarea,
+};
+
 fn settings_controls(
     id: impl Into<ElementId>,
     page: gpui_kit::component::setting::SettingPage,
 ) -> Settings {
     Settings::new(id)
+        .small()
         .sidebar_width(px(0.))
         .sidebar_size_range(px(0.)..px(0.))
         .sidebar_style(&StyleRefinement::default().hidden())
@@ -142,7 +151,7 @@ fn settings_scroll_area(id: &'static str) -> Stateful<Div> {
 fn settings_group_style() -> StyleRefinement {
     StyleRefinement::default()
         .min_w_0()
-        .rounded_lg()
+        .rounded(px(4.))
         .border_1()
         .border_color(settings_group_border())
         .p_3()
@@ -194,7 +203,7 @@ pub(super) fn settings_section(title: impl Into<SharedString>) -> SettingGroup {
     SettingGroup::new()
         .variant(GroupBoxVariant::Normal)
         .title(title)
-        .content_style(&settings_group_style().gap_3())
+        .content_style(&settings_group_style().gap_2())
 }
 
 /// Plain library descriptions inherit the same 14px size as their labels.
@@ -306,22 +315,18 @@ pub(super) fn count_stepper_field(
     let increase_value = (value + 1).min(max);
     let decrease_view = view.clone();
     let increase_view = view;
-    SettingField::render(move |_, _, _| {
+    SettingField::render(move |_, _, cx| {
         let decrease = decrease_view.clone();
         let increase = increase_view.clone();
-        h_flex()
-            .gap(px(2.))
-            .p(px(2.))
-            .rounded(px(8.))
-            .border_1()
-            .border_color(rgb(palette().border))
-            .bg(rgb(palette().surface_strong))
-            .items_center()
+        controls::settings_stepper_frame(cx)
             .child(
                 Button::new(format!("{id}-minus"))
                     .label("−")
                     .accessibility_label(decrease_label)
                     .small()
+                    .h(ui_text_size(26.))
+                    .w(ui_text_size(24.))
+                    .px_0()
                     .ghost()
                     .disabled(!can_decrease)
                     .when(can_decrease, |button| button.cursor_pointer())
@@ -338,9 +343,9 @@ pub(super) fn count_stepper_field(
             )
             .child(
                 h_flex()
-                    .w(px(36.))
+                    .w(ui_text_size(36.))
                     .justify_center()
-                    .text_size(ui_text_size(12.))
+                    .text_size(ui_text_size(14.))
                     .text_color(rgb(if disabled {
                         palette().faint
                     } else {
@@ -353,6 +358,9 @@ pub(super) fn count_stepper_field(
                     .label("+")
                     .accessibility_label(increase_label)
                     .small()
+                    .h(ui_text_size(26.))
+                    .w(ui_text_size(24.))
+                    .px_0()
                     .ghost()
                     .disabled(!can_increase)
                     .when(can_increase, |button| button.cursor_pointer())
@@ -455,8 +463,8 @@ pub(super) fn typography_field(
     field: TypographyField,
     view: Entity<ConduitApp>,
 ) -> SettingField<SharedString> {
-    SettingField::render(move |_, _, _| {
-        typography_stepper(id, value, disabled, field, view.clone())
+    SettingField::render(move |_, _, cx| {
+        typography_stepper(id, value, disabled, field, view.clone(), cx)
     })
 }
 
@@ -466,6 +474,7 @@ fn typography_stepper(
     disabled: bool,
     field: TypographyField,
     view: Entity<ConduitApp>,
+    cx: &App,
 ) -> AnyElement {
     let (min, max) = field.range();
     let can_decrease = value > min;
@@ -475,21 +484,17 @@ fn typography_stepper(
     let decrease = view.clone();
     let increase = view;
     let enabled = !disabled;
-    h_flex()
+    controls::settings_stepper_frame(cx)
         .debug_selector(move || id.into())
-        .gap(px(2.))
-        .p(px(2.))
-        .rounded(px(8.))
-        .border_1()
-        .border_color(rgb(palette().border))
-        .bg(rgb(palette().surface_strong))
-        .items_center()
         .child(
             Button::new(format!("{id}-minus"))
                 .debug_selector(move || format!("{id}-minus"))
                 .label("−")
                 .accessibility_label(decrease_label)
                 .small()
+                .h(ui_text_size(26.))
+                .w(ui_text_size(24.))
+                .px_0()
                 .ghost()
                 .disabled(!enabled || !can_decrease)
                 .when(enabled && can_decrease, |button| button.cursor_pointer())
@@ -501,9 +506,9 @@ fn typography_stepper(
         )
         .child(
             h_flex()
-                .w(px(36.))
+                .w(ui_text_size(36.))
                 .justify_center()
-                .text_size(ui_text_size(12.))
+                .text_size(ui_text_size(14.))
                 .text_color(rgb(if disabled {
                     palette().faint
                 } else {
@@ -517,6 +522,9 @@ fn typography_stepper(
                 .label("+")
                 .accessibility_label(increase_label)
                 .small()
+                .h(ui_text_size(26.))
+                .w(ui_text_size(24.))
+                .px_0()
                 .ghost()
                 .disabled(!enabled || !can_increase)
                 .when(enabled && can_increase, |button| button.cursor_pointer())

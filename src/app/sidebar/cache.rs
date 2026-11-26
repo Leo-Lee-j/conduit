@@ -1221,9 +1221,8 @@ mod tests {
                     "sort active",
                 ] {
                     assert!(app.settings_search_matches(query).iter().any(|result| {
-                        use crate::app::settings::{APPEARANCE_OPTIONS_GROUP, SettingsRoute};
-                        result.page == SettingsRoute::Appearance.index()
-                            && result.group == Some(APPEARANCE_OPTIONS_GROUP)
+                        use crate::app::settings::SettingsRoute;
+                        result.page == SettingsRoute::General.index() && result.group == Some(2)
                     }));
                 }
                 app

@@ -1,0 +1,26 @@
+Settings | IntelliJ IDEA Documentation
+llms.txt
+: machine-readable documentation index.
+Markdown version of this page
+is also available.
+IntelliJ IDEA 2026.3 Help
+Settings
+Use this dialog to change the IntelliJ IDEA settings: both
+global
+and
+project-specific ones
+.
+Settings marked with the
+icon apply only to the current project.
+Use the
+search field in the upper-left part of the dialog to find the options of interest. Alternatively, you can browse the settings using the hierarchical list of categories (groups of settings) underneath the search field.
+After you change the IDE settings, click
+OK
+to apply the changes and close the dialog or click
+Apply
+to keep the dialog open. Click
+Cancel
+to discard the changes and close the dialog.
+20 November 2026
+Diff Viewer for folders
+Appearance & Behavior

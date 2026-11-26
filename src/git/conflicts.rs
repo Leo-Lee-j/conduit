@@ -286,6 +286,7 @@ pub(super) fn resolve(
                 timeout: COMMAND_TIMEOUT,
                 stop_when_full: false,
                 background: false,
+                input: None,
             },
         )
     };

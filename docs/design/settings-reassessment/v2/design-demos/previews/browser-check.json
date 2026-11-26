@@ -1,0 +1,156 @@
+{
+  "dir-1": {
+    "errors": [],
+    "layouts": [
+      {
+        "width": 1440,
+        "height": 900,
+        "client": 1440,
+        "scroll": 1440,
+        "body": 1440,
+        "brokenImages": 0
+      },
+      {
+        "width": 1100,
+        "height": 800,
+        "client": 1100,
+        "scroll": 1100,
+        "body": 1100,
+        "brokenImages": 0
+      },
+      {
+        "width": 800,
+        "height": 800,
+        "client": 800,
+        "scroll": 800,
+        "body": 800,
+        "brokenImages": 0
+      },
+      {
+        "width": 375,
+        "height": 812,
+        "client": 375,
+        "scroll": 375,
+        "body": 375,
+        "brokenImages": 0
+      }
+    ],
+    "visible_parameters": 13,
+    "interactions": [
+      "chat size and line height",
+      "group reset isolation",
+      "line numbers",
+      "syntax highlighting",
+      "light preview",
+      "continuous Chinese search",
+      "Ctrl K",
+      "empty and Escape",
+      "navigation and service scope"
+    ]
+  },
+  "dir-2": {
+    "errors": [],
+    "layouts": [
+      {
+        "width": 1440,
+        "height": 900,
+        "client": 1440,
+        "scroll": 1440,
+        "body": 1440,
+        "brokenImages": 0
+      },
+      {
+        "width": 1100,
+        "height": 800,
+        "client": 1100,
+        "scroll": 1100,
+        "body": 1100,
+        "brokenImages": 0
+      },
+      {
+        "width": 800,
+        "height": 800,
+        "client": 800,
+        "scroll": 800,
+        "body": 800,
+        "brokenImages": 0
+      },
+      {
+        "width": 375,
+        "height": 812,
+        "client": 375,
+        "scroll": 375,
+        "body": 375,
+        "brokenImages": 0
+      }
+    ],
+    "visible_parameters": 14,
+    "interactions": [
+      "chat size and line height",
+      "group reset isolation",
+      "line numbers",
+      "syntax highlighting",
+      "light mode",
+      "search Enter focus",
+      "Ctrl K",
+      "empty and Escape",
+      "background disabled/enabled",
+      "custom background",
+      "code view",
+      "local reading sample",
+      "navigation and service scope"
+    ]
+  },
+  "dir-3": {
+    "errors": [],
+    "layouts": [
+      {
+        "width": 1440,
+        "height": 900,
+        "client": 1440,
+        "scroll": 1440,
+        "body": 1440,
+        "brokenImages": 0
+      },
+      {
+        "width": 1100,
+        "height": 800,
+        "client": 1100,
+        "scroll": 1100,
+        "body": 1100,
+        "brokenImages": 0
+      },
+      {
+        "width": 800,
+        "height": 800,
+        "client": 800,
+        "scroll": 800,
+        "body": 800,
+        "brokenImages": 0
+      },
+      {
+        "width": 375,
+        "height": 812,
+        "client": 375,
+        "scroll": 375,
+        "body": 375,
+        "brokenImages": 0
+      }
+    ],
+    "visible_parameters": 13,
+    "interactions": [
+      "independent font/size previews",
+      "line height",
+      "group reset isolation",
+      "keyboard focus persistence",
+      "line numbers",
+      "syntax highlighting",
+      "dark mode",
+      "modified filter",
+      "empty and Escape",
+      "Ctrl K",
+      "search Enter focus",
+      "navigation and service scope"
+    ]
+  }
+}

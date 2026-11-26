@@ -1,4 +1,5 @@
 //! Native extension mutations are explicit, reversible and scoped to a source.
+use super::extension_catalog::resource_button;
 use super::*;
 use crate::extensions::{self, Kind, edit};
 
@@ -43,11 +44,11 @@ impl ConduitApp {
                         .w((window.viewport_size().width - px(60.)).clamp(px(0.), px(620.)))
                         .content(move |body, _, _| {
                             let confirm = view.clone(); let path = path.clone(); let original = original.clone();
-                            body.child(v_flex().gap_3().child(conduit::i18n::format("settings.extensions.source", &[("arg0", display_path(&path))]))
+                            body.child(v_flex().text_size(ui_text_size(14.)).gap_2().child(conduit::i18n::format("settings.extensions.source", &[("arg0", display_path(&path))]))
                                 .child(conduit::i18n::text_static("settings.extension_management.disable_or_restore_by_renaming_skill_md"))
                                 .child(h_flex().gap_2().justify_end()
-                                    .child(Button::new("skill-toggle-cancel").ghost().label(conduit::i18n::text_static("git_branches.cancel")).on_click(|_, window, cx| window.close_dialog(cx)))
-                                    .child(Button::new("skill-toggle-confirm").primary().label(title).on_click(move |_, window, cx| {
+                                    .child(resource_button("skill-toggle-cancel").ghost().label(conduit::i18n::text_static("git_branches.cancel")).on_click(|_, window, cx| window.close_dialog(cx)))
+                                    .child(resource_button("skill-toggle-confirm").primary().label(title).on_click(move |_, window, cx| {
                                         confirm.update(cx, |app, cx| app.toggle_skill_file(path.clone(), original.clone(), window, cx));
                                         window.close_dialog(cx);
                                     }))))

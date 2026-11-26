@@ -101,14 +101,12 @@ impl ConduitApp {
             let channels = channels.clone();
             let display_channel = display_channel.clone();
             let view = route_view.clone();
-            Button::new(("default-channel", engine as usize))
+            settings_dropdown(("default-channel", engine as usize))
                 .debug_selector(move || format!("default-channel-{}", engine as usize))
-                .outline()
-                .small()
-                .max_w(rems(14.))
+                .w(rems(14.))
+                .max_w_full()
                 .label(label.clone())
                 .tooltip(label.clone())
-                .icon(FullIconName::ChevronDown)
                 .disabled(disabled)
                 .dropdown_menu(move |mut menu, _, _| {
                     for (channel, label) in &channels {

@@ -9,6 +9,139 @@ use std::sync::{
 };
 mod dialogs;
 
+/// Shared, content-sized rows for extension and application-plugin resources.
+/// The workspace owns the page title and maximum content width.
+pub(super) fn resource_row() -> Div {
+    v_flex()
+        .w_full()
+        .min_w_0()
+        .flex_shrink_0()
+        .px_3()
+        .py_2()
+        .gap_1()
+        .border_b_1()
+        .border_color(settings_group_border())
+        .text_size(ui_text_size(14.))
+}
+
+pub(super) fn resource_list() -> Div {
+    v_flex()
+        .w_full()
+        .min_w_0()
+        .flex_shrink_0()
+        .border_1()
+        .border_color(settings_group_border())
+        .rounded(px(4.))
+        .overflow_hidden()
+}
+
+pub(super) fn resource_badge(label: impl Into<SharedString>, active: bool) -> Div {
+    management_badge(label, active)
+        .text_size(ui_text_size(12.))
+        .rounded(px(4.))
+}
+
+pub(super) fn resource_button(id: impl Into<ElementId>) -> Button {
+    Button::new(id)
+        .small()
+        .h(ui_text_size(32.))
+        .min_w(ui_text_size(32.))
+        .text_size(ui_text_size(14.))
+}
+
+pub(super) fn resource_meta(id: impl Into<ElementId>, value: String) -> Stateful<Div> {
+    div()
+        .id(id)
+        .min_w_0()
+        .max_w_full()
+        .truncate()
+        .text_size(ui_text_size(12.))
+        .text_color(rgb(palette().muted))
+        .tooltip({
+            let value = value.clone();
+            move |window, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(value.clone()).build(window, cx)
+            }
+        })
+        .child(value)
+}
+
+/// View-only disclosure state stays in the window; browsing never changes a
+/// package, its enabled state or the current icon theme.
+#[derive(IntoElement)]
+pub(super) struct ResourceDetails {
+    pub id: SharedString,
+    pub name: String,
+    pub view: Entity<ConduitApp>,
+    pub summary: AnyElement,
+    pub details: AnyElement,
+}
+
+impl RenderOnce for ResourceDetails {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let state = window.use_keyed_state(
+            SharedString::from(format!("{}-expanded", self.id)),
+            cx,
+            |_, _| false,
+        );
+        let expanded = *state.read(cx);
+        let view = self.view;
+        resource_row()
+            .id(self.id.clone())
+            .child(
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap_2()
+                    .items_start()
+                    .child(div().flex_1().min_w_0().child(self.summary))
+                    .child(
+                        resource_button(self.id.clone())
+                            .debug_selector({
+                                let id = self.id.clone();
+                                move || id.to_string()
+                            })
+                            .small()
+                            .ghost()
+                            .h(ui_text_size(32.))
+                            .text_size(ui_text_size(14.))
+                            .selected(expanded)
+                            .flex_shrink_0()
+                            .accessibility_label(format!(
+                                "{} · {}",
+                                self.name,
+                                conduit::i18n::text_static("settings.extensions.details")
+                            ))
+                            .label(conduit::i18n::text_static("settings.extensions.details"))
+                            .icon(if expanded {
+                                FullIconName::ChevronUp
+                            } else {
+                                FullIconName::ChevronDown
+                            })
+                            .on_click(move |_, _, cx| {
+                                state.update(cx, |open, cx| {
+                                    *open = !*open;
+                                    cx.notify();
+                                });
+                                view.update(cx, |_, cx| cx.notify());
+                            }),
+                    ),
+            )
+            .when(expanded, |row| {
+                row.child(
+                    v_flex()
+                        .w_full()
+                        .min_w_0()
+                        .gap_2()
+                        .pt_2()
+                        .border_t_1()
+                        .border_color(settings_group_border())
+                        .child(self.details),
+                )
+            })
+    }
+}
+
 pub(in crate::app) struct Browse {
     pub discover: bool,
     source: Source,
@@ -88,7 +221,7 @@ impl ConduitApp {
             .gap_1()
             .flex_shrink_0()
             .child(
-                Button::new("extensions-installed-tab")
+                resource_button("extensions-installed-tab")
                     .small()
                     .ghost()
                     .label(text("installed"))
@@ -102,7 +235,7 @@ impl ConduitApp {
                     }),
             )
             .child(
-                Button::new("extensions-discover-tab")
+                resource_button("extensions-discover-tab")
                     .small()
                     .ghost()
                     .debug_selector(|| "extensions-discover-tab".into())
@@ -357,7 +490,7 @@ impl ConduitApp {
                     .map(|w| (Some(w.path.clone()), w.name())),
             )
             .collect();
-        let mut body = v_flex().size_full().min_h_0().child(
+        let mut body = v_flex().size_full().min_w_0().min_h_0().child(
             v_flex()
                 .px(px(settings_content_inset()))
                 .pt_2()
@@ -368,11 +501,9 @@ impl ConduitApp {
                         .gap_2()
                         .flex_wrap()
                         .child(
-                            Button::new("catalog-source")
-                                .small()
-                                .outline()
+                            settings_dropdown("catalog-source")
+                                .min_w(ui_text_size(32.))
                                 .label(state.source.label())
-                                .icon(FullIconName::ChevronDown)
                                 .dropdown_menu(move |mut menu, _, _| {
                                     let sources = if index == 1 {
                                         vec![Source::McpRegistry]
@@ -414,15 +545,13 @@ impl ConduitApp {
                                 }),
                         )
                         .child(
-                            Button::new("catalog-scope")
+                            settings_dropdown("catalog-scope")
                                 .debug_selector(|| "catalog-scope".into())
-                                .small()
-                                .outline()
+                                .min_w(ui_text_size(32.))
                                 .max_w(px(280.))
                                 .accessibility_label(scope.clone())
                                 .tooltip(scope.clone())
                                 .child(div().min_w_0().truncate().child(scope))
-                                .icon(FullIconName::ChevronDown)
                                 .dropdown_menu(move |mut menu, _, _| {
                                     for (path, name) in &choices {
                                         let path = path.clone();
@@ -446,17 +575,18 @@ impl ConduitApp {
                     h_flex()
                         .gap_2()
                         .w_full()
+                        .flex_wrap()
                         .when_some(state.input.clone(), |row, input| {
                             row.child(
-                                div().flex_1().min_w_0().child(
-                                    Input::new(&input)
+                                div().flex_1().min_w(px(160.)).max_w(px(480.)).child(
+                                    settings_input(&input)
                                         .cleanable(true)
                                         .aria_label(text("search_hint")),
                                 ),
                             )
                         })
                         .child(
-                            Button::new("catalog-search")
+                            resource_button("catalog-search")
                                 .label(text("search"))
                                 .disabled(state.loading || state.preparing)
                                 .on_click(move |_, _, cx| {
@@ -466,7 +596,7 @@ impl ConduitApp {
                                 }),
                         )
                         .child(
-                            Button::new("catalog-refresh")
+                            resource_button("catalog-refresh")
                                 .icon(FullIconName::RefreshCw)
                                 .tooltip(text("refresh"))
                                 .accessibility_label(text("refresh"))
@@ -493,7 +623,7 @@ impl ConduitApp {
                         {
                             let view = view.clone();
                             repos = repos.child(
-                                Button::new(("catalog-browse-repo", position))
+                                resource_button(("catalog-browse-repo", position))
                                     .label(repo)
                                     .small()
                                     .outline()
@@ -534,13 +664,20 @@ impl ConduitApp {
                 .when_some(state.feedback.clone(), |body, message| {
                     body.child(note(message))
                 })
+                .when(
+                    matches!(
+                        self.extensions_ui.engine,
+                        Provider::Qoder | Provider::Gemini
+                    ),
+                    |body| body.child(note(text("read_only"))),
+                )
                 .when_some(self.extensions_ui.feedback.clone(), |body, message| {
                     body.child(note(message))
                 })
                 .when(state.loading || state.preparing, |body| {
                     body.child(
                         h_flex().gap_2().child(note(text("loading"))).child(
-                            Button::new("catalog-cancel")
+                            resource_button("catalog-cancel")
                                 .small()
                                 .label(text("cancel"))
                                 .on_click(move |_, _, cx| {
@@ -554,6 +691,7 @@ impl ConduitApp {
                 }),
         );
         let mut entries = settings_scroll_area("extension-catalog-list");
+        let mut resources = resource_list();
         if state.entries.is_empty() && !state.loading && state.feedback.is_none() {
             entries = entries.child(note(text("empty")));
         }
@@ -567,22 +705,57 @@ impl ConduitApp {
                     self.extensions_ui.workspace.clone(),
                 ))
                 && state.installed.contains(&item.id);
-            entries = entries.child(
-                v_flex()
-                    .refine_style(&settings_group_style())
-                    .gap_2()
-                    .child(div().font_semibold().child(item.name.clone()))
+            resources = resources.child(
+                resource_row()
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .min_w_0()
+                            .gap_2()
+                            .flex_wrap()
+                            .child(
+                                resource_meta(
+                                    ("catalog-resource-name", position),
+                                    item.name.clone(),
+                                )
+                                .text_size(ui_text_size(14.))
+                                .text_color(rgb(palette().text))
+                                .font_semibold(),
+                            )
+                            .child(note(item.version().to_owned()))
+                            .when(installed, |row| {
+                                row.child(resource_badge(text("installed"), false))
+                            }),
+                    )
                     .child(note(item.description.clone()))
-                    .child(note(format!("{} · {}", item.version(), item.source_url)))
+                    .child(
+                        div()
+                            .id(("catalog-resource-source", position))
+                            .min_w_0()
+                            .truncate()
+                            .text_size(ui_text_size(12.))
+                            .text_color(rgb(palette().muted))
+                            .tooltip({
+                                let source = item.source_url.clone();
+                                move |window, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(source.clone())
+                                        .build(window, cx)
+                                }
+                            })
+                            .child(conduit::i18n::format(
+                                "settings.extensions.source",
+                                &[("arg0", item.source_url.clone())],
+                            )),
+                    )
                     .child(
                         h_flex()
                             .gap_2()
                             .flex_wrap()
                             .child(
-                                Button::new(("catalog-detail", position))
+                                resource_button(("catalog-detail", position))
                                     .debug_selector(move || format!("catalog-detail-{position}"))
                                     .small()
-                                    .primary()
+                                    .outline()
                                     .label(text(if installed { "installed" } else { "details" }))
                                     .disabled(state.preparing || self.closing || installed)
                                     .on_click(move |_, window, cx| {
@@ -592,7 +765,7 @@ impl ConduitApp {
                                     }),
                             )
                             .child(
-                                Button::new(("catalog-source-link", position))
+                                resource_button(("catalog-source-link", position))
                                     .small()
                                     .ghost()
                                     .label(text("source_page"))
@@ -605,10 +778,13 @@ impl ConduitApp {
                     ),
             );
         }
+        if !state.entries.is_empty() {
+            entries = entries.child(resources);
+        }
         if state.next.is_some() {
             let more_view = view;
             entries = entries.child(
-                Button::new("catalog-more")
+                resource_button("catalog-more")
                     .label(text("more"))
                     .disabled(state.loading)
                     .on_click(move |_, _, cx| {

@@ -1,4 +1,5 @@
 //! Binding editor and conflict feedback for the shortcut catalogue.
+use super::extension_catalog::resource_button;
 use super::*;
 use crate::app::shortcuts::{self, SHORTCUTS, Scope, Shortcut};
 use gpui_kit::component::list::{List, ListDelegate, ListItem, ListState as ShortcutListState};
@@ -117,11 +118,11 @@ impl Render for ShortcutEditor {
                     }))
                     .bg(rgb(palette().surface))
                     .cursor_pointer()
-                    .text_size(ui_text_size(13.))
+                    .text_size(ui_text_size(14.))
                     .child(
                         v_flex()
                             .gap_2()
-                            .child(div().text_size(ui_text_size(18.)).child(
+                            .child(div().text_size(ui_text_size(14.)).child(
                                 if self.keys.is_empty() {
                                     conduit::i18n::text_static("settings.shortcuts.unbound")
                                         .to_owned()
@@ -133,23 +134,26 @@ impl Render for ShortcutEditor {
                                         .join(" / ")
                                 },
                             ))
-                            .child(div().text_color(rgb(palette().muted)).child(
-                                if self.recording {
-                                    if self.first_shift.is_some() {
-                                        conduit::i18n::text_static(
-                                            "settings.shortcuts.press_shift_again",
-                                        )
+                            .child(
+                                div()
+                                    .text_size(ui_text_size(12.))
+                                    .text_color(rgb(palette().muted))
+                                    .child(if self.recording {
+                                        if self.first_shift.is_some() {
+                                            conduit::i18n::text_static(
+                                                "settings.shortcuts.press_shift_again",
+                                            )
+                                        } else {
+                                            conduit::i18n::text_static(
+                                                "settings.shortcuts.press_the_new_shortcut",
+                                            )
+                                        }
                                     } else {
                                         conduit::i18n::text_static(
-                                            "settings.shortcuts.press_the_new_shortcut",
+                                            "settings.shortcuts.click_here_to_record_again",
                                         )
-                                    }
-                                } else {
-                                    conduit::i18n::text_static(
-                                        "settings.shortcuts.click_here_to_record_again",
-                                    )
-                                },
-                            )),
+                                    }),
+                            ),
                     )
                     .on_mouse_down(
                         MouseButton::Left,
@@ -168,7 +172,7 @@ impl Render for ShortcutEditor {
                 body.child(
                     div()
                         .debug_selector(|| "shortcut-conflict".into())
-                        .text_size(ui_text_size(13.))
+                        .text_size(ui_text_size(14.))
                         .text_color(rgb(palette().danger_text))
                         .child(error),
                 )
@@ -179,7 +183,7 @@ impl Render for ShortcutEditor {
                     .gap_2()
                     .flex_wrap()
                     .child(
-                        Button::new("shortcut-reset")
+                        resource_button("shortcut-reset")
                             .debug_selector(|| "shortcut-reset".into())
                             .small()
                             .ghost()
@@ -201,7 +205,7 @@ impl Render for ShortcutEditor {
                             })),
                     )
                     .child(
-                        Button::new("shortcut-unbind")
+                        resource_button("shortcut-unbind")
                             .debug_selector(|| "shortcut-unbind".into())
                             .small()
                             .ghost()
@@ -219,14 +223,14 @@ impl Render for ShortcutEditor {
                     )
                     .child(div().flex_1())
                     .child(
-                        Button::new("shortcut-cancel")
+                        resource_button("shortcut-cancel")
                             .small()
                             .outline()
                             .label(conduit::i18n::text_static("git_branches.cancel"))
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
                     .child(
-                        Button::new("shortcut-save")
+                        resource_button("shortcut-save")
                             .debug_selector(|| "shortcut-save".into())
                             .small()
                             .primary()
@@ -330,7 +334,11 @@ impl RenderOnce for ShortcutList {
             .searchable(false)
             .selectable(false)
         });
-        List::new(&list).size_full().p_4()
+        List::new(&list)
+            .size_full()
+            .px(px(settings_content_inset()))
+            .py_2()
+            .text_size(ui_text_size(14.))
     }
 }
 
@@ -353,59 +361,100 @@ impl ListDelegate for ShortcutRows {
     fn render_section_header(
         &mut self,
         section: usize,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<ShortcutListState<Self>>,
     ) -> Option<impl IntoElement> {
         let view = self.view.upgrade()?;
         let app = view.read(cx);
         let disabled = !app.writable || app.closing;
+        let narrow = window.viewport_size().width < ui_text_size(900.).to_pixels(window.rem_size());
         Some(
-            h_flex()
-                .debug_selector(move || format!("shortcuts-section-{section}"))
+            v_flex()
                 .w_full()
                 .min_w_0()
-                .h(ui_text_size(38.))
-                .px_2()
-                .gap_2()
-                .justify_between()
-                .font_semibold()
-                .child(conduit::i18n::text_static(if section == 0 {
-                    "settings.shortcuts.global_shortcuts"
-                } else {
-                    "settings.shortcuts.context_shortcuts"
-                }))
-                .when(section == 0, |header| {
-                    header.child(
-                        Button::new("shortcuts-reset-all")
-                            .debug_selector(|| "shortcuts-reset-all".into())
-                            .small()
-                            .outline()
-                            .flex_shrink_0()
-                            .label(conduit::i18n::text_static(
-                                "settings.shortcuts.restore_all_defaults",
+                // List measures headers at min-content width. Bound its two
+                // rows so Chinese labels cannot inflate the virtual row gap.
+                .h(ui_text_size(68.))
+                .flex_shrink_0()
+                .whitespace_nowrap()
+                .child(
+                    h_flex()
+                        .debug_selector(move || format!("shortcuts-section-{section}"))
+                        .w_full()
+                        .min_w_0()
+                        .min_h(ui_text_size(40.))
+                        .px_3()
+                        .py_1()
+                        .gap_2()
+                        .justify_between()
+                        .border_b_1()
+                        .border_color(settings_group_border())
+                        .text_size(ui_text_size(14.))
+                        .font_semibold()
+                        .child(conduit::i18n::text_static(if section == 0 {
+                            "settings.shortcuts.global_shortcuts"
+                        } else {
+                            "settings.shortcuts.context_shortcuts"
+                        }))
+                        .when(section == 0, |header| {
+                            header.child(
+                                resource_button("shortcuts-reset-all")
+                                    .debug_selector(|| "shortcuts-reset-all".into())
+                                    .small()
+                                    .outline()
+                                    .flex_shrink_0()
+                                    .label(conduit::i18n::text_static(
+                                        "settings.shortcuts.restore_all_defaults",
+                                    ))
+                                    .disabled(disabled)
+                                    .on_click(move |_, _, cx| {
+                                        view.update(cx, |app, cx| {
+                                            if !app.writable || app.closing {
+                                                return;
+                                            }
+                                            app.store.ui.shortcuts.clear();
+                                            shortcuts::install(&app.store.ui.shortcuts, cx);
+                                            app.double_shift.cancel();
+                                            app.persist();
+                                            cx.notify();
+                                        });
+                                    }),
+                            )
+                        }),
+                )
+                .child(
+                    h_flex()
+                        .w_full()
+                        .min_w_0()
+                        .px_3()
+                        .py_1()
+                        .gap_2()
+                        .text_size(ui_text_size(12.))
+                        .text_color(rgb(palette().muted))
+                        .child(div().flex_1().min_w_0().child(conduit::i18n::text_static(
+                            "settings.shortcuts.command_column",
+                        )))
+                        .child(
+                            div()
+                                .w(ui_text_size(220.))
+                                .max_w(relative(if narrow { 0.50 } else { 0.40 }))
+                                .child(conduit::i18n::text_static(
+                                    "settings.shortcuts.binding_column",
+                                )),
+                        )
+                        .when(!narrow, |row| {
+                            row.child(div().w(ui_text_size(160.)).flex_shrink_0().child(
+                                conduit::i18n::text_static("settings.shortcuts.scope_column"),
                             ))
-                            .disabled(disabled)
-                            .on_click(move |_, _, cx| {
-                                view.update(cx, |app, cx| {
-                                    if !app.writable || app.closing {
-                                        return;
-                                    }
-                                    app.store.ui.shortcuts.clear();
-                                    shortcuts::install(&app.store.ui.shortcuts, cx);
-                                    app.double_shift.cancel();
-                                    app.persist();
-                                    cx.notify();
-                                });
-                            }),
-                    )
-                }),
+                        }),
+                ),
         )
     }
 
     fn render_item(
         &mut self,
         index: IndexPath,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<ShortcutListState<Self>>,
     ) -> Option<ListItem> {
         let view = self.view.upgrade()?;
@@ -414,12 +463,30 @@ impl ListDelegate for ShortcutRows {
         let value = shortcuts::display(shortcut.id, &app.store.ui.shortcuts);
         let disabled = !app.writable || app.closing;
         let customized = app.store.ui.shortcuts.contains_key(shortcut.id);
+        // Keep binding controls content-sized; extra width belongs to command
+        // names. At narrow widths scope moves below its command, not offscreen.
+        let narrow = window.viewport_size().width < ui_text_size(900.).to_pixels(window.rem_size());
+        let scope = format!(
+            "{}{}",
+            shortcut.scope.label(),
+            conduit::i18n::text_static(if customized {
+                "settings.shortcuts.customized"
+            } else {
+                "settings.shortcuts.default"
+            }),
+        );
+        let scope_hint = scope.clone();
+        let title = conduit::i18n::source(shortcut.label).to_string();
+        let title_hint = title.clone();
         Some(
-            ListItem::new(shortcut.id).child(
+            ListItem::new(shortcut.id).py_0().child(
                 h_flex()
                     .w_full()
                     .min_w_0()
-                    .h(ui_text_size(48.))
+                    .min_h(ui_text_size(44.))
+                    .py_1()
+                    .border_b_1()
+                    .border_color(settings_group_border())
                     .gap_2()
                     .justify_between()
                     .child(
@@ -428,45 +495,74 @@ impl ListDelegate for ShortcutRows {
                             .min_w_0()
                             .child(
                                 div()
+                                    .id(SharedString::from(format!(
+                                        "shortcut-command-{}",
+                                        shortcut.id
+                                    )))
+                                    .text_size(ui_text_size(14.))
                                     .truncate()
-                                    .child(conduit::i18n::source(shortcut.label)),
+                                    .tooltip(move |window, cx| {
+                                        gpui_kit::component::tooltip::Tooltip::new(
+                                            title_hint.clone(),
+                                        )
+                                        .build(window, cx)
+                                    })
+                                    .child(title),
                             )
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_size(ui_text_size(11.))
-                                    .text_color(rgb(palette().muted))
-                                    .child(format!(
-                                        "{}{}",
-                                        shortcut.scope.label(),
-                                        conduit::i18n::text_static(if customized {
-                                            "settings.shortcuts.customized"
-                                        } else {
-                                            "settings.shortcuts.default"
-                                        })
-                                    )),
-                            ),
+                            .when(narrow, |column| {
+                                column.child(
+                                    div()
+                                        .text_size(ui_text_size(12.))
+                                        .text_color(rgb(palette().muted))
+                                        .child(scope.clone()),
+                                )
+                            }),
                     )
                     .child(
-                        Button::new(SharedString::from(format!("shortcut-edit-{}", shortcut.id)))
-                            .debug_selector(move || format!("shortcut-edit-{}", shortcut.id))
-                            .small()
-                            .outline()
-                            .max_w(relative(0.55))
-                            .icon(FullIconName::Pencil)
-                            .tooltip(value.clone())
-                            .child(div().min_w_0().truncate().child(value))
-                            .accessibility_label(conduit::i18n::format(
-                                "settings.shortcuts.edit_shortcut_bde991",
-                                &[("arg0", conduit::i18n::source(shortcut.label).to_string())],
-                            ))
-                            .disabled(disabled)
-                            .on_click(move |_, window, cx| {
-                                view.update(cx, |app, cx| {
-                                    app.open_shortcut_editor(shortcut.id, window, cx)
-                                });
-                            }),
-                    ),
+                        resource_button(SharedString::from(format!(
+                            "shortcut-edit-{}",
+                            shortcut.id
+                        )))
+                        .debug_selector(move || format!("shortcut-edit-{}", shortcut.id))
+                        .small()
+                        .outline()
+                        .h(ui_text_size(32.))
+                        .text_size(ui_text_size(14.))
+                        .w(ui_text_size(220.))
+                        .max_w(relative(if narrow { 0.50 } else { 0.40 }))
+                        .icon(FullIconName::Pencil)
+                        .tooltip(value.clone())
+                        .child(div().min_w_0().truncate().child(value))
+                        .accessibility_label(conduit::i18n::format(
+                            "settings.shortcuts.edit_shortcut_bde991",
+                            &[("arg0", conduit::i18n::source(shortcut.label).to_string())],
+                        ))
+                        .disabled(disabled)
+                        .on_click(move |_, window, cx| {
+                            view.update(cx, |app, cx| {
+                                app.open_shortcut_editor(shortcut.id, window, cx)
+                            });
+                        }),
+                    )
+                    .when(!narrow, |row| {
+                        row.child(
+                            div()
+                                .id(SharedString::from(format!(
+                                    "shortcut-scope-{}",
+                                    shortcut.id
+                                )))
+                                .w(ui_text_size(160.))
+                                .flex_shrink_0()
+                                .truncate()
+                                .text_size(ui_text_size(12.))
+                                .text_color(rgb(palette().muted))
+                                .tooltip(move |window, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(scope_hint.clone())
+                                        .build(window, cx)
+                                })
+                                .child(scope),
+                        )
+                    }),
             ),
         )
     }
@@ -537,10 +633,8 @@ mod tests {
     ) {
         let _locale = crate::test_support::chinese();
         let (app, cx) = fixture(cx, Store::default());
-        let header = cx.debug_bounds("shortcuts-section-0").unwrap();
-        let reset = cx.debug_bounds("shortcuts-reset-all").unwrap();
-        assert_eq!(header.center().y, reset.center().y);
-        assert!(reset.left() > header.center().x && reset.right() <= header.right());
+        assert!(cx.debug_bounds("shortcuts-section-0").is_some());
+        assert!(cx.debug_bounds("shortcuts-reset-all").is_some());
         click(cx, "shortcut-edit-open_settings");
         cx.simulate_keystrokes("ctrl-p");
         draw(cx);

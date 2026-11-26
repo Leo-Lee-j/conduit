@@ -47,13 +47,10 @@ impl ConduitApp {
             let view = view.clone();
             let policy = &view.read(cx).store.ui.auto_archive;
             let selected = policy.after;
-            Button::new("session-auto-archive-days")
+            settings_dropdown("session-auto-archive-days")
                 .debug_selector(|| "session-auto-archive-days".into())
-                .outline()
-                .w(px(160.))
-                .justify_between()
+                .w(ui_text_size(160.))
                 .label(selected.label())
-                .icon(FullIconName::ChevronDown)
                 .accessibility_label(conduit::i18n::text_static(
                     "settings.sessions.auto_archive_after",
                 ))
@@ -129,12 +126,9 @@ impl ConduitApp {
         let permission = self.store.ui.default_session_permission;
         let permission_field = SettingField::render(move |_, _, _| {
             let view = permission_view.clone();
-            Button::new("default-session-permission")
-                .outline()
-                .w(px(160.))
-                .justify_between()
+            settings_dropdown("default-session-permission")
+                .w(ui_text_size(160.))
                 .label(permission.label())
-                .icon(FullIconName::ChevronDown)
                 .disabled(disabled)
                 .dropdown_menu(move |mut menu, _, _| {
                     for option in [

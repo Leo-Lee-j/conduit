@@ -1,0 +1,2566 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8" />
+	<script>document.documentElement.classList.add('site-header-loading');</script>
+	<script id="theme-init">
+		(() => {
+			const root = document.documentElement;
+			const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
+			function applyTheme() {
+				const theme = systemTheme.matches ? 'dark' : 'light';
+				root.setAttribute('data-theme', theme);
+				root.removeAttribute('data-theme-preference');
+				root.style.colorScheme = theme;
+			}
+			applyTheme();
+			systemTheme.addEventListener('change', applyTheme);
+		})();
+	</script>	<meta name="awa-expId" content="68097614:1474476;vc-thankyouv2:1511695;" />
+	<meta name="awa-env" content="prod" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<meta name="google-site-verification" content="hNs7DXrTySP_X-0P_AC0WulAXvUwgSXEmgfcO2r79dw" />
+
+	<!-- Twitter and Facebook OpenGraph Metadata-->
+	<meta name="twitter:card" content="summary_large_image" />
+	<meta name="twitter:site" content="@code" />
+
+	<meta name="description" content="Configure user and workspace settings in Visual Studio Code and understand how setting scopes take precedence." />
+<meta name="keywords" content="" />
+<meta name="ms.prod" content="vs-code" />
+<meta name="ms.TOCTitle" content="" />
+<meta name="ms.ContentId" content="FDA6D86C-FF24-49BC-A1EB-E3BA43130FA0" />
+<meta name="ms.date" content="11/25/2026" />
+<meta name="ms.topic" content="conceptual" />
+<!-- Twitter and Facebook OpenGraph Metadata-->
+<meta name="twitter:card" content="summary_large_image" />
+<meta property="og:url" content="https://code.visualstudio.com/docs/configure/settings" />
+<meta property="og:type" content="article" />
+<meta property="og:title" content="User and workspace settings" />
+<meta property="og:description" content="Configure user and workspace settings in Visual Studio Code and understand how setting scopes take precedence." />
+
+<meta property="og:image" content="https://code.visualstudio.com/opengraphimg/generated/docs/configure/settings.webp" />
+
+
+
+	<link rel="shortcut icon" href="/assets/favicon.ico" sizes="128x128" />
+	<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+
+	<title>User and workspace settings</title>
+
+	<link rel="stylesheet" href="/dist/style.css?v&#x3D;d1c4c5e42e127833">
+
+	<script src="https://consentdeliveryfd.azurefd.net/mscc/lib/v2/wcp-consent.js"></script>
+	<script type="text/javascript" src="https://js.monitor.azure.com/scripts/c/ms.analytics-web-4.min.js"></script>
+
+	<script type="text/javascript">
+	// Leave as var; siteConsent is initialized and referenced elsewhere.
+	var siteConsent = null;
+
+	const GPC_DataSharingOptIn = false;
+	WcpConsent.onInitCallback(function () {
+		window.appInsights = new oneDS.ApplicationInsights();
+		window.appInsights.initialize({
+			instrumentationKey: "1a3eb3104447440391ad5f2a6ee06a0a-62879566-bc58-4741-9650-302bf2af703f-7103",
+			propertyConfiguration: {
+				userConsented: false,
+				gpcDataSharingOptIn: false,
+				callback: {
+					// Stable closure: the SDK calls this per-event, so it picks up the
+					// real consent state once WcpConsent.init() resolves (siteConsent
+					// is still null when this callback is registered).
+					userConsentDetails: function () {
+						return siteConsent ? siteConsent.getConsent() : undefined;
+					}
+				},
+			},
+			cookieCfg: {
+				ignoreCookies: ["MSCC"]
+			},
+			webAnalyticsConfiguration:{ // Web Analytics Plugin configuration
+				urlCollectQuery: true,
+				urlCollectHash: true,
+				autoCapture: {
+					scroll: true,
+					pageView: true,
+					onLoad: true,
+					onUnload: true,
+					click: true,
+					resize: true,
+					jsError: true
+				}
+			}
+		}, []);
+
+		window.appInsights.getPropertyManager().getPropertiesContext().web.gpcDataSharingOptIn = GPC_DataSharingOptIn;
+	});
+	</script>
+	<link rel="alternate" type="application/atom+xml" title="RSS Feed for code.visualstudio.com" href="/feed.xml" />
+</head>
+
+<body >
+	<div class="sr-only" aria-hidden="true">
+		AI agents: See <a href="/llms.txt" tabindex="-1">llms.txt</a> for documentation discovery and navigation. Documentation articles are also available as Markdown by appending <code>.md</code> to the article URL.
+	</div>
+	<div id="main">
+		<div id='cookie-banner'></div><header class="hf-site-header">
+
+		<div class="hf-chrome"><div class="hf-chrome-body v2">
+		<div class="navbar-fixed-container v2-navbar-fixed-container" data-v2-navbar="">
+					<a class="v2-skip-link" href="#main-content">Skip to content</a>
+					<div class="v2-navbar">
+						<nav aria-label="Primary navigation">
+							<a class="v2-navbar-brand" href="/" aria-label="Visual Studio Code home">
+								<img src="/assets/branding/code-stable.png" alt="" width="28" height="28">
+							</a>
+							<div class="v2-navbar-links" id="v2-primary-links" data-v2-mobile-menu="">
+								<div class="nav-dropdown v2-nav-dropdown v2-features-dropdown">
+									<button id="v2-nav-features" type="button" class="nav-dropdown-toggle" aria-haspopup="true" aria-expanded="false">
+										Features
+									</button>
+									<div class="nav-dropdown-menu v2-nav-menu v2-features-menu" role="menu" aria-label="Features">
+										<div class="v2-nav-section" role="group" aria-label="AI development">
+											<span class="v2-nav-section-title" aria-hidden="true">AI development</span>
+											<ul role="none">
+												<li role="none"><a role="menuitem" href="/features/agents">Agents</a></li>
+												<li role="none"><a role="menuitem" href="/features/models">Models</a></li>
+												<li role="none"><a role="menuitem" href="/features/customizations">Customizations</a></li>
+												<li role="none"><a role="menuitem" href="/features/continuity">Continuity</a></li>
+											</ul>
+										</div>
+										<div class="v2-nav-section" role="group" aria-label="Editor">
+											<span class="v2-nav-section-title" aria-hidden="true">Editor</span>
+											<ul role="none">
+												<li role="none"><a role="menuitem" href="/features/code-editing">Write code</a></li>
+												<li role="none"><a role="menuitem" href="/features/enterprise">Enterprise</a></li>
+												<li role="none"><a role="menuitem" href="/features/extensibility">Extensibility</a></li>
+											</ul>
+										</div>
+									</div>
+								</div>
+								<a href="/updates">Release notes</a>
+								<a href="/blogs">Blog</a>
+								<div class="nav-dropdown v2-nav-dropdown v2-resources-dropdown">
+									<button id="v2-nav-resources" type="button" class="nav-dropdown-toggle" aria-haspopup="true" aria-expanded="false">
+										Resources
+									</button>
+									<div class="nav-dropdown-menu v2-nav-menu v2-resources-menu" role="menu" aria-label="Resources">
+										<div class="v2-nav-section" role="group" aria-label="Help">
+											<span class="v2-nav-section-title" aria-hidden="true">Help</span>
+											<ul role="none">
+												<li role="none"><a role="menuitem" href="/docs">Documentation</a></li>
+												<li role="none"><a role="menuitem" href="/learn">Learn</a></li>
+												<li role="none"><a role="menuitem" href="/api">API</a></li>
+												<li role="none"><a role="menuitem" href="/docs/supporting/faq">FAQ</a></li>
+											</ul>
+										</div>
+										<div class="v2-nav-section" role="group" aria-label="Extensibility">
+											<span class="v2-nav-section-title" aria-hidden="true">Extensibility</span>
+											<ul role="none">
+												<li role="none">
+													<a role="menuitem" class="v2-nav-external" href="https://marketplace.visualstudio.com/VSCode" target="_blank" rel="noopener noreferrer">
+														<span>Extension Marketplace</span>
+														<span class="codicon codicon-link-external" aria-hidden="true"></span>
+														<span class="sr-only">(opens in new tab)</span>
+													</a>
+												</li>
+												<li role="none">
+													<a role="menuitem" class="v2-nav-external" href="https://github.com/mcp?utm_source=vscode-website&amp;utm_campaign=mcp-registry-server-launch-2025" target="_blank" rel="noopener noreferrer">
+														<span>MCP registry</span>
+														<span class="codicon codicon-link-external" aria-hidden="true"></span>
+														<span class="sr-only">(opens in new tab)</span>
+													</a>
+												</li>
+											</ul>
+										</div>
+										<div class="v2-nav-section" role="group" aria-label="Connect">
+											<span class="v2-nav-section-title" aria-hidden="true">Connect</span>
+											<ul role="none">
+												<li role="none">
+													<a role="menuitem" class="v2-nav-external" href="https://aka.ms/vscode/live" target="_blank" rel="noopener noreferrer">
+														<span>Events</span>
+														<span class="codicon codicon-link-external" aria-hidden="true"></span>
+														<span class="sr-only">(opens in new tab)</span>
+													</a>
+												</li>
+												<li role="none">
+													<a role="menuitem" class="v2-nav-external" href="https://github.com/microsoft/vscode" target="_blank" rel="noopener noreferrer">
+														<span>GitHub repository</span>
+														<span class="codicon codicon-link-external" aria-hidden="true"></span>
+														<span class="sr-only">(opens in new tab)</span>
+													</a>
+												</li>
+											</ul>
+										</div>
+									</div>
+								</div>
+								<a class="v2-mobile-download" href="/download">Download</a>
+								<div class="v2-navbar-utilities">
+								<div class="v2-nav-search">
+									<div class="nav-search search-control" role="button" tabindex="0" aria-label="Open search dialog">
+										<div class="input-group" role="presentation">
+											<span class="input-group-btn">
+												<span class="btn search-icon-container" aria-hidden="true">
+													<img class="search-icon-dark" src="/assets/icons/search-dark.svg" alt="">
+													<img class="search-icon-light" src="/assets/icons/search.svg" alt="">
+												</span>
+											</span>
+											<span class="search-box form-control" aria-hidden="true" role="presentation"></span>
+											<span class="search-shortcut-placeholder">Search</span>
+											<span class="search-shortcut-overlay" style="opacity: 0.7;">⌘ ⇧ P</span>
+										</div>
+									</div>				</div>
+								</div>
+							</div>
+							<div class="v2-navbar-actions">
+								<div class="v2-download-cluster">
+									<div class="v2-download-control" data-v2-download="" data-platform="other" data-action="download">
+										<div class="v2-download-action">
+											<a class="v2-download-primary" href="/download" data-v2-download-primary="" aria-label="Download Visual Studio Code" aria-describedby="v2-download-notice">
+												<span class="v2-download-icon" aria-hidden="true">
+													<svg data-v2-platform-icon="mac" viewBox="0 0 814 1000" xmlns="http://www.w3.org/2000/svg">
+														<path fill="currentColor" d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76.5 0-103.7 40.8-165.9 40.8s-105.6-57-155.5-127C46.7 790.7 0 663 0 541.8c0-194.4 126.4-297.5 250.8-297.5 66.1 0 121.2 43.4 162.7 43.4 39.5 0 101.1-46 176.3-46 28.5 0 130.9 2.6 198.3 99.2zm-234-181.5c31.1-36.9 53.1-88.1 53.1-139.3 0-7.1-.6-14.3-1.9-20.1-50.6 1.9-110.8 33.7-147.1 75.8-28.5 32.4-55.1 83.6-55.1 135.5 0 7.8 1.3 15.6 1.9 18.1 3.2.6 8.4 1.3 13.6 1.3 45.4 0 102.5-30.4 135.5-71.3z"></path>
+													</svg>
+													<svg data-v2-platform-icon="windows" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+														<path fill="currentColor" d="M3 5.1 10.3 4v7H3V5.1Zm8.1-1.2L21 2.5V11h-9.9V3.9ZM3 12h7.3v7L3 17.9V12Zm8.1 0H21v8.5l-9.9-1.4V12Z"></path>
+													</svg>
+													<span class="codicon codicon-terminal-linux" data-v2-platform-icon="linux"></span>
+													<span class="codicon codicon-desktop-download" data-v2-platform-icon="other"></span>
+												</span>
+												<span class="v2-download-label--desktop" aria-hidden="true">
+													Download <span data-v2-download-platform-label=""></span>
+												</span>
+											</a>
+										</div>
+										<button class="v2-download-toggle" type="button" aria-expanded="false" aria-haspopup="menu" aria-controls="v2-download-options" aria-label="Show download options" data-v2-download-toggle="">
+											<span class="codicon codicon-chevron-down" aria-hidden="true"></span>
+										</button>
+										<div class="v2-download-options" id="v2-download-options" role="menu" aria-label="Download options" inert="">
+											<a href="/insiders" role="menuitem">VS Code Insiders</a>
+											<a href="/download" role="menuitem">Other platforms</a>
+											<div class="v2-download-cli-group" role="group" aria-labelledby="v2-download-cli-mac" data-v2-cli-platform="mac">
+												<span class="v2-download-options-label" id="v2-download-cli-mac">Command line interface</span>
+												<a href="/sha/download?build=stable&amp;os=cli-darwin-arm64" role="menuitem">CLI for Apple silicon</a>
+												<a href="/sha/download?build=stable&amp;os=cli-darwin-x64" role="menuitem">CLI for Intel</a>
+											</div>
+											<div class="v2-download-cli-group" role="group" aria-labelledby="v2-download-cli-windows" data-v2-cli-platform="windows" hidden="">
+												<span class="v2-download-options-label" id="v2-download-cli-windows">Command line interface</span>
+												<a href="/sha/download?build=stable&amp;os=cli-win32-x64" role="menuitem">CLI for x64</a>
+												<a href="/sha/download?build=stable&amp;os=cli-win32-arm64" role="menuitem">CLI for Arm64</a>
+											</div>
+											<div class="v2-download-cli-group" role="group" aria-labelledby="v2-download-cli-linux" data-v2-cli-platform="linux" hidden="">
+												<span class="v2-download-options-label" id="v2-download-cli-linux">Command line interface</span>
+												<a href="/sha/download?build=stable&amp;os=cli-alpine-x64" role="menuitem">CLI for x64</a>
+												<a href="/sha/download?build=stable&amp;os=cli-alpine-arm64" role="menuitem">CLI for Arm64</a>
+												<a href="/sha/download?build=stable&amp;os=cli-linux-armhf" role="menuitem">CLI for Arm32</a>
+											</div>
+										</div>
+									</div>
+								</div>
+							</div>
+						</nav>
+					</div>
+				</div>
+		<p class="v2-download-notice" id="v2-download-notice" data-v2-download-notice="">
+					<span class="v2-download-notice-desktop">
+						By using VS Code, you agree to its
+						<a href="https://code.visualstudio.com/license" target="_blank" rel="noopener noreferrer">license</a>
+						and
+						<a href="https://go.microsoft.com/fwlink/?LinkId=521839" target="_blank" rel="noopener noreferrer">privacy statement<span class="codicon codicon-link-external external-link-icon" aria-hidden="true"></span></a>.
+					</span>
+					<span class="v2-download-notice-mobile">
+						By using VS Code, you agree to
+						<a href="https://code.visualstudio.com/license" target="_blank" rel="noopener noreferrer">License</a>
+						&amp;
+						<a href="https://go.microsoft.com/fwlink/?LinkId=521839" target="_blank" rel="noopener noreferrer" aria-label="Privacy statement">Privacy<span class="codicon codicon-link-external external-link-icon" aria-hidden="true"></span></a>.
+					</span>
+				</p>
+		</div></div>
+
+			</header>		<div data-announcement-version="2026-11-16-ignite" data-rotation-interval-seconds="8" class="updates-banner ">
+			<div class="container banner-messages">
+				<p class="message active" data-banner-message aria-hidden="false" ><a href="https://ignite.microsoft.com/sessions?source=vsc-website-banner" target="_blank" rel="noopener">Join VS Code at Microsoft Ignite or catch the sessions online.</a></p>
+				<p class="message " data-banner-message aria-hidden="true" inert><a href="/blogs/2026/10/28/vscode-wrapped?source=vsc-website-banner" target="_blank" rel="noopener">A year of VS Code, wrapped. Explore the highlights.</a></p>
+			</div>
+			<button type="button" title="Dismiss this update" class="dismiss-btn" id="banner-dismiss-btn"><span class="sr-only">Dismiss this update</span><span aria-hidden="true" class="glyph-icon"></span></button>
+		</div>
+		<script>
+			// Restore dismissal and the session's random starting message before first paint.
+			(function () {
+				var banner = document.currentScript.previousElementSibling;
+				if (!banner) {
+					return;
+				}
+
+				var version = banner.getAttribute('data-announcement-version');
+				try {
+					if (localStorage.getItem('dismissedAnnouncementVersion') === version) {
+						banner.classList.add('js-hidden');
+					}
+				} catch (error) {
+					console.warn('Unable to restore banner dismissal state.', error);
+				}
+
+				var messages = banner.querySelectorAll('[data-banner-message]');
+				if (messages.length < 2) {
+					return;
+				}
+
+				var storageKey = 'initialAnnouncementMessage:' + version;
+				var activeIndex;
+				try {
+					var storedIndex = sessionStorage.getItem(storageKey);
+					if (storedIndex !== null) {
+						activeIndex = Number(storedIndex);
+					}
+				} catch (error) {
+					console.warn('Unable to restore the initial banner message.', error);
+				}
+				if (!Number.isInteger(activeIndex) || activeIndex < 0 || activeIndex >= messages.length) {
+					activeIndex = Math.floor(Math.random() * messages.length);
+					try {
+						sessionStorage.setItem(storageKey, String(activeIndex));
+					} catch (error) {
+						console.warn('Unable to remember the initial banner message.', error);
+					}
+				}
+
+				for (var index = 0; index < messages.length; index++) {
+					var isActive = index === activeIndex;
+					messages[index].classList.toggle('active', isActive);
+					messages[index].setAttribute('aria-hidden', String(!isActive));
+					messages[index].toggleAttribute('inert', !isActive);
+				}
+				banner.setAttribute('data-active-message-index', String(activeIndex));
+			})();
+		</script>
+		<!-- This div wraps around the entire site -->
+		<!-- The body itself should already have a main tag -->
+		<main id="main-content" tabindex="-1">
+			<div class="body-content docs docs-github-layout" data-reading-article>
+    <progress class="reading-progress" data-reading-progress max="100" value="0" aria-label="Reading progress" hidden></progress>
+    <div class="docs-layout-wrapper">
+        <!-- Left sidebar - Table of Contents -->
+        <aside class="docs-left-sidebar">
+            <nav id="docs-navbar" aria-label="Topics" class="docs-nav visible-md visible-lg" data-m='{"cN":"docs-left-nav","aN":"navigation"}'>
+
+              <h4>Documentation</h4>
+              <ul class="nav" id="main-nav">
+
+                <li>
+                  <a href="/docs" data-m='{&quot;cN&quot;:&quot;Overview&quot;}'>Overview</a>
+                </li>
+
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-0-articles" data-parent="#main-nav" data-toggle="collapse" aria-controls="docs-docs-0-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;Get Started&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Get Started</a>
+              <ul id="docs-docs-0-articles" class="collapse">
+
+                <li>
+                  <a href="/docs/getstarted/overview" data-m='{&quot;cN&quot;:&quot;Download and Install&quot;,&quot;aN&quot;:&quot;Get Started&quot;}'>Download and Install</a>
+                </li>
+
+                <li>
+                  <a href="/docs/getstarted/what-is-vscode" data-m='{&quot;cN&quot;:&quot;Get to Know VS Code&quot;,&quot;aN&quot;:&quot;Get Started&quot;}'>Get to Know VS Code</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/quickstart" data-m='{&quot;cN&quot;:&quot;Agents Quickstart&quot;,&quot;aN&quot;:&quot;Get Started&quot;}'>Agents Quickstart</a>
+                </li>
+
+                <li>
+                  <a href="/docs/editing/getting-started/editor-tutorial" data-m='{&quot;cN&quot;:&quot;Editor Tutorial&quot;,&quot;aN&quot;:&quot;Get Started&quot;}'>Editor Tutorial</a>
+                </li>
+
+                <li>
+                  <a href="/docs/getstarted/introvideos" data-m='{&quot;cN&quot;:&quot;Intro Videos&quot;,&quot;aN&quot;:&quot;Get Started&quot;}'>Intro Videos</a>
+                </li>
+
+              </ul>
+            </li>
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-1-articles" data-parent="#main-nav" data-toggle="collapse" aria-controls="docs-docs-1-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;AI in VS Code&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>AI in VS Code</a>
+              <ul id="docs-docs-1-articles" class="collapse">
+
+                <li>
+                  <a href="/docs/agents/overview" data-m='{&quot;cN&quot;:&quot;Overview&quot;,&quot;aN&quot;:&quot;AI in VS Code&quot;}'>Overview</a>
+                </li>
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-1-1-articles" data-toggle="collapse" aria-controls="docs-docs-1-1-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;Get Started&quot;,&quot;aN&quot;:&quot;AI in VS Code&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Get Started</a>
+              <ul id="docs-docs-1-1-articles" class="collapse">
+
+                <li>
+                  <a href="/docs/agents/guides/overview" data-m='{&quot;cN&quot;:&quot;Find a Guide&quot;,&quot;aN&quot;:&quot;AI in VS Code - Get Started&quot;}'>Find a Guide</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/reference/ai-features-cheat-sheet" data-m='{&quot;cN&quot;:&quot;AI Features Cheat Sheet&quot;,&quot;aN&quot;:&quot;AI in VS Code - Get Started&quot;}'>AI Features Cheat Sheet</a>
+                </li>
+
+                <li>
+                  <a href="/docs/setup/copilot" data-m='{&quot;cN&quot;:&quot;Set Up GitHub Copilot&quot;,&quot;aN&quot;:&quot;AI in VS Code - Get Started&quot;}'>Set Up GitHub Copilot</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/quickstart" data-m='{&quot;cN&quot;:&quot;Agents Quickstart&quot;,&quot;aN&quot;:&quot;AI in VS Code - Get Started&quot;}'>Agents Quickstart</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/agents-tutorial" data-m='{&quot;cN&quot;:&quot;Agents Tutorial&quot;,&quot;aN&quot;:&quot;AI in VS Code - Get Started&quot;}'>Agents Tutorial</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/best-practices" data-m='{&quot;cN&quot;:&quot;Best Practices&quot;,&quot;aN&quot;:&quot;AI in VS Code - Get Started&quot;}'>Best Practices</a>
+                </li>
+
+              </ul>
+            </li>
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-1-2-articles" data-toggle="collapse" aria-controls="docs-docs-1-2-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;Work with AI&quot;,&quot;aN&quot;:&quot;AI in VS Code&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Work with AI</a>
+              <ul id="docs-docs-1-2-articles" class="collapse">
+
+                <li>
+                  <a href="/docs/editing/ai-powered-suggestions" data-m='{&quot;cN&quot;:&quot;Inline Suggestions&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work with AI&quot;}'>Inline Suggestions</a>
+                </li>
+
+                <li>
+                  <a href="/docs/editing/copilot-smart-actions" data-m='{&quot;cN&quot;:&quot;Smart Actions&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work with AI&quot;}'>Smart Actions</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/run/chat-view" data-m='{&quot;cN&quot;:&quot;Use the Chat View&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work with AI&quot;}'>Use the Chat View</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/run/agents-window" data-m='{&quot;cN&quot;:&quot;Agents Window&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work with AI&quot;}'>Agents Window</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/run/worktrees" data-m='{&quot;cN&quot;:&quot;Work with Agents in Worktrees&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work with AI&quot;}'>Work with Agents in Worktrees</a>
+                </li>
+
+                <li>
+                  <a href="/docs/chat/inline-chat" data-m='{&quot;cN&quot;:&quot;Inline Chat and Quick Chat&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work with AI&quot;}'>Inline Chat and Quick Chat</a>
+                </li>
+
+                <li>
+                  <a href="/docs/chat/chat-overview" data-m='{&quot;cN&quot;:&quot;Chat Messages and Responses&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work with AI&quot;}'>Chat Messages and Responses</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/run/canvases" data-m='{&quot;cN&quot;:&quot;Canvases&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work with AI&quot;}'>Canvases</a>
+                </li>
+
+                <li>
+                  <a href="/docs/chat/copilot-chat-context" data-m='{&quot;cN&quot;:&quot;Add Prompt Context&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work with AI&quot;}'>Add Prompt Context</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/run/review-code-edits" data-m='{&quot;cN&quot;:&quot;Review and Undo Changes&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work with AI&quot;}'>Review and Undo Changes</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/run/agents-window-configuration" data-m='{&quot;cN&quot;:&quot;Configure the Agents Window&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work with AI&quot;}'>Configure the Agents Window</a>
+                </li>
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-1-2-11-articles" data-toggle="collapse" aria-controls="docs-docs-1-2-11-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;Plan and Run Tasks&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work with AI&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Plan and Run Tasks</a>
+              <ul id="docs-docs-1-2-11-articles" class="collapse">
+
+                <li>
+                  <a href="/docs/agents/run/planning" data-m='{&quot;cN&quot;:&quot;Plan Work&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work with AI - Plan and Run Tasks&quot;}'>Plan Work</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/run/tools" data-m='{&quot;cN&quot;:&quot;Use Tools&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work with AI - Plan and Run Tasks&quot;}'>Use Tools</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/run/browser-tools" data-m='{&quot;cN&quot;:&quot;Use Browser Tools&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work with AI - Plan and Run Tasks&quot;}'>Use Browser Tools</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/run/subagents" data-m='{&quot;cN&quot;:&quot;Use Subagents&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work with AI - Plan and Run Tasks&quot;}'>Use Subagents</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/run/automations" data-m='{&quot;cN&quot;:&quot;Automations&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work with AI - Plan and Run Tasks&quot;}'>Automations</a>
+                </li>
+
+              </ul>
+            </li>
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-1-2-12-articles" data-toggle="collapse" aria-controls="docs-docs-1-2-12-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;Sessions&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work with AI&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Sessions</a>
+              <ul id="docs-docs-1-2-12-articles" class="collapse">
+
+                <li>
+                  <a href="/docs/agents/run/sessions/manage-sessions" data-m='{&quot;cN&quot;:&quot;Manage Sessions&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work with AI - Sessions&quot;}'>Manage Sessions</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/run/sessions/organize-sessions" data-m='{&quot;cN&quot;:&quot;Organize and Triage Sessions&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work with AI - Sessions&quot;}'>Organize and Triage Sessions</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/run/memory" data-m='{&quot;cN&quot;:&quot;Memory&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work with AI - Sessions&quot;}'>Memory</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/run/artifacts" data-m='{&quot;cN&quot;:&quot;Artifacts&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work with AI - Sessions&quot;}'>Artifacts</a>
+                </li>
+
+              </ul>
+            </li>
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-1-2-13-articles" data-toggle="collapse" aria-controls="docs-docs-1-2-13-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;Permissions and Security&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work with AI&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Permissions and Security</a>
+              <ul id="docs-docs-1-2-13-articles" class="collapse">
+
+                <li>
+                  <a href="/docs/agents/run/approvals" data-m='{&quot;cN&quot;:&quot;Approvals and Permissions&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work with AI - Permissions and Security&quot;}'>Approvals and Permissions</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/run/agent-sandboxing" data-m='{&quot;cN&quot;:&quot;Configure Agent Sandboxing&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work with AI - Permissions and Security&quot;}'>Configure Agent Sandboxing</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/run/security" data-m='{&quot;cN&quot;:&quot;Secure Development with AI&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work with AI - Permissions and Security&quot;}'>Secure Development with AI</a>
+                </li>
+
+              </ul>
+            </li>
+
+              </ul>
+            </li>
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-1-3-articles" data-toggle="collapse" aria-controls="docs-docs-1-3-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;Choose Models and Agents&quot;,&quot;aN&quot;:&quot;AI in VS Code&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Choose Models and Agents</a>
+              <ul id="docs-docs-1-3-articles" class="collapse">
+
+                <li>
+                  <a href="/docs/agent-customization/language-models" data-m='{&quot;cN&quot;:&quot;Choose and Configure Models&quot;,&quot;aN&quot;:&quot;AI in VS Code - Choose Models and Agents&quot;}'>Choose and Configure Models</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/run/agent-harnesses" data-m='{&quot;cN&quot;:&quot;Choose an Agent Harness&quot;,&quot;aN&quot;:&quot;AI in VS Code - Choose Models and Agents&quot;}'>Choose an Agent Harness</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/run/move-to-copilot" data-m='{&quot;cN&quot;:&quot;Move from Local to Copilot&quot;,&quot;aN&quot;:&quot;AI in VS Code - Choose Models and Agents&quot;}'>Move from Local to Copilot</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/run/compare-models" data-m='{&quot;cN&quot;:&quot;Compare Models Side by Side&quot;,&quot;aN&quot;:&quot;AI in VS Code - Choose Models and Agents&quot;}'>Compare Models Side by Side</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/guides/choose-a-model" data-m='{&quot;cN&quot;:&quot;Guide: Choose the Right Model&quot;,&quot;aN&quot;:&quot;AI in VS Code - Choose Models and Agents&quot;}'>Guide: Choose the Right Model</a>
+                </li>
+
+              </ul>
+            </li>
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-1-4-articles" data-toggle="collapse" aria-controls="docs-docs-1-4-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;Customize and Extend&quot;,&quot;aN&quot;:&quot;AI in VS Code&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Customize and Extend</a>
+              <ul id="docs-docs-1-4-articles" class="collapse">
+
+                <li>
+                  <a href="/docs/agent-customization/overview" data-m='{&quot;cN&quot;:&quot;Overview&quot;,&quot;aN&quot;:&quot;AI in VS Code - Customize and Extend&quot;}'>Overview</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agent-customization/agent-plugins" data-m='{&quot;cN&quot;:&quot;Agent Plugins&quot;,&quot;aN&quot;:&quot;AI in VS Code - Customize and Extend&quot;}'>Agent Plugins</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agent-customization/agent-skills" data-m='{&quot;cN&quot;:&quot;Agent Skills&quot;,&quot;aN&quot;:&quot;AI in VS Code - Customize and Extend&quot;}'>Agent Skills</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agent-customization/custom-instructions" data-m='{&quot;cN&quot;:&quot;Custom Instructions&quot;,&quot;aN&quot;:&quot;AI in VS Code - Customize and Extend&quot;}'>Custom Instructions</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agent-customization/custom-agents" data-m='{&quot;cN&quot;:&quot;Custom Agents&quot;,&quot;aN&quot;:&quot;AI in VS Code - Customize and Extend&quot;}'>Custom Agents</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agent-customization/copilot-connectors" data-m='{&quot;cN&quot;:&quot;Copilot Connectors&quot;,&quot;aN&quot;:&quot;AI in VS Code - Customize and Extend&quot;}'>Copilot Connectors</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agent-customization/mcp-servers" data-m='{&quot;cN&quot;:&quot;Add and Use MCP Servers&quot;,&quot;aN&quot;:&quot;AI in VS Code - Customize and Extend&quot;}'>Add and Use MCP Servers</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/run/manage-mcp-servers" data-m='{&quot;cN&quot;:&quot;Manage MCP Servers&quot;,&quot;aN&quot;:&quot;AI in VS Code - Customize and Extend&quot;}'>Manage MCP Servers</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agent-customization/hooks" data-m='{&quot;cN&quot;:&quot;Agent Hooks&quot;,&quot;aN&quot;:&quot;AI in VS Code - Customize and Extend&quot;}'>Agent Hooks</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agent-customization/prompt-files" data-m='{&quot;cN&quot;:&quot;Prompt Files&quot;,&quot;aN&quot;:&quot;AI in VS Code - Customize and Extend&quot;}'>Prompt Files</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agent-customization/migrate-customizations" data-m='{&quot;cN&quot;:&quot;Migrate Existing Customizations&quot;,&quot;aN&quot;:&quot;AI in VS Code - Customize and Extend&quot;}'>Migrate Existing Customizations</a>
+                </li>
+
+              </ul>
+            </li>
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-1-5-articles" data-toggle="collapse" aria-controls="docs-docs-1-5-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;Work Across Apps and Machines&quot;,&quot;aN&quot;:&quot;AI in VS Code&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Work Across Apps and Machines</a>
+              <ul id="docs-docs-1-5-articles" class="collapse">
+
+                <li>
+                  <a href="/docs/agents/cloud-continuity-tutorial" data-m='{&quot;cN&quot;:&quot;Tutorial: Agent Continuity&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work Across Apps and Machines&quot;}'>Tutorial: Agent Continuity</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/run/remote-agent-sessions" data-m='{&quot;cN&quot;:&quot;Remote Agent Sessions&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work Across Apps and Machines&quot;}'>Remote Agent Sessions</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/run/cloud-sandbox-sessions" data-m='{&quot;cN&quot;:&quot;Cloud Sessions&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work Across Apps and Machines&quot;}'>Cloud Sessions</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/run/sessions/session-history" data-m='{&quot;cN&quot;:&quot;Session History&quot;,&quot;aN&quot;:&quot;AI in VS Code - Work Across Apps and Machines&quot;}'>Session History</a>
+                </li>
+
+              </ul>
+            </li>
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-1-6-articles" data-toggle="collapse" aria-controls="docs-docs-1-6-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;Tutorials and Guides&quot;,&quot;aN&quot;:&quot;AI in VS Code&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Tutorials and Guides</a>
+              <ul id="docs-docs-1-6-articles" class="collapse">
+
+                <li>
+                  <a href="/docs/agents/guides/overview" data-m='{&quot;cN&quot;:&quot;Find a Guide&quot;,&quot;aN&quot;:&quot;AI in VS Code - Tutorials and Guides&quot;}'>Find a Guide</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/guides/explore-a-codebase" data-m='{&quot;cN&quot;:&quot;Explore a Codebase&quot;,&quot;aN&quot;:&quot;AI in VS Code - Tutorials and Guides&quot;}'>Explore a Codebase</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/guides/add-a-feature" data-m='{&quot;cN&quot;:&quot;Add a Feature&quot;,&quot;aN&quot;:&quot;AI in VS Code - Tutorials and Guides&quot;}'>Add a Feature</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/guides/fix-a-bug-with-agents" data-m='{&quot;cN&quot;:&quot;Fix an API Bug&quot;,&quot;aN&quot;:&quot;AI in VS Code - Tutorials and Guides&quot;}'>Fix an API Bug</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/guides/refactor-safely" data-m='{&quot;cN&quot;:&quot;Refactor Safely&quot;,&quot;aN&quot;:&quot;AI in VS Code - Tutorials and Guides&quot;}'>Refactor Safely</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/guides/choose-a-model" data-m='{&quot;cN&quot;:&quot;Compare and Choose Models&quot;,&quot;aN&quot;:&quot;AI in VS Code - Tutorials and Guides&quot;}'>Compare and Choose Models</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/guides/test-code-with-ai" data-m='{&quot;cN&quot;:&quot;Add Tests&quot;,&quot;aN&quot;:&quot;AI in VS Code - Tutorials and Guides&quot;}'>Add Tests</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/guides/browser-agent-testing-guide" data-m='{&quot;cN&quot;:&quot;Test Web Apps&quot;,&quot;aN&quot;:&quot;AI in VS Code - Tutorials and Guides&quot;}'>Test Web Apps</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/guides/test-driven-development-guide" data-m='{&quot;cN&quot;:&quot;Test-Driven Development&quot;,&quot;aN&quot;:&quot;AI in VS Code - Tutorials and Guides&quot;}'>Test-Driven Development</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/guides/delegate-two-tasks" data-m='{&quot;cN&quot;:&quot;Run Parallel Tasks&quot;,&quot;aN&quot;:&quot;AI in VS Code - Tutorials and Guides&quot;}'>Run Parallel Tasks</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/guides/get-agent-back-on-track" data-m='{&quot;cN&quot;:&quot;Get Back on Track&quot;,&quot;aN&quot;:&quot;AI in VS Code - Tutorials and Guides&quot;}'>Get Back on Track</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/guides/customize-copilot-guide" data-m='{&quot;cN&quot;:&quot;Adapt Agents to Your Project&quot;,&quot;aN&quot;:&quot;AI in VS Code - Tutorials and Guides&quot;}'>Adapt Agents to Your Project</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/guides/context-engineering-guide" data-m='{&quot;cN&quot;:&quot;Context Engineering Workflow&quot;,&quot;aN&quot;:&quot;AI in VS Code - Tutorials and Guides&quot;}'>Context Engineering Workflow</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/guides/notebooks-with-ai" data-m='{&quot;cN&quot;:&quot;Work with Jupyter Notebooks&quot;,&quot;aN&quot;:&quot;AI in VS Code - Tutorials and Guides&quot;}'>Work with Jupyter Notebooks</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/guides/optimize-usage" data-m='{&quot;cN&quot;:&quot;Reduce Credit Usage&quot;,&quot;aN&quot;:&quot;AI in VS Code - Tutorials and Guides&quot;}'>Reduce Credit Usage</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/guides/prompt-examples" data-m='{&quot;cN&quot;:&quot;Prompt Examples&quot;,&quot;aN&quot;:&quot;AI in VS Code - Tutorials and Guides&quot;}'>Prompt Examples</a>
+                </li>
+
+              </ul>
+            </li>
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-1-7-articles" data-toggle="collapse" aria-controls="docs-docs-1-7-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;Concepts&quot;,&quot;aN&quot;:&quot;AI in VS Code&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Concepts</a>
+              <ul id="docs-docs-1-7-articles" class="collapse">
+
+                <li>
+                  <a href="/docs/agents/concepts/agents" data-m='{&quot;cN&quot;:&quot;Agents&quot;,&quot;aN&quot;:&quot;AI in VS Code - Concepts&quot;}'>Agents</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/concepts/language-models" data-m='{&quot;cN&quot;:&quot;How Models Work&quot;,&quot;aN&quot;:&quot;AI in VS Code - Concepts&quot;}'>How Models Work</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/concepts/context" data-m='{&quot;cN&quot;:&quot;Context&quot;,&quot;aN&quot;:&quot;AI in VS Code - Concepts&quot;}'>Context</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/concepts/tools" data-m='{&quot;cN&quot;:&quot;Tools&quot;,&quot;aN&quot;:&quot;AI in VS Code - Concepts&quot;}'>Tools</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/concepts/sessions" data-m='{&quot;cN&quot;:&quot;Sessions and Chats&quot;,&quot;aN&quot;:&quot;AI in VS Code - Concepts&quot;}'>Sessions and Chats</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/concepts/trust-and-safety" data-m='{&quot;cN&quot;:&quot;Trust and Safety&quot;,&quot;aN&quot;:&quot;AI in VS Code - Concepts&quot;}'>Trust and Safety</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/concepts/agent-harnesses" data-m='{&quot;cN&quot;:&quot;Agent Harnesses&quot;,&quot;aN&quot;:&quot;AI in VS Code - Concepts&quot;}'>Agent Harnesses</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/concepts/customization" data-m='{&quot;cN&quot;:&quot;Agent Customization&quot;,&quot;aN&quot;:&quot;AI in VS Code - Concepts&quot;}'>Agent Customization</a>
+                </li>
+
+              </ul>
+            </li>
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-1-8-articles" data-toggle="collapse" aria-controls="docs-docs-1-8-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;Reference and Help&quot;,&quot;aN&quot;:&quot;AI in VS Code&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Reference and Help</a>
+              <ul id="docs-docs-1-8-articles" class="collapse">
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-1-8-0-articles" data-toggle="collapse" aria-controls="docs-docs-1-8-0-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;Reference&quot;,&quot;aN&quot;:&quot;AI in VS Code - Reference and Help&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Reference</a>
+              <ul id="docs-docs-1-8-0-articles" class="collapse">
+
+                <li>
+                  <a href="/docs/agents/reference/ai-features-cheat-sheet" data-m='{&quot;cN&quot;:&quot;AI Features Cheat Sheet&quot;,&quot;aN&quot;:&quot;AI in VS Code - Reference and Help - Reference&quot;}'>AI Features Cheat Sheet</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/reference/tools-reference" data-m='{&quot;cN&quot;:&quot;Tool Names and Context References&quot;,&quot;aN&quot;:&quot;AI in VS Code - Reference and Help - Reference&quot;}'>Tool Names and Context References</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/reference/workspace-context" data-m='{&quot;cN&quot;:&quot;Workspace Context&quot;,&quot;aN&quot;:&quot;AI in VS Code - Reference and Help - Reference&quot;}'>Workspace Context</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/reference/ai-settings" data-m='{&quot;cN&quot;:&quot;AI Settings&quot;,&quot;aN&quot;:&quot;AI in VS Code - Reference and Help - Reference&quot;}'>AI Settings</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/reference/chat-pet" data-m='{&quot;cN&quot;:&quot;VS Code Pet&quot;,&quot;aN&quot;:&quot;AI in VS Code - Reference and Help - Reference&quot;}'>VS Code Pet</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/reference/custom-agent-file-reference" data-m='{&quot;cN&quot;:&quot;Custom Agent File Reference&quot;,&quot;aN&quot;:&quot;AI in VS Code - Reference and Help - Reference&quot;}'>Custom Agent File Reference</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/reference/custom-instructions-reference" data-m='{&quot;cN&quot;:&quot;Custom Instructions Reference&quot;,&quot;aN&quot;:&quot;AI in VS Code - Reference and Help - Reference&quot;}'>Custom Instructions Reference</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/reference/agent-plugin-reference" data-m='{&quot;cN&quot;:&quot;Agent Plugin Authoring Reference&quot;,&quot;aN&quot;:&quot;AI in VS Code - Reference and Help - Reference&quot;}'>Agent Plugin Authoring Reference</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/reference/mcp-configuration" data-m='{&quot;cN&quot;:&quot;MCP Configuration&quot;,&quot;aN&quot;:&quot;AI in VS Code - Reference and Help - Reference&quot;}'>MCP Configuration</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/reference/hooks-reference" data-m='{&quot;cN&quot;:&quot;Hooks Reference&quot;,&quot;aN&quot;:&quot;AI in VS Code - Reference and Help - Reference&quot;}'>Hooks Reference</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/guides/monitoring-agents" data-m='{&quot;cN&quot;:&quot;OpenTelemetry Monitoring&quot;,&quot;aN&quot;:&quot;AI in VS Code - Reference and Help - Reference&quot;}'>OpenTelemetry Monitoring</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/concepts/agent-host" data-m='{&quot;cN&quot;:&quot;Agent Host Architecture&quot;,&quot;aN&quot;:&quot;AI in VS Code - Reference and Help - Reference&quot;}'>Agent Host Architecture</a>
+                </li>
+
+              </ul>
+            </li>
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-1-8-1-articles" data-toggle="collapse" aria-controls="docs-docs-1-8-1-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;Troubleshooting&quot;,&quot;aN&quot;:&quot;AI in VS Code - Reference and Help&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Troubleshooting</a>
+              <ul id="docs-docs-1-8-1-articles" class="collapse">
+
+                <li>
+                  <a href="/docs/agents/agent-troubleshooting/troubleshooting" data-m='{&quot;cN&quot;:&quot;Troubleshooting&quot;,&quot;aN&quot;:&quot;AI in VS Code - Reference and Help - Troubleshooting&quot;}'>Troubleshooting</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/agent-troubleshooting/chat-debug-view" data-m='{&quot;cN&quot;:&quot;Debug Chat Interactions&quot;,&quot;aN&quot;:&quot;AI in VS Code - Reference and Help - Troubleshooting&quot;}'>Debug Chat Interactions</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/agent-troubleshooting/cache-explorer" data-m='{&quot;cN&quot;:&quot;Diagnose Prompt Caching&quot;,&quot;aN&quot;:&quot;AI in VS Code - Reference and Help - Troubleshooting&quot;}'>Diagnose Prompt Caching</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/agent-troubleshooting/faq" data-m='{&quot;cN&quot;:&quot;FAQ&quot;,&quot;aN&quot;:&quot;AI in VS Code - Reference and Help - Troubleshooting&quot;}'>FAQ</a>
+                </li>
+
+              </ul>
+            </li>
+
+              </ul>
+            </li>
+
+              </ul>
+            </li>
+
+            <li class="panel active expanded">
+              <a class="area" role="button" href="#docs-docs-2-articles" data-parent="#main-nav" data-toggle="collapse" aria-controls="docs-docs-2-articles" aria-expanded="true" data-m='{&quot;cN&quot;:&quot;Editor&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Editor</a>
+              <ul id="docs-docs-2-articles" class="collapse in">
+
+                <li>
+                  <a href="/docs/editing/getting-started/overview" data-m='{&quot;cN&quot;:&quot;Overview&quot;,&quot;aN&quot;:&quot;Editor&quot;}'>Overview</a>
+                </li>
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-2-1-articles" data-toggle="collapse" aria-controls="docs-docs-2-1-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;Getting Started&quot;,&quot;aN&quot;:&quot;Editor&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Getting Started</a>
+              <ul id="docs-docs-2-1-articles" class="collapse">
+
+                <li>
+                  <a href="/docs/editing/getting-started/editor-tutorial" data-m='{&quot;cN&quot;:&quot;Editor Tutorial&quot;,&quot;aN&quot;:&quot;Editor - Getting Started&quot;}'>Editor Tutorial</a>
+                </li>
+
+                <li>
+                  <a href="/docs/editing/getting-started/userinterface" data-m='{&quot;cN&quot;:&quot;User Interface&quot;,&quot;aN&quot;:&quot;Editor - Getting Started&quot;}'>User Interface</a>
+                </li>
+
+                <li>
+                  <a href="/docs/editing/getting-started/tips-and-tricks" data-m='{&quot;cN&quot;:&quot;Tips and Tricks&quot;,&quot;aN&quot;:&quot;Editor - Getting Started&quot;}'>Tips and Tricks</a>
+                </li>
+
+              </ul>
+            </li>
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-2-2-articles" data-toggle="collapse" aria-controls="docs-docs-2-2-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;Write code&quot;,&quot;aN&quot;:&quot;Editor&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Write code</a>
+              <ul id="docs-docs-2-2-articles" class="collapse">
+
+                <li>
+                  <a href="/docs/editing/codebasics" data-m='{&quot;cN&quot;:&quot;Basic Editing&quot;,&quot;aN&quot;:&quot;Editor - Write code&quot;}'>Basic Editing</a>
+                </li>
+
+                <li>
+                  <a href="/docs/editing/intellisense" data-m='{&quot;cN&quot;:&quot;IntelliSense&quot;,&quot;aN&quot;:&quot;Editor - Write code&quot;}'>IntelliSense</a>
+                </li>
+
+                <li>
+                  <a href="/docs/editing/ai-powered-suggestions" data-m='{&quot;cN&quot;:&quot;Inline Suggestions&quot;,&quot;aN&quot;:&quot;Editor - Write code&quot;}'>Inline Suggestions</a>
+                </li>
+
+                <li>
+                  <a href="/docs/editing/copilot-smart-actions" data-m='{&quot;cN&quot;:&quot;Smart Actions&quot;,&quot;aN&quot;:&quot;Editor - Write code&quot;}'>Smart Actions</a>
+                </li>
+
+                <li>
+                  <a href="/docs/editing/editingevolved" data-m='{&quot;cN&quot;:&quot;Code Navigation&quot;,&quot;aN&quot;:&quot;Editor - Write code&quot;}'>Code Navigation</a>
+                </li>
+
+                <li>
+                  <a href="/docs/editing/refactoring" data-m='{&quot;cN&quot;:&quot;Refactoring&quot;,&quot;aN&quot;:&quot;Editor - Write code&quot;}'>Refactoring</a>
+                </li>
+
+                <li>
+                  <a href="/docs/editing/userdefinedsnippets" data-m='{&quot;cN&quot;:&quot;Snippets&quot;,&quot;aN&quot;:&quot;Editor - Write code&quot;}'>Snippets</a>
+                </li>
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-2-2-7-articles" data-toggle="collapse" aria-controls="docs-docs-2-2-7-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;Workspaces&quot;,&quot;aN&quot;:&quot;Editor - Write code&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Workspaces</a>
+              <ul id="docs-docs-2-2-7-articles" class="collapse">
+
+                <li>
+                  <a href="/docs/editing/workspaces/workspaces" data-m='{&quot;cN&quot;:&quot;Overview&quot;,&quot;aN&quot;:&quot;Editor - Write code - Workspaces&quot;}'>Overview</a>
+                </li>
+
+                <li>
+                  <a href="/docs/editing/workspaces/multi-root-workspaces" data-m='{&quot;cN&quot;:&quot;Multi-Root Workspaces&quot;,&quot;aN&quot;:&quot;Editor - Write code - Workspaces&quot;}'>Multi-Root Workspaces</a>
+                </li>
+
+                <li>
+                  <a href="/docs/editing/workspaces/workspace-trust" data-m='{&quot;cN&quot;:&quot;Workspace Trust&quot;,&quot;aN&quot;:&quot;Editor - Write code - Workspaces&quot;}'>Workspace Trust</a>
+                </li>
+
+              </ul>
+            </li>
+
+              </ul>
+            </li>
+
+            <li class="panel active expanded">
+              <a class="area" role="button" href="#docs-docs-2-3-articles" data-toggle="collapse" aria-controls="docs-docs-2-3-articles" aria-expanded="true" data-m='{&quot;cN&quot;:&quot;Configure the editor&quot;,&quot;aN&quot;:&quot;Editor&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Configure the editor</a>
+              <ul id="docs-docs-2-3-articles" class="collapse in">
+
+                <li>
+                  <a href="/docs/configure/locales" data-m='{&quot;cN&quot;:&quot;Display Language&quot;,&quot;aN&quot;:&quot;Editor - Configure the editor&quot;}'>Display Language</a>
+                </li>
+
+                <li>
+                  <a href="/docs/configure/custom-layout" data-m='{&quot;cN&quot;:&quot;Layout&quot;,&quot;aN&quot;:&quot;Editor - Configure the editor&quot;}'>Layout</a>
+                </li>
+
+                <li>
+                  <a href="/docs/configure/keybindings" data-m='{&quot;cN&quot;:&quot;Keyboard Shortcuts&quot;,&quot;aN&quot;:&quot;Editor - Configure the editor&quot;}'>Keyboard Shortcuts</a>
+                </li>
+
+                <li class="active">
+                  <a href="/docs/configure/settings" data-m='{&quot;cN&quot;:&quot;Settings&quot;,&quot;aN&quot;:&quot;Editor - Configure the editor&quot;}' aria-current="page" aria-label="Current Page: Settings">Settings</a>
+                </li>
+
+                <li>
+                  <a href="/docs/configure/settings-sync" data-m='{&quot;cN&quot;:&quot;Settings Sync&quot;,&quot;aN&quot;:&quot;Editor - Configure the editor&quot;}'>Settings Sync</a>
+                </li>
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-2-3-5-articles" data-toggle="collapse" aria-controls="docs-docs-2-3-5-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;Extensions&quot;,&quot;aN&quot;:&quot;Editor - Configure the editor&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Extensions</a>
+              <ul id="docs-docs-2-3-5-articles" class="collapse">
+
+                <li>
+                  <a href="/docs/configure/extensions/extensions" data-m='{&quot;cN&quot;:&quot;Overview&quot;,&quot;aN&quot;:&quot;Editor - Configure the editor - Extensions&quot;}'>Overview</a>
+                </li>
+
+                <li>
+                  <a href="/docs/configure/extensions/extension-marketplace" data-m='{&quot;cN&quot;:&quot;Extension Marketplace&quot;,&quot;aN&quot;:&quot;Editor - Configure the editor - Extensions&quot;}'>Extension Marketplace</a>
+                </li>
+
+                <li>
+                  <a href="/docs/configure/extensions/extension-runtime-security" data-m='{&quot;cN&quot;:&quot;Extension Runtime Security&quot;,&quot;aN&quot;:&quot;Editor - Configure the editor - Extensions&quot;}'>Extension Runtime Security</a>
+                </li>
+
+              </ul>
+            </li>
+
+                <li>
+                  <a href="/docs/configure/themes" data-m='{&quot;cN&quot;:&quot;Themes&quot;,&quot;aN&quot;:&quot;Editor - Configure the editor&quot;}'>Themes</a>
+                </li>
+
+                <li>
+                  <a href="/docs/configure/profiles" data-m='{&quot;cN&quot;:&quot;Profiles&quot;,&quot;aN&quot;:&quot;Editor - Configure the editor&quot;}'>Profiles</a>
+                </li>
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-2-3-8-articles" data-toggle="collapse" aria-controls="docs-docs-2-3-8-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;Accessibility&quot;,&quot;aN&quot;:&quot;Editor - Configure the editor&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Accessibility</a>
+              <ul id="docs-docs-2-3-8-articles" class="collapse">
+
+                <li>
+                  <a href="/docs/configure/accessibility/accessibility" data-m='{&quot;cN&quot;:&quot;Overview&quot;,&quot;aN&quot;:&quot;Editor - Configure the editor - Accessibility&quot;}'>Overview</a>
+                </li>
+
+                <li>
+                  <a href="/docs/configure/accessibility/voice" data-m='{&quot;cN&quot;:&quot;Voice Interactions&quot;,&quot;aN&quot;:&quot;Editor - Configure the editor - Accessibility&quot;}'>Voice Interactions</a>
+                </li>
+
+              </ul>
+            </li>
+
+                <li>
+                  <a href="/docs/configure/command-line" data-m='{&quot;cN&quot;:&quot;Command Line Interface&quot;,&quot;aN&quot;:&quot;Editor - Configure the editor&quot;}'>Command Line Interface</a>
+                </li>
+
+                <li>
+                  <a href="/docs/configure/telemetry" data-m='{&quot;cN&quot;:&quot;Telemetry&quot;,&quot;aN&quot;:&quot;Editor - Configure the editor&quot;}'>Telemetry</a>
+                </li>
+
+              </ul>
+            </li>
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-2-4-articles" data-toggle="collapse" aria-controls="docs-docs-2-4-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;Reference&quot;,&quot;aN&quot;:&quot;Editor&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Reference</a>
+              <ul id="docs-docs-2-4-articles" class="collapse">
+
+                <li>
+                  <a href="/docs/reference/default-keybindings" data-m='{&quot;cN&quot;:&quot;Default Keyboard Shortcuts&quot;,&quot;aN&quot;:&quot;Editor - Reference&quot;}'>Default Keyboard Shortcuts</a>
+                </li>
+
+                <li>
+                  <a href="/docs/reference/default-settings" data-m='{&quot;cN&quot;:&quot;Default Settings&quot;,&quot;aN&quot;:&quot;Editor - Reference&quot;}'>Default Settings</a>
+                </li>
+
+                <li>
+                  <a href="/docs/reference/variables-reference" data-m='{&quot;cN&quot;:&quot;Substitution Variables&quot;,&quot;aN&quot;:&quot;Editor - Reference&quot;}'>Substitution Variables</a>
+                </li>
+
+                <li>
+                  <a href="/docs/reference/tasks-appendix" data-m='{&quot;cN&quot;:&quot;Tasks Schema&quot;,&quot;aN&quot;:&quot;Editor - Reference&quot;}'>Tasks Schema</a>
+                </li>
+
+              </ul>
+            </li>
+
+              </ul>
+            </li>
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-3-articles" data-parent="#main-nav" data-toggle="collapse" aria-controls="docs-docs-3-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;Source Control&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Source Control</a>
+              <ul id="docs-docs-3-articles" class="collapse">
+
+                <li>
+                  <a href="/docs/sourcecontrol/overview" data-m='{&quot;cN&quot;:&quot;Overview&quot;,&quot;aN&quot;:&quot;Source Control&quot;}'>Overview</a>
+                </li>
+
+                <li>
+                  <a href="/docs/sourcecontrol/quickstart" data-m='{&quot;cN&quot;:&quot;Quickstart&quot;,&quot;aN&quot;:&quot;Source Control&quot;}'>Quickstart</a>
+                </li>
+
+                <li>
+                  <a href="/docs/sourcecontrol/repos-remotes" data-m='{&quot;cN&quot;:&quot;Repositories &amp; Remotes&quot;,&quot;aN&quot;:&quot;Source Control&quot;}'>Repositories &amp; Remotes</a>
+                </li>
+
+                <li>
+                  <a href="/docs/sourcecontrol/staging-commits" data-m='{&quot;cN&quot;:&quot;Staging, Commits &amp; Undo&quot;,&quot;aN&quot;:&quot;Source Control&quot;}'>Staging, Commits &amp; Undo</a>
+                </li>
+
+                <li>
+                  <a href="/docs/sourcecontrol/history" data-m='{&quot;cN&quot;:&quot;History &amp; Blame&quot;,&quot;aN&quot;:&quot;Source Control&quot;}'>History &amp; Blame</a>
+                </li>
+
+                <li>
+                  <a href="/docs/sourcecontrol/branches-worktrees" data-m='{&quot;cN&quot;:&quot;Branches, Stashes &amp; Worktrees&quot;,&quot;aN&quot;:&quot;Source Control&quot;}'>Branches, Stashes &amp; Worktrees</a>
+                </li>
+
+                <li>
+                  <a href="/docs/sourcecontrol/merge-conflicts" data-m='{&quot;cN&quot;:&quot;Merge Conflicts&quot;,&quot;aN&quot;:&quot;Source Control&quot;}'>Merge Conflicts</a>
+                </li>
+
+                <li>
+                  <a href="/docs/sourcecontrol/github" data-m='{&quot;cN&quot;:&quot;Collaborate on GitHub&quot;,&quot;aN&quot;:&quot;Source Control&quot;}'>Collaborate on GitHub</a>
+                </li>
+
+                <li>
+                  <a href="/docs/sourcecontrol/troubleshooting" data-m='{&quot;cN&quot;:&quot;Troubleshooting&quot;,&quot;aN&quot;:&quot;Source Control&quot;}'>Troubleshooting</a>
+                </li>
+
+                <li>
+                  <a href="/docs/sourcecontrol/faq" data-m='{&quot;cN&quot;:&quot;FAQ&quot;,&quot;aN&quot;:&quot;Source Control&quot;}'>FAQ</a>
+                </li>
+
+              </ul>
+            </li>
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-4-articles" data-parent="#main-nav" data-toggle="collapse" aria-controls="docs-docs-4-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;Terminal&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Terminal</a>
+              <ul id="docs-docs-4-articles" class="collapse">
+
+                <li>
+                  <a href="/docs/terminal/getting-started" data-m='{&quot;cN&quot;:&quot;Get Started&quot;,&quot;aN&quot;:&quot;Terminal&quot;}'>Get Started</a>
+                </li>
+
+                <li>
+                  <a href="/docs/terminal/basics" data-m='{&quot;cN&quot;:&quot;Terminal Basics&quot;,&quot;aN&quot;:&quot;Terminal&quot;}'>Terminal Basics</a>
+                </li>
+
+                <li>
+                  <a href="/docs/terminal/profiles" data-m='{&quot;cN&quot;:&quot;Terminal Profiles&quot;,&quot;aN&quot;:&quot;Terminal&quot;}'>Terminal Profiles</a>
+                </li>
+
+                <li>
+                  <a href="/docs/terminal/shell-integration" data-m='{&quot;cN&quot;:&quot;Shell Integration&quot;,&quot;aN&quot;:&quot;Terminal&quot;}'>Shell Integration</a>
+                </li>
+
+                <li>
+                  <a href="/docs/terminal/appearance" data-m='{&quot;cN&quot;:&quot;Appearance&quot;,&quot;aN&quot;:&quot;Terminal&quot;}'>Appearance</a>
+                </li>
+
+                <li>
+                  <a href="/docs/terminal/advanced" data-m='{&quot;cN&quot;:&quot;Advanced&quot;,&quot;aN&quot;:&quot;Terminal&quot;}'>Advanced</a>
+                </li>
+
+              </ul>
+            </li>
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-5-articles" data-parent="#main-nav" data-toggle="collapse" aria-controls="docs-docs-5-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;Debugging &amp; Testing&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Debugging &amp; Testing</a>
+              <ul id="docs-docs-5-articles" class="collapse">
+
+                <li>
+                  <a href="/docs/debugtest/debugging" data-m='{&quot;cN&quot;:&quot;Debugging&quot;,&quot;aN&quot;:&quot;Debugging &amp; Testing&quot;}'>Debugging</a>
+                </li>
+
+                <li>
+                  <a href="/docs/debugtest/quickstart" data-m='{&quot;cN&quot;:&quot;Debugging Quickstart&quot;,&quot;aN&quot;:&quot;Debugging &amp; Testing&quot;}'>Debugging Quickstart</a>
+                </li>
+
+                <li>
+                  <a href="/docs/debugtest/debugging-configuration" data-m='{&quot;cN&quot;:&quot;Debug Configuration&quot;,&quot;aN&quot;:&quot;Debugging &amp; Testing&quot;}'>Debug Configuration</a>
+                </li>
+
+                <li>
+                  <a href="/docs/debugtest/tasks" data-m='{&quot;cN&quot;:&quot;Tasks&quot;,&quot;aN&quot;:&quot;Debugging &amp; Testing&quot;}'>Tasks</a>
+                </li>
+
+                <li>
+                  <a href="/docs/debugtest/testing" data-m='{&quot;cN&quot;:&quot;Testing&quot;,&quot;aN&quot;:&quot;Debugging &amp; Testing&quot;}'>Testing</a>
+                </li>
+
+                <li>
+                  <a href="/docs/debugtest/integrated-browser" data-m='{&quot;cN&quot;:&quot;Integrated Browser&quot;,&quot;aN&quot;:&quot;Debugging &amp; Testing&quot;}'>Integrated Browser</a>
+                </li>
+
+                <li>
+                  <a href="/docs/debugtest/port-forwarding" data-m='{&quot;cN&quot;:&quot;Port Forwarding&quot;,&quot;aN&quot;:&quot;Debugging &amp; Testing&quot;}'>Port Forwarding</a>
+                </li>
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-5-7-articles" data-toggle="collapse" aria-controls="docs-docs-5-7-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;Guides &amp; Tutorials&quot;,&quot;aN&quot;:&quot;Debugging &amp; Testing&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Guides &amp; Tutorials</a>
+              <ul id="docs-docs-5-7-articles" class="collapse">
+
+                <li>
+                  <a href="/docs/agents/guides/fix-a-bug-with-agents" data-m='{&quot;cN&quot;:&quot;Fix an API Bug&quot;,&quot;aN&quot;:&quot;Debugging &amp; Testing - Guides &amp; Tutorials&quot;}'>Fix an API Bug</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/guides/test-code-with-ai" data-m='{&quot;cN&quot;:&quot;Add Tests&quot;,&quot;aN&quot;:&quot;Debugging &amp; Testing - Guides &amp; Tutorials&quot;}'>Add Tests</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/guides/test-driven-development-guide" data-m='{&quot;cN&quot;:&quot;Test-Driven Development&quot;,&quot;aN&quot;:&quot;Debugging &amp; Testing - Guides &amp; Tutorials&quot;}'>Test-Driven Development</a>
+                </li>
+
+                <li>
+                  <a href="/docs/agents/guides/browser-agent-testing-guide" data-m='{&quot;cN&quot;:&quot;Test Web Apps&quot;,&quot;aN&quot;:&quot;Debugging &amp; Testing - Guides &amp; Tutorials&quot;}'>Test Web Apps</a>
+                </li>
+
+              </ul>
+            </li>
+
+              </ul>
+            </li>
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-6-articles" data-parent="#main-nav" data-toggle="collapse" aria-controls="docs-docs-6-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;Enterprise&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Enterprise</a>
+              <ul id="docs-docs-6-articles" class="collapse">
+
+                <li>
+                  <a href="/docs/enterprise/overview" data-m='{&quot;cN&quot;:&quot;Overview&quot;,&quot;aN&quot;:&quot;Enterprise&quot;}'>Overview</a>
+                </li>
+
+                <li>
+                  <a href="/docs/enterprise/deployment" data-m='{&quot;cN&quot;:&quot;Deploy to Managed Devices&quot;,&quot;aN&quot;:&quot;Enterprise&quot;}'>Deploy to Managed Devices</a>
+                </li>
+
+                <li>
+                  <a href="/docs/enterprise/manage-ai-settings" data-m='{&quot;cN&quot;:&quot;Manage AI Settings&quot;,&quot;aN&quot;:&quot;Enterprise&quot;}'>Manage AI Settings</a>
+                </li>
+
+                <li>
+                  <a href="/docs/enterprise/policies" data-m='{&quot;cN&quot;:&quot;Enterprise Policies&quot;,&quot;aN&quot;:&quot;Enterprise&quot;}'>Enterprise Policies</a>
+                </li>
+
+                <li>
+                  <a href="/docs/enterprise/extensions" data-m='{&quot;cN&quot;:&quot;Extensions&quot;,&quot;aN&quot;:&quot;Enterprise&quot;}'>Extensions</a>
+                </li>
+
+                <li>
+                  <a href="/docs/enterprise/telemetry" data-m='{&quot;cN&quot;:&quot;Telemetry&quot;,&quot;aN&quot;:&quot;Enterprise&quot;}'>Telemetry</a>
+                </li>
+
+                <li>
+                  <a href="/docs/enterprise/updates" data-m='{&quot;cN&quot;:&quot;Updates&quot;,&quot;aN&quot;:&quot;Enterprise&quot;}'>Updates</a>
+                </li>
+
+                <li>
+                  <a href="/docs/setup/network" data-m='{&quot;cN&quot;:&quot;Network Configuration&quot;,&quot;aN&quot;:&quot;Enterprise&quot;}'>Network Configuration</a>
+                </li>
+
+                <li>
+                  <a href="/docs/enterprise/troubleshooting" data-m='{&quot;cN&quot;:&quot;Troubleshoot Managed Deployments&quot;,&quot;aN&quot;:&quot;Enterprise&quot;}'>Troubleshoot Managed Deployments</a>
+                </li>
+
+              </ul>
+            </li>
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-7-articles" data-parent="#main-nav" data-toggle="collapse" aria-controls="docs-docs-7-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;Remote&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Remote</a>
+              <ul id="docs-docs-7-articles" class="collapse">
+
+                <li>
+                  <a href="/docs/remote/remote-overview" data-m='{&quot;cN&quot;:&quot;Overview&quot;,&quot;aN&quot;:&quot;Remote&quot;}'>Overview</a>
+                </li>
+
+                <li>
+                  <a href="/docs/remote/vscode-web" data-m='{&quot;cN&quot;:&quot;VS Code for the Web&quot;,&quot;aN&quot;:&quot;Remote&quot;}'>VS Code for the Web</a>
+                </li>
+
+                <li>
+                  <a href="/docs/remote/ssh" data-m='{&quot;cN&quot;:&quot;SSH&quot;,&quot;aN&quot;:&quot;Remote&quot;}'>SSH</a>
+                </li>
+
+                <li>
+                  <a href="/docs/remote/ssh-tutorial" data-m='{&quot;cN&quot;:&quot;SSH Tutorial&quot;,&quot;aN&quot;:&quot;Remote&quot;}'>SSH Tutorial</a>
+                </li>
+
+                <li>
+                  <a href="/docs/remote/tunnels" data-m='{&quot;cN&quot;:&quot;Tunnels&quot;,&quot;aN&quot;:&quot;Remote&quot;}'>Tunnels</a>
+                </li>
+
+                <li>
+                  <a href="/docs/remote/dev-containers" data-m='{&quot;cN&quot;:&quot;Dev Containers&quot;,&quot;aN&quot;:&quot;Remote&quot;}'>Dev Containers</a>
+                </li>
+
+                <li>
+                  <a href="/docs/remote/wsl" data-m='{&quot;cN&quot;:&quot;WSL&quot;,&quot;aN&quot;:&quot;Remote&quot;}'>WSL</a>
+                </li>
+
+                <li>
+                  <a href="/docs/remote/wsl-tutorial" data-m='{&quot;cN&quot;:&quot;WSL Tutorial&quot;,&quot;aN&quot;:&quot;Remote&quot;}'>WSL Tutorial</a>
+                </li>
+
+                <li>
+                  <a href="/docs/remote/codespaces" data-m='{&quot;cN&quot;:&quot;GitHub Codespaces&quot;,&quot;aN&quot;:&quot;Remote&quot;}'>GitHub Codespaces</a>
+                </li>
+
+                <li>
+                  <a href="/docs/remote/vscode-server" data-m='{&quot;cN&quot;:&quot;VS Code Server&quot;,&quot;aN&quot;:&quot;Remote&quot;}'>VS Code Server</a>
+                </li>
+
+                <li>
+                  <a href="/docs/remote/linux" data-m='{&quot;cN&quot;:&quot;Linux Prerequisites&quot;,&quot;aN&quot;:&quot;Remote&quot;}'>Linux Prerequisites</a>
+                </li>
+
+                <li>
+                  <a href="/docs/remote/troubleshooting" data-m='{&quot;cN&quot;:&quot;Tips and Tricks&quot;,&quot;aN&quot;:&quot;Remote&quot;}'>Tips and Tricks</a>
+                </li>
+
+                <li>
+                  <a href="/docs/remote/faq" data-m='{&quot;cN&quot;:&quot;FAQ&quot;,&quot;aN&quot;:&quot;Remote&quot;}'>FAQ</a>
+                </li>
+
+              </ul>
+            </li>
+
+            <li class="panel collapsed">
+              <a class="area" role="button" href="#docs-docs-8-articles" data-parent="#main-nav" data-toggle="collapse" aria-controls="docs-docs-8-articles" aria-expanded="false" data-m='{&quot;cN&quot;:&quot;Advanced Setup&quot;,&quot;cT&quot;:&quot;toggle&quot;}'>Advanced Setup</a>
+              <ul id="docs-docs-8-articles" class="collapse">
+
+                <li>
+                  <a href="/docs/setup/copilot" data-m='{&quot;cN&quot;:&quot;GitHub Copilot Setup&quot;,&quot;aN&quot;:&quot;Advanced Setup&quot;}'>GitHub Copilot Setup</a>
+                </li>
+
+                <li>
+                  <a href="/docs/setup/linux" data-m='{&quot;cN&quot;:&quot;Linux&quot;,&quot;aN&quot;:&quot;Advanced Setup&quot;}'>Linux</a>
+                </li>
+
+                <li>
+                  <a href="/docs/setup/mac" data-m='{&quot;cN&quot;:&quot;macOS&quot;,&quot;aN&quot;:&quot;Advanced Setup&quot;}'>macOS</a>
+                </li>
+
+                <li>
+                  <a href="/docs/setup/windows" data-m='{&quot;cN&quot;:&quot;Windows&quot;,&quot;aN&quot;:&quot;Advanced Setup&quot;}'>Windows</a>
+                </li>
+
+                <li>
+                  <a href="/docs/setup/raspberry-pi" data-m='{&quot;cN&quot;:&quot;Raspberry Pi&quot;,&quot;aN&quot;:&quot;Advanced Setup&quot;}'>Raspberry Pi</a>
+                </li>
+
+                <li>
+                  <a href="/docs/setup/network" data-m='{&quot;cN&quot;:&quot;Network&quot;,&quot;aN&quot;:&quot;Advanced Setup&quot;}'>Network</a>
+                </li>
+
+                <li>
+                  <a href="/docs/setup/portable" data-m='{&quot;cN&quot;:&quot;Portable Mode&quot;,&quot;aN&quot;:&quot;Advanced Setup&quot;}'>Portable Mode</a>
+                </li>
+
+                <li>
+                  <a href="/docs/setup/additional-components" data-m='{&quot;cN&quot;:&quot;Additional Components&quot;,&quot;aN&quot;:&quot;Advanced Setup&quot;}'>Additional Components</a>
+                </li>
+
+                <li>
+                  <a href="/docs/setup/uninstall" data-m='{&quot;cN&quot;:&quot;Uninstall&quot;,&quot;aN&quot;:&quot;Advanced Setup&quot;}'>Uninstall</a>
+                </li>
+
+              </ul>
+            </li>
+
+                <li>
+                  <a class="area" href="/docs/languages/overview" data-m='{&quot;cN&quot;:&quot;Languages &amp; Runtimes&quot;}'>Languages &amp; Runtimes</a>
+                </li>
+
+                <li>
+                  <a class="area" href="/docs/extension-docs/overview" data-m='{&quot;cN&quot;:&quot;Extension Docs&quot;}'>Extension Docs</a>
+                </li>
+
+              </ul>
+            </nav>
+            <nav id="small-nav" aria-label="Topics" class="docs-nav hidden-md hidden-lg">
+              <label class="faux-h4" for="small-nav-dropdown">Topics</label>
+              <select id="small-nav-dropdown" aria-label="topics">
+
+
+                <option value="/docs">Overview</option>
+
+                <optgroup label="Get Started">
+                <option value="/docs/getstarted/overview">Download and Install</option>
+
+                <option value="/docs/getstarted/what-is-vscode">Get to Know VS Code</option>
+
+                <option value="/docs/agents/quickstart">Agents Quickstart</option>
+
+                <option value="/docs/editing/getting-started/editor-tutorial">Editor Tutorial</option>
+
+                <option value="/docs/getstarted/introvideos">Intro Videos</option>
+            </optgroup><optgroup label="AI in VS Code">
+                <option value="/docs/agents/overview">Overview</option>
+            <option disabled>Get Started</option>
+                <option value="/docs/agents/guides/overview">    Find a Guide</option>
+
+                <option value="/docs/agents/reference/ai-features-cheat-sheet">    AI Features Cheat Sheet</option>
+
+                <option value="/docs/setup/copilot">    Set Up GitHub Copilot</option>
+
+                <option value="/docs/agents/quickstart">    Agents Quickstart</option>
+
+                <option value="/docs/agents/agents-tutorial">    Agents Tutorial</option>
+
+                <option value="/docs/agents/best-practices">    Best Practices</option>
+            <option disabled>Work with AI</option>
+                <option value="/docs/editing/ai-powered-suggestions">    Inline Suggestions</option>
+
+                <option value="/docs/editing/copilot-smart-actions">    Smart Actions</option>
+
+                <option value="/docs/agents/run/chat-view">    Use the Chat View</option>
+
+                <option value="/docs/agents/run/agents-window">    Agents Window</option>
+
+                <option value="/docs/agents/run/worktrees">    Work with Agents in Worktrees</option>
+
+                <option value="/docs/chat/inline-chat">    Inline Chat and Quick Chat</option>
+
+                <option value="/docs/chat/chat-overview">    Chat Messages and Responses</option>
+
+                <option value="/docs/agents/run/canvases">    Canvases</option>
+
+                <option value="/docs/chat/copilot-chat-context">    Add Prompt Context</option>
+
+                <option value="/docs/agents/run/review-code-edits">    Review and Undo Changes</option>
+
+                <option value="/docs/agents/run/agents-window-configuration">    Configure the Agents Window</option>
+            <option disabled>    Plan and Run Tasks</option>
+                <option value="/docs/agents/run/planning">        Plan Work</option>
+
+                <option value="/docs/agents/run/tools">        Use Tools</option>
+
+                <option value="/docs/agents/run/browser-tools">        Use Browser Tools</option>
+
+                <option value="/docs/agents/run/subagents">        Use Subagents</option>
+
+                <option value="/docs/agents/run/automations">        Automations</option>
+            <option disabled>    Sessions</option>
+                <option value="/docs/agents/run/sessions/manage-sessions">        Manage Sessions</option>
+
+                <option value="/docs/agents/run/sessions/organize-sessions">        Organize and Triage Sessions</option>
+
+                <option value="/docs/agents/run/memory">        Memory</option>
+
+                <option value="/docs/agents/run/artifacts">        Artifacts</option>
+            <option disabled>    Permissions and Security</option>
+                <option value="/docs/agents/run/approvals">        Approvals and Permissions</option>
+
+                <option value="/docs/agents/run/agent-sandboxing">        Configure Agent Sandboxing</option>
+
+                <option value="/docs/agents/run/security">        Secure Development with AI</option>
+            <option disabled>Choose Models and Agents</option>
+                <option value="/docs/agent-customization/language-models">    Choose and Configure Models</option>
+
+                <option value="/docs/agents/run/agent-harnesses">    Choose an Agent Harness</option>
+
+                <option value="/docs/agents/run/move-to-copilot">    Move from Local to Copilot</option>
+
+                <option value="/docs/agents/run/compare-models">    Compare Models Side by Side</option>
+
+                <option value="/docs/agents/guides/choose-a-model">    Guide: Choose the Right Model</option>
+            <option disabled>Customize and Extend</option>
+                <option value="/docs/agent-customization/overview">    Overview</option>
+
+                <option value="/docs/agent-customization/agent-plugins">    Agent Plugins</option>
+
+                <option value="/docs/agent-customization/agent-skills">    Agent Skills</option>
+
+                <option value="/docs/agent-customization/custom-instructions">    Custom Instructions</option>
+
+                <option value="/docs/agent-customization/custom-agents">    Custom Agents</option>
+
+                <option value="/docs/agent-customization/copilot-connectors">    Copilot Connectors</option>
+
+                <option value="/docs/agent-customization/mcp-servers">    Add and Use MCP Servers</option>
+
+                <option value="/docs/agents/run/manage-mcp-servers">    Manage MCP Servers</option>
+
+                <option value="/docs/agent-customization/hooks">    Agent Hooks</option>
+
+                <option value="/docs/agent-customization/prompt-files">    Prompt Files</option>
+
+                <option value="/docs/agent-customization/migrate-customizations">    Migrate Existing Customizations</option>
+            <option disabled>Work Across Apps and Machines</option>
+                <option value="/docs/agents/cloud-continuity-tutorial">    Tutorial: Agent Continuity</option>
+
+                <option value="/docs/agents/run/remote-agent-sessions">    Remote Agent Sessions</option>
+
+                <option value="/docs/agents/run/cloud-sandbox-sessions">    Cloud Sessions</option>
+
+                <option value="/docs/agents/run/sessions/session-history">    Session History</option>
+            <option disabled>Tutorials and Guides</option>
+                <option value="/docs/agents/guides/overview">    Find a Guide</option>
+
+                <option value="/docs/agents/guides/explore-a-codebase">    Explore a Codebase</option>
+
+                <option value="/docs/agents/guides/add-a-feature">    Add a Feature</option>
+
+                <option value="/docs/agents/guides/fix-a-bug-with-agents">    Fix an API Bug</option>
+
+                <option value="/docs/agents/guides/refactor-safely">    Refactor Safely</option>
+
+                <option value="/docs/agents/guides/choose-a-model">    Compare and Choose Models</option>
+
+                <option value="/docs/agents/guides/test-code-with-ai">    Add Tests</option>
+
+                <option value="/docs/agents/guides/browser-agent-testing-guide">    Test Web Apps</option>
+
+                <option value="/docs/agents/guides/test-driven-development-guide">    Test-Driven Development</option>
+
+                <option value="/docs/agents/guides/delegate-two-tasks">    Run Parallel Tasks</option>
+
+                <option value="/docs/agents/guides/get-agent-back-on-track">    Get Back on Track</option>
+
+                <option value="/docs/agents/guides/customize-copilot-guide">    Adapt Agents to Your Project</option>
+
+                <option value="/docs/agents/guides/context-engineering-guide">    Context Engineering Workflow</option>
+
+                <option value="/docs/agents/guides/notebooks-with-ai">    Work with Jupyter Notebooks</option>
+
+                <option value="/docs/agents/guides/optimize-usage">    Reduce Credit Usage</option>
+
+                <option value="/docs/agents/guides/prompt-examples">    Prompt Examples</option>
+            <option disabled>Concepts</option>
+                <option value="/docs/agents/concepts/agents">    Agents</option>
+
+                <option value="/docs/agents/concepts/language-models">    How Models Work</option>
+
+                <option value="/docs/agents/concepts/context">    Context</option>
+
+                <option value="/docs/agents/concepts/tools">    Tools</option>
+
+                <option value="/docs/agents/concepts/sessions">    Sessions and Chats</option>
+
+                <option value="/docs/agents/concepts/trust-and-safety">    Trust and Safety</option>
+
+                <option value="/docs/agents/concepts/agent-harnesses">    Agent Harnesses</option>
+
+                <option value="/docs/agents/concepts/customization">    Agent Customization</option>
+            <option disabled>Reference and Help</option><option disabled>    Reference</option>
+                <option value="/docs/agents/reference/ai-features-cheat-sheet">        AI Features Cheat Sheet</option>
+
+                <option value="/docs/agents/reference/tools-reference">        Tool Names and Context References</option>
+
+                <option value="/docs/agents/reference/workspace-context">        Workspace Context</option>
+
+                <option value="/docs/agents/reference/ai-settings">        AI Settings</option>
+
+                <option value="/docs/agents/reference/chat-pet">        VS Code Pet</option>
+
+                <option value="/docs/agents/reference/custom-agent-file-reference">        Custom Agent File Reference</option>
+
+                <option value="/docs/agents/reference/custom-instructions-reference">        Custom Instructions Reference</option>
+
+                <option value="/docs/agents/reference/agent-plugin-reference">        Agent Plugin Authoring Reference</option>
+
+                <option value="/docs/agents/reference/mcp-configuration">        MCP Configuration</option>
+
+                <option value="/docs/agents/reference/hooks-reference">        Hooks Reference</option>
+
+                <option value="/docs/agents/guides/monitoring-agents">        OpenTelemetry Monitoring</option>
+
+                <option value="/docs/agents/concepts/agent-host">        Agent Host Architecture</option>
+            <option disabled>    Troubleshooting</option>
+                <option value="/docs/agents/agent-troubleshooting/troubleshooting">        Troubleshooting</option>
+
+                <option value="/docs/agents/agent-troubleshooting/chat-debug-view">        Debug Chat Interactions</option>
+
+                <option value="/docs/agents/agent-troubleshooting/cache-explorer">        Diagnose Prompt Caching</option>
+
+                <option value="/docs/agents/agent-troubleshooting/faq">        FAQ</option>
+            </optgroup><optgroup label="Editor">
+                <option value="/docs/editing/getting-started/overview">Overview</option>
+            <option disabled>Getting Started</option>
+                <option value="/docs/editing/getting-started/editor-tutorial">    Editor Tutorial</option>
+
+                <option value="/docs/editing/getting-started/userinterface">    User Interface</option>
+
+                <option value="/docs/editing/getting-started/tips-and-tricks">    Tips and Tricks</option>
+            <option disabled>Write code</option>
+                <option value="/docs/editing/codebasics">    Basic Editing</option>
+
+                <option value="/docs/editing/intellisense">    IntelliSense</option>
+
+                <option value="/docs/editing/ai-powered-suggestions">    Inline Suggestions</option>
+
+                <option value="/docs/editing/copilot-smart-actions">    Smart Actions</option>
+
+                <option value="/docs/editing/editingevolved">    Code Navigation</option>
+
+                <option value="/docs/editing/refactoring">    Refactoring</option>
+
+                <option value="/docs/editing/userdefinedsnippets">    Snippets</option>
+            <option disabled>    Workspaces</option>
+                <option value="/docs/editing/workspaces/workspaces">        Overview</option>
+
+                <option value="/docs/editing/workspaces/multi-root-workspaces">        Multi-Root Workspaces</option>
+
+                <option value="/docs/editing/workspaces/workspace-trust">        Workspace Trust</option>
+            <option disabled>Configure the editor</option>
+                <option value="/docs/configure/locales">    Display Language</option>
+
+                <option value="/docs/configure/custom-layout">    Layout</option>
+
+                <option value="/docs/configure/keybindings">    Keyboard Shortcuts</option>
+
+                <option value="/docs/configure/settings" selected>    Settings</option>
+
+                <option value="/docs/configure/settings-sync">    Settings Sync</option>
+            <option disabled>    Extensions</option>
+                <option value="/docs/configure/extensions/extensions">        Overview</option>
+
+                <option value="/docs/configure/extensions/extension-marketplace">        Extension Marketplace</option>
+
+                <option value="/docs/configure/extensions/extension-runtime-security">        Extension Runtime Security</option>
+
+                <option value="/docs/configure/themes">    Themes</option>
+
+                <option value="/docs/configure/profiles">    Profiles</option>
+            <option disabled>    Accessibility</option>
+                <option value="/docs/configure/accessibility/accessibility">        Overview</option>
+
+                <option value="/docs/configure/accessibility/voice">        Voice Interactions</option>
+
+                <option value="/docs/configure/command-line">    Command Line Interface</option>
+
+                <option value="/docs/configure/telemetry">    Telemetry</option>
+            <option disabled>Reference</option>
+                <option value="/docs/reference/default-keybindings">    Default Keyboard Shortcuts</option>
+
+                <option value="/docs/reference/default-settings">    Default Settings</option>
+
+                <option value="/docs/reference/variables-reference">    Substitution Variables</option>
+
+                <option value="/docs/reference/tasks-appendix">    Tasks Schema</option>
+            </optgroup><optgroup label="Source Control">
+                <option value="/docs/sourcecontrol/overview">Overview</option>
+
+                <option value="/docs/sourcecontrol/quickstart">Quickstart</option>
+
+                <option value="/docs/sourcecontrol/repos-remotes">Repositories &amp; Remotes</option>
+
+                <option value="/docs/sourcecontrol/staging-commits">Staging, Commits &amp; Undo</option>
+
+                <option value="/docs/sourcecontrol/history">History &amp; Blame</option>
+
+                <option value="/docs/sourcecontrol/branches-worktrees">Branches, Stashes &amp; Worktrees</option>
+
+                <option value="/docs/sourcecontrol/merge-conflicts">Merge Conflicts</option>
+
+                <option value="/docs/sourcecontrol/github">Collaborate on GitHub</option>
+
+                <option value="/docs/sourcecontrol/troubleshooting">Troubleshooting</option>
+
+                <option value="/docs/sourcecontrol/faq">FAQ</option>
+            </optgroup><optgroup label="Terminal">
+                <option value="/docs/terminal/getting-started">Get Started</option>
+
+                <option value="/docs/terminal/basics">Terminal Basics</option>
+
+                <option value="/docs/terminal/profiles">Terminal Profiles</option>
+
+                <option value="/docs/terminal/shell-integration">Shell Integration</option>
+
+                <option value="/docs/terminal/appearance">Appearance</option>
+
+                <option value="/docs/terminal/advanced">Advanced</option>
+            </optgroup><optgroup label="Debugging &amp; Testing">
+                <option value="/docs/debugtest/debugging">Debugging</option>
+
+                <option value="/docs/debugtest/quickstart">Debugging Quickstart</option>
+
+                <option value="/docs/debugtest/debugging-configuration">Debug Configuration</option>
+
+                <option value="/docs/debugtest/tasks">Tasks</option>
+
+                <option value="/docs/debugtest/testing">Testing</option>
+
+                <option value="/docs/debugtest/integrated-browser">Integrated Browser</option>
+
+                <option value="/docs/debugtest/port-forwarding">Port Forwarding</option>
+            <option disabled>Guides &amp; Tutorials</option>
+                <option value="/docs/agents/guides/fix-a-bug-with-agents">    Fix an API Bug</option>
+
+                <option value="/docs/agents/guides/test-code-with-ai">    Add Tests</option>
+
+                <option value="/docs/agents/guides/test-driven-development-guide">    Test-Driven Development</option>
+
+                <option value="/docs/agents/guides/browser-agent-testing-guide">    Test Web Apps</option>
+            </optgroup><optgroup label="Enterprise">
+                <option value="/docs/enterprise/overview">Overview</option>
+
+                <option value="/docs/enterprise/deployment">Deploy to Managed Devices</option>
+
+                <option value="/docs/enterprise/manage-ai-settings">Manage AI Settings</option>
+
+                <option value="/docs/enterprise/policies">Enterprise Policies</option>
+
+                <option value="/docs/enterprise/extensions">Extensions</option>
+
+                <option value="/docs/enterprise/telemetry">Telemetry</option>
+
+                <option value="/docs/enterprise/updates">Updates</option>
+
+                <option value="/docs/setup/network">Network Configuration</option>
+
+                <option value="/docs/enterprise/troubleshooting">Troubleshoot Managed Deployments</option>
+            </optgroup><optgroup label="Remote">
+                <option value="/docs/remote/remote-overview">Overview</option>
+
+                <option value="/docs/remote/vscode-web">VS Code for the Web</option>
+
+                <option value="/docs/remote/ssh">SSH</option>
+
+                <option value="/docs/remote/ssh-tutorial">SSH Tutorial</option>
+
+                <option value="/docs/remote/tunnels">Tunnels</option>
+
+                <option value="/docs/remote/dev-containers">Dev Containers</option>
+
+                <option value="/docs/remote/wsl">WSL</option>
+
+                <option value="/docs/remote/wsl-tutorial">WSL Tutorial</option>
+
+                <option value="/docs/remote/codespaces">GitHub Codespaces</option>
+
+                <option value="/docs/remote/vscode-server">VS Code Server</option>
+
+                <option value="/docs/remote/linux">Linux Prerequisites</option>
+
+                <option value="/docs/remote/troubleshooting">Tips and Tricks</option>
+
+                <option value="/docs/remote/faq">FAQ</option>
+            </optgroup><optgroup label="Advanced Setup">
+                <option value="/docs/setup/copilot">GitHub Copilot Setup</option>
+
+                <option value="/docs/setup/linux">Linux</option>
+
+                <option value="/docs/setup/mac">macOS</option>
+
+                <option value="/docs/setup/windows">Windows</option>
+
+                <option value="/docs/setup/raspberry-pi">Raspberry Pi</option>
+
+                <option value="/docs/setup/network">Network</option>
+
+                <option value="/docs/setup/portable">Portable Mode</option>
+
+                <option value="/docs/setup/additional-components">Additional Components</option>
+
+                <option value="/docs/setup/uninstall">Uninstall</option>
+            </optgroup>
+                <option value="/docs/languages/overview">Languages &amp; Runtimes</option>
+
+                <option value="/docs/extension-docs/overview">Extension Docs</option>
+
+              </select>
+            </nav>        </aside>
+
+        <!-- Content wrapper contains main content + right sidebar -->
+        <div class="docs-content-wrapper">
+            <!-- Right sidebar - On This Page -->
+
+            <aside class="docs-right-sidebar hidden-xs">
+                <nav id="docs-subnavbar" aria-label="On Page">
+
+                    <h4><span class="sr-only">On this page there are 14 sections</span><span
+                            aria-hidden="true">On this page</span></h4>
+                    <ul class="nav">
+
+                        <li><a href="#_user-settings">User settings</a></li>
+
+                        <li><a href="#_workspace-settings">Workspace settings</a></li>
+
+                        <li><a href="#_settings-editor">Settings editor</a></li>
+
+                        <li><a href="#_extension-settings">Extension settings</a></li>
+
+                        <li><a href="#_settings-json-file">Settings JSON file</a></li>
+
+                        <li><a href="#_reset-settings">Reset settings</a></li>
+
+                        <li><a href="#_language-specific-editor-settings">Language specific editor settings</a></li>
+
+                        <li><a href="#_profile-settings">Profile settings</a></li>
+
+                        <li><a href="#_settings-precedence">Settings precedence</a></li>
+
+                        <li><a href="#_settings-and-security">Settings and security</a></li>
+
+                        <li><a href="#_settings-sync">Settings Sync</a></li>
+
+                        <li><a href="#_feature-lifecycle">Feature lifecycle</a></li>
+
+                        <li><a href="#_related-resources">Related resources</a></li>
+
+                        <li><a href="#_common-questions">Common questions</a></li>
+
+                    </ul>
+
+                </nav>
+
+
+            </aside>
+
+
+            <!-- Main article content -->
+            <main class="docs-main-content body" data-reading-content>
+
+                <h1>User and workspace settings</h1>
+
+
+
+
+
+
+<div class="docs-markdown-actions" data-vscode-installation-info="both">
+	<div class="docs-markdown-dropdown" data-markdown-url="/docs/configure/settings.md">
+		<button type="button" class="docs-markdown-btn-main" data-action="copy-markdown" aria-label="Copy as Markdown">
+			<span class="codicon codicon-copy" aria-hidden="true"></span>
+			<span>Copy as Markdown</span>
+		</button>
+		<button type="button" class="docs-markdown-btn-trigger" aria-haspopup="menu" aria-expanded="false" aria-label="More page actions">
+			<span class="codicon codicon-chevron-down docs-markdown-chevron" aria-hidden="true"></span>
+		</button>
+		<ul class="docs-markdown-menu" role="menu" aria-label="Page actions">
+			<li role="none">
+				<button type="button" role="menuitem" data-action="copy-markdown">
+					<span class="codicon codicon-copy" aria-hidden="true"></span>
+					<span>Copy as Markdown</span>
+				</button>
+			</li>
+			<li role="none">
+				<a role="menuitem" data-action="view-markdown" href="/docs/configure/settings.md" target="_blank" rel="noopener noreferrer">
+					<span class="codicon codicon-file" aria-hidden="true"></span>
+					<span>View as Markdown</span>
+					<span class="codicon codicon-link-external" aria-hidden="true"></span>
+				</a>
+			</li>
+			<li class="docs-markdown-menu-separator" role="separator"></li>
+			<li role="none">
+				<a role="menuitem" data-action="ask-vscode" data-version="stable" href="vscode://GitHub.Copilot-Chat/chat?prompt=Read%20https%3A%2F%2Fcode.visualstudio.com%2Fdocs%2Fconfigure%2Fsettings%20and%20answer%20questions%20about%20the%20content.&amp;windowId=_blank">
+					<span class="codicon codicon-chat-sparkle" aria-hidden="true"></span>
+					<span>Ask in VS Code</span>
+				</a>
+			</li>
+			<li role="none">
+				<a role="menuitem" data-action="ask-vscode" data-version="insiders" href="vscode-insiders://GitHub.Copilot-Chat/chat?prompt=Read%20https%3A%2F%2Fcode.visualstudio.com%2Fdocs%2Fconfigure%2Fsettings%20and%20answer%20questions%20about%20the%20content.&amp;windowId=_blank">
+					<span class="codicon codicon-chat-sparkle" aria-hidden="true"></span>
+					<span>Ask in VS Code Insiders</span>
+				</a>
+			</li>
+		</ul>
+	</div>
+	<noscript>
+		<a class="docs-page-actions-noscript" href="vscode://GitHub.Copilot-Chat/chat?prompt=Read%20https%3A%2F%2Fcode.visualstudio.com%2Fdocs%2Fconfigure%2Fsettings%20and%20answer%20questions%20about%20the%20content.&amp;windowId=_blank">
+			<span class="codicon codicon-chat-sparkle" aria-hidden="true"></span>
+			<span>Ask in VS Code</span>
+		</a>
+	</noscript>
+</div>
+
+                <hr class="docs-article-header-divider" aria-hidden="true">
+
+
+<p>You can configure Visual Studio Code to your liking through its various settings. Nearly every part of VS Code's editor, user interface, and functional behavior has options you can modify.</p>
+<p>VS Code provides different scopes for settings:</p>
+<ul>
+<li><strong>User settings</strong> - Settings that apply globally to any instance of VS Code you open.</li>
+<li><strong>Workspace settings</strong> - Settings stored inside your workspace and only apply when the workspace is opened.</li>
+</ul>
+<p>VS Code stores setting values in a settings JSON file. You can change settings values either by editing the settings JSON file or by using the <a href="#_settings-editor">Settings editor</a>, which provides a graphical interface to manage settings.</p>
+<h2 id="_user-settings" data-needslink="_user-settings">User settings</h2>
+<p>User settings are your personal settings for customizing VS Code. These settings apply globally to any instance of VS Code you open. For example, if you set the editor font size to 14 in your user settings, it will be 14 in all instances of VS Code on your computer.</p>
+<p>You can access your user settings in a few ways:</p>
+<ul>
+<li>Select the <strong>Preferences: Open User Settings</strong> command in the Command Palette (<span class="dynamic-keybinding" data-commandId="workbench.action.showCommands" data-osx="⇧⌘P" data-win="Ctrl+Shift+P" data-linux="Ctrl+Shift+P"><span class="keybinding">⇧⌘P</span> (Windows, Linux <span class="keybinding">Ctrl+Shift+P</span>)</span>)</li>
+<li>Select the <strong>User</strong> tab in the <a href="#_settings-editor">Settings editor</a> (<span class="dynamic-keybinding" data-commandId="workbench.action.openSettings" data-osx="⌘," data-win="Ctrl+," data-linux="Ctrl+,"><span class="keybinding">⌘,</span> (Windows, Linux <span class="keybinding">Ctrl+,</span>)</span>)</li>
+<li>Select the <strong>Preferences: Open User Settings (JSON)</strong> command in the Command Palette (<span class="dynamic-keybinding" data-commandId="workbench.action.showCommands" data-osx="⇧⌘P" data-win="Ctrl+Shift+P" data-linux="Ctrl+Shift+P"><span class="keybinding">⇧⌘P</span> (Windows, Linux <span class="keybinding">Ctrl+Shift+P</span>)</span>)</li>
+</ul>
+<p><img src="/assets/docs/configure/settings/settings-editor-user-tab.png" alt="Settings editor with User tab highlighted" loading="lazy"></p>
+<h2 id="_workspace-settings" data-needslink="_workspace-settings">Workspace settings</h2>
+<p>Workspace settings are specific to a project and override user settings. If you have specific settings that you want to apply to a specific project, you can use workspace settings. For example, for a backend server project, you might want to set the <code>files.exclude</code> setting to exclude the <code>node_modules</code> folder from the File Explorer.</p>
+<div class="markdown-alert note" dir="auto">
+      <span>
+        <svg class="markdown-alert-icon" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true">
+          <path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm8-6.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM6.5 7.75A.75.75 0 0 1 7.25 7h1a.75.75 0 0 1 .75.75v2.75h.25a.75.75 0 0 1 0 1.5h-2a.75.75 0 0 1 0-1.5h.25v-2h-.25a.75.75 0 0 1-.75-.75ZM8 6a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z">
+          </path>
+        </svg>
+        Note
+      </span><p>A VS Code &quot;workspace&quot; is usually just your project root folder. You can also have more than one root folder in a VS Code workspace through a feature called <a href="/docs/editing/workspaces/multi-root-workspaces">Multi-root workspaces</a>. Get more info about <a href="/docs/editing/workspaces/workspaces">VS Code workspaces</a>.</p>
+</div><p>VS Code stores workspace settings at the root of the project in a <code>.vscode</code> folder. This makes it easy to share settings with others in a version-controlled (for example, Git) project.</p>
+<p>You can access the workspace settings in a few ways:</p>
+<ul>
+<li>Select the <strong>Preferences: Open Workspace Settings</strong> command in the Command Palette (<span class="dynamic-keybinding" data-commandId="workbench.action.showCommands" data-osx="⇧⌘P" data-win="Ctrl+Shift+P" data-linux="Ctrl+Shift+P"><span class="keybinding">⇧⌘P</span> (Windows, Linux <span class="keybinding">Ctrl+Shift+P</span>)</span>)</li>
+<li>Select the <strong>Workspace</strong> tab in the <a href="#_settings-editor">Settings editor</a> (<span class="dynamic-keybinding" data-commandId="workbench.action.openSettings" data-osx="⌘," data-win="Ctrl+," data-linux="Ctrl+,"><span class="keybinding">⌘,</span> (Windows, Linux <span class="keybinding">Ctrl+,</span>)</span>)</li>
+<li>Select the <strong>Preferences: Open Workspace Settings (JSON)</strong> command in the Command Palette (<span class="dynamic-keybinding" data-commandId="workbench.action.showCommands" data-osx="⇧⌘P" data-win="Ctrl+Shift+P" data-linux="Ctrl+Shift+P"><span class="keybinding">⇧⌘P</span> (Windows, Linux <span class="keybinding">Ctrl+Shift+P</span>)</span>)</li>
+</ul>
+<p><img src="/assets/docs/configure/settings/settings-editor-workspace-tab.png" alt="Settings editor with Workspace tab highlighted" loading="lazy"></p>
+<p>Not all user settings are available as workspace settings. For example, application-wide settings related to updates and security can not be overridden by Workspace settings.</p>
+<h2 id="_settings-editor" data-needslink="_settings-editor">Settings editor</h2>
+<p>The Settings editor provides a graphical interface to manage both user and workspace settings. To open the Settings editor, navigate to <span class="filePreferencesPath"><strong>File</strong> &gt; <strong>Preferences</strong></span> &gt; <strong>Settings</strong>. Alternately, open the Settings editor from the <strong>Command Palette</strong> (<span class="dynamic-keybinding" data-commandId="workbench.action.showCommands" data-osx="⇧⌘P" data-win="Ctrl+Shift+P" data-linux="Ctrl+Shift+P"><span class="keybinding">⇧⌘P</span> (Windows, Linux <span class="keybinding">Ctrl+Shift+P</span>)</span>) with <strong>Preferences: Open Settings</strong> or use the keyboard shortcut (<span class="dynamic-keybinding" data-commandId="workbench.action.openSettings" data-osx="⌘," data-win="Ctrl+," data-linux="Ctrl+,"><span class="keybinding">⌘,</span> (Windows, Linux <span class="keybinding">Ctrl+,</span>)</span>).</p>
+<p>By default, the Settings editor opens in a <a href="/docs/editing/getting-started/userinterface#_modal-editors">modal overlay</a> on top of the editor area. You can change this behavior with the <span class="setting"><span class="setting-dropdown" data-setting-id="workbench.editor.useModal" data-vscode-installation-info="both">
+    <span class="setting-link-main">
+      <span class="codicon codicon-settings-gear dynamic-setting-icon"></span>
+      workbench.editor.useModal
+
+    </span>
+    <button
+      type="button"
+      class="setting-dropdown-trigger"
+      data-vscode-installation-info-action
+      aria-haspopup="menu"
+      aria-expanded="false"
+      aria-label="Open setting in VS Code">
+        <svg class="setting-dropdown-chevron" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <path d="M7.976 10.072l4.357-4.357.62.618L8.284 11h-.618L3 6.333l.619-.618 4.357 4.357z"/>
+        </svg>
+    </button>
+    <span class="setting-dropdown-menu" role="menu" aria-label="Open setting">
+      <span role="menuitem" class="setting-action-item" data-vscode-installation-info-action data-version="stable" tabindex="0">Open in VS Code</span>
+      <span role="menuitem" class="setting-action-item" data-vscode-installation-info-action data-version="insiders" tabindex="-1">Open in VS Code Insiders</span>
+    </span>
+  </span></span> setting. When you open the Settings JSON file, it opens as a regular editor tab in the main window.</p>
+<p>When you open the Settings editor, you can search and discover the settings you are looking for. When you search using the search bar, the Settings editor filters the settings to only show those that match your criteria. This makes finding settings quick and easy.</p>
+<p><img src="/assets/docs/configure/settings/settings-search.png" alt="Filtering settings by searching in the Settings editor" loading="lazy"></p>
+<p>VS Code applies changes to settings directly as you change them. You can identify settings that you modified by the colored bar on the left of the setting, similar to modified lines in the editor.</p>
+<p>In the example below, the Side Bar location and File Icon Theme were changed.</p>
+<p><img src="/assets/docs/configure/settings/settings-modified.png" alt="Modified settings in the Settings editor showing blue vertical bars to the left of them" loading="lazy"></p>
+<p>The gear icon alongside the setting (<span class="dynamic-keybinding" data-commandId="settings.action.showContextMenu" data-osx="⇧F9" data-win="Shift+F9" data-linux="Shift+F9"><span class="keybinding">⇧F9</span> (Windows, Linux <span class="keybinding">Shift+F9</span>)</span>) opens a context menu with options to reset a setting to its default value, and to copy the setting ID, copy a JSON name-value pair, or copy the settings URL.</p>
+<p><img src="/assets/docs/configure/settings/more-actions-context-menu.png" alt="Settings edit gear context menu" loading="lazy"></p>
+<div class="markdown-alert tip" dir="auto">
+      <span>
+        <svg class="markdown-alert-icon" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true">
+          <path d="M8 1.5c-2.363 0-4 1.69-4 3.75 0 .984.424 1.625.984 2.304l.214.253c.223.264.47.556.673.848.284.411.537.896.621 1.49a.75.75 0 0 1-1.484.211c-.04-.282-.163-.547-.37-.847a8.456 8.456 0 0 0-.542-.68c-.084-.1-.173-.205-.268-.32C3.201 7.75 2.5 6.766 2.5 5.25 2.5 2.31 4.863 0 8 0s5.5 2.31 5.5 5.25c0 1.516-.701 2.5-1.328 3.259-.095.115-.184.22-.268.319-.207.245-.383.453-.541.681-.208.3-.33.565-.37.847a.751.751 0 0 1-1.485-.212c.084-.593.337-1.078.621-1.489.203-.292.45-.584.673-.848.075-.088.147-.173.213-.253.561-.679.985-1.32.985-2.304 0-2.06-1.637-3.75-4-3.75ZM5.75 12h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1 0-1.5ZM6 15.25a.75.75 0 0 1 .75-.75h2.5a.75.75 0 0 1 0 1.5h-2.5a.75.75 0 0 1-.75-.75Z">
+          </path>
+        </svg>
+        Tip
+      </span><p>A settings URL enables you to navigate directly to a specific setting in the Settings editor from the browser. The URL is in the format <code>vscode://settings/&lt;settingName&gt;</code>, where <code>&lt;settingName&gt;</code> is the ID of the setting you want to navigate to. For example, to navigate to the <code>workbench.colorTheme</code> setting, use the URL <code>vscode://settings/workbench.colorTheme</code>.</p>
+</div><h3 id="_settings-groups" data-needslink="_settings-groups">Settings groups</h3>
+<p>Settings are represented in groups, so that you can navigate to related settings quickly. There is a <strong>Commonly Used</strong> group at the top, which shows popular customization settings.</p>
+<p>In the following example, the source control settings are focused by selecting <strong>Source Control</strong> in the tree view.</p>
+<p><img src="/assets/docs/configure/settings/settings-groups.png" alt="Settings editor with the Source Control section of the table of contents selected" loading="lazy"></p>
+<div class="markdown-alert note" dir="auto">
+      <span>
+        <svg class="markdown-alert-icon" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true">
+          <path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm8-6.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM6.5 7.75A.75.75 0 0 1 7.25 7h1a.75.75 0 0 1 .75.75v2.75h.25a.75.75 0 0 1 0 1.5h-2a.75.75 0 0 1 0-1.5h.25v-2h-.25a.75.75 0 0 1-.75-.75ZM8 6a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z">
+          </path>
+        </svg>
+        Note
+      </span><p>VS Code extensions can also add their own custom settings, and those settings are visible under an <strong>Extensions</strong> section.</p>
+</div><h3 id="_settings-editor-filters" data-needslink="_settings-editor-filters">Settings editor filters</h3>
+<p>The Settings editor search bar has several filters to make it easier to manage your settings. To the right of the search bar is a filter button with a funnel icon that provides options to easily add a filter to the search bar.</p>
+<h4 id="_modified-settings" data-needslink="_modified-settings">Modified settings</h4>
+<p>To check which settings you have configured, there is a <code>@modified</code> filter in the search bar. A setting shows up under this filter if its value differs from the default value, or if its value is explicitly set in the respective settings JSON file.</p>
+<p>This filter can be useful if you have forgotten whether you configured a setting, or if the editor is not behaving as you expect because you accidentally configured a setting.</p>
+<p><img src="/assets/docs/configure/settings/modified-filter-settings.png" alt="Settings editor with @modified filter showing changed settings" loading="lazy"></p>
+<h4 id="_other-filters" data-needslink="_other-filters">Other filters</h4>
+<p>There are several other handy filters to help with searching through settings. Type the <code>@</code> symbol in the search bar to discover the different filters.</p>
+<p><img src="/assets/docs/configure/settings/settings-editor-filters.png" alt="Setting editor @ tag filter dropdown" loading="lazy"></p>
+<p>Here are some of the filters available:</p>
+<ul>
+<li><code>@ext</code>: settings specific to an extension. You provide the extension ID such as <code>@ext:ms-python.python</code>.</li>
+<li><code>@feature</code>: settings specific to a <strong>Features</strong> subgroup. For example, <code>@feature:explorer</code> shows settings of the File Explorer.</li>
+<li><code>@haspolicy</code>: settings that are controlled by your <a href="/docs/enterprise/policies">organization</a>.</li>
+<li><code>@id</code>: find a setting based on the setting ID. For example, <code>@id:workbench.activityBar.visible</code>.</li>
+<li><code>@lang</code>: apply a language filter based on a language ID. For example, <code>@lang:typescript</code>. See <a href="#_language-specific-editor-settings">Language-specific editor settings</a> for more details.</li>
+<li><code>@tag</code>: settings specific to a system of VS Code. For example, <code>@tag:workspaceTrust</code> for settings related to <a href="/docs/editing/workspaces/workspace-trust">Workspace Trust</a>, <code>@tag:accessibility</code> for settings related to accessibility, or <code>@tag:advanced</code> for advanced VS Code settings. Advanced settings are intended for specialized scenarios. By default, advanced settings are hidden from search results unless you use the <code>@tag:advanced</code> filter. To always show advanced settings in the Settings editor, enable <span class="setting"><span class="setting-dropdown" data-setting-id="workbench.settings.alwaysShowAdvancedSettings" data-vscode-installation-info="both">
+    <span class="setting-link-main">
+      <span class="codicon codicon-settings-gear dynamic-setting-icon"></span>
+      workbench.settings.alwaysShowAdvancedSettings
+
+    </span>
+    <button
+      type="button"
+      class="setting-dropdown-trigger"
+      data-vscode-installation-info-action
+      aria-haspopup="menu"
+      aria-expanded="false"
+      aria-label="Open setting in VS Code">
+        <svg class="setting-dropdown-chevron" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <path d="M7.976 10.072l4.357-4.357.62.618L8.284 11h-.618L3 6.333l.619-.618 4.357 4.357z"/>
+        </svg>
+    </button>
+    <span class="setting-dropdown-menu" role="menu" aria-label="Open setting">
+      <span role="menuitem" class="setting-action-item" data-vscode-installation-info-action data-version="stable" tabindex="0">Open in VS Code</span>
+      <span role="menuitem" class="setting-action-item" data-vscode-installation-info-action data-version="insiders" tabindex="-1">Open in VS Code Insiders</span>
+    </span>
+  </span></span>.</li>
+</ul>
+<p>The search bar remembers your settings search queries and supports undo or redo (<span class="dynamic-keybinding" data-commandId="undo" data-osx="⌘Z" data-win="Ctrl+Z" data-linux="Ctrl+Z"><span class="keybinding">⌘Z</span> (Windows, Linux <span class="keybinding">Ctrl+Z</span>)</span>/<span class="dynamic-keybinding" data-commandId="redo" data-osx="⇧⌘Z" data-win="Ctrl+Y" data-linux="Ctrl+Y"><span class="keybinding">⇧⌘Z</span> (Windows, Linux <span class="keybinding">Ctrl+Y</span>)</span>). You can quickly clear a search term or filter with the <strong>Clear Settings Search Input</strong> button at the right of the search bar.</p>
+<p><img src="/assets/docs/configure/settings/clear-search-input-button.png" alt="Clear Settings Search Input button in the right of the Settings editor" loading="lazy"></p>
+<h2 id="_extension-settings" data-needslink="_extension-settings">Extension settings</h2>
+<p>Installed VS Code extensions can also contribute their own settings, which you can review under the <strong>Extensions</strong> section of the Settings editor.</p>
+<p><img src="/assets/docs/configure/settings/cpp-extension-settings.png" alt="C++ extension settings in the Settings editor" loading="lazy"></p>
+<p>You can also review an extension's settings from the Extensions view (<span class="dynamic-keybinding" data-commandId="workbench.view.extensions" data-osx="⇧⌘X" data-win="Ctrl+Shift+X" data-linux="Ctrl+Shift+X"><span class="keybinding">⇧⌘X</span> (Windows, Linux <span class="keybinding">Ctrl+Shift+X</span>)</span>) by selecting the extension and reviewing the <strong>Feature Contributions</strong> tab.</p>
+<p><img src="/assets/docs/configure/settings/python-feature-contributions.png" alt="Python extension Settings list under Feature Contributions tab" loading="lazy"></p>
+<p>Extension authors can learn more about adding custom settings in the <a href="/api/references/contribution-points#contributes.configuration">configuration contribution point documentation</a>.</p>
+<h2 id="_settings-json-file" data-needslink="_settings-json-file">Settings JSON file</h2>
+<p>VS Code stores setting values in a <code>settings.json</code> file. The Settings editor is the user interface that enables you to review and modify setting values that are stored in a <code>settings.json</code> file.</p>
+<p>You can also review and edit the <code>settings.json</code> file directly by opening it in the editor with the <strong>Preferences: Open User Settings (JSON)</strong> or <strong>Preferences: Open Workspace Settings (JSON)</strong> command in the Command Palette (<span class="dynamic-keybinding" data-commandId="workbench.action.showCommands" data-osx="⇧⌘P" data-win="Ctrl+Shift+P" data-linux="Ctrl+Shift+P"><span class="keybinding">⇧⌘P</span> (Windows, Linux <span class="keybinding">Ctrl+Shift+P</span>)</span>).</p>
+<p>Settings are written as JSON by specifying the setting ID and value. You can quickly copy the corresponding JSON name-value pair for a setting by selecting the setting's gear icon in the Settings editor, and then selecting the <strong>Copy Setting as JSON</strong> action.</p>
+<p><img src="/assets/docs/configure/settings/settings-json-in-editor.png" alt="User settings.json open in the editor" loading="lazy"></p>
+<p>The <code>settings.json</code> file has full IntelliSense with smart completions for settings and values and description hovers. Errors due to incorrect setting names or JSON formatting are also highlighted.</p>
+<p><img src="/assets/docs/configure/settings/settings-json-intellisense.png" alt="IntelliSense for settings.json open in the editor" loading="lazy"></p>
+<p>Some settings can only be edited in <code>settings.json</code> such as <strong>Workbench: Color Customizations</strong> and show an <strong>Edit in settings.json</strong> link in the Settings editor.</p>
+<p><img src="/assets/docs/configure/settings/edit-in-settings-json-link.png" alt="Workbench: Color Customizations setting with Edit in settings.json link" loading="lazy"></p>
+<div class="markdown-alert tip" dir="auto">
+      <span>
+        <svg class="markdown-alert-icon" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true">
+          <path d="M8 1.5c-2.363 0-4 1.69-4 3.75 0 .984.424 1.625.984 2.304l.214.253c.223.264.47.556.673.848.284.411.537.896.621 1.49a.75.75 0 0 1-1.484.211c-.04-.282-.163-.547-.37-.847a8.456 8.456 0 0 0-.542-.68c-.084-.1-.173-.205-.268-.32C3.201 7.75 2.5 6.766 2.5 5.25 2.5 2.31 4.863 0 8 0s5.5 2.31 5.5 5.25c0 1.516-.701 2.5-1.328 3.259-.095.115-.184.22-.268.319-.207.245-.383.453-.541.681-.208.3-.33.565-.37.847a.751.751 0 0 1-1.485-.212c.084-.593.337-1.078.621-1.489.203-.292.45-.584.673-.848.075-.088.147-.173.213-.253.561-.679.985-1.32.985-2.304 0-2.06-1.637-3.75-4-3.75ZM5.75 12h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1 0-1.5ZM6 15.25a.75.75 0 0 1 .75-.75h2.5a.75.75 0 0 1 0 1.5h-2.5a.75.75 0 0 1-.75-.75Z">
+          </path>
+        </svg>
+        Tip
+      </span><p>If you prefer to always work directly with <code>settings.json</code>, you can set <span class="setting"><span class="setting-dropdown" data-setting-id="workbench.settings.editor" data-vscode-installation-info="both">
+    <span class="setting-link-main">
+      <span class="codicon codicon-settings-gear dynamic-setting-icon"></span>
+      workbench.settings.editor
+
+    </span>
+    <button
+      type="button"
+      class="setting-dropdown-trigger"
+      data-vscode-installation-info-action
+      aria-haspopup="menu"
+      aria-expanded="false"
+      aria-label="Open setting in VS Code">
+        <svg class="setting-dropdown-chevron" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <path d="M7.976 10.072l4.357-4.357.62.618L8.284 11h-.618L3 6.333l.619-.618 4.357 4.357z"/>
+        </svg>
+    </button>
+    <span class="setting-dropdown-menu" role="menu" aria-label="Open setting">
+      <span role="menuitem" class="setting-action-item" data-vscode-installation-info-action data-version="stable" tabindex="0">Open in VS Code</span>
+      <span role="menuitem" class="setting-action-item" data-vscode-installation-info-action data-version="insiders" tabindex="-1">Open in VS Code Insiders</span>
+    </span>
+  </span></span> to <code>json</code>. Then, <span class="filePreferencesPath"><strong>File</strong> &gt; <strong>Preferences</strong></span> &gt; <strong>Settings</strong> and the keybinding <span class="dynamic-keybinding" data-commandId="workbench.action.openSettings" data-osx="⌘," data-win="Ctrl+," data-linux="Ctrl+,"><span class="keybinding">⌘,</span> (Windows, Linux <span class="keybinding">Ctrl+,</span>)</span> always open the <code>settings.json</code> file and not the Setting editor UI.</p>
+</div><h3 id="_settings-file-locations" data-needslink="_settings-file-locations">Settings file locations</h3>
+<h4 id="_user-settingsjson-location" data-needslink="_user-settingsjson-location">User settings.json location</h4>
+<p>Depending on your platform, the user settings file is located here:</p>
+<ul>
+<li><strong>Windows</strong> <code>%APPDATA%\Code\User\settings.json</code></li>
+<li><strong>macOS</strong> <code>$HOME/Library/Application\ Support/Code/User/settings.json</code></li>
+<li><strong>Linux</strong> <code>$HOME/.config/Code/User/settings.json</code></li>
+</ul>
+<h4 id="_workspace-settingsjson-location" data-needslink="_workspace-settingsjson-location">Workspace settings.json location</h4>
+<p>The workspace settings file is located under the <code>.vscode</code> folder in your root folder. When you add a Workspace Settings <code>settings.json</code> file to your project or source control, the settings for the project will be shared by all users of that project.</p>
+<p><img src="/assets/docs/configure/settings/settings-json-under-vscode.png" alt="The File Explorer displaying settings.json under the .vscode folder" loading="lazy"></p>
+<div class="markdown-alert note" dir="auto">
+      <span>
+        <svg class="markdown-alert-icon" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true">
+          <path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm8-6.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM6.5 7.75A.75.75 0 0 1 7.25 7h1a.75.75 0 0 1 .75.75v2.75h.25a.75.75 0 0 1 0 1.5h-2a.75.75 0 0 1 0-1.5h.25v-2h-.25a.75.75 0 0 1-.75-.75ZM8 6a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z">
+          </path>
+        </svg>
+        Note
+      </span><p>For a <a href="/docs/editing/workspaces/multi-root-workspaces#_settings">Multi-root Workspace</a>, workspace settings are located inside the workspace configuration file.</p>
+</div><h2 id="_reset-settings" data-needslink="_reset-settings">Reset settings</h2>
+<p>You can always reset a setting to the default value by hovering over a setting to show the gear icon, clicking on the gear icon, and then selecting the <strong>Reset Setting</strong> action.</p>
+<p>While you can reset settings individually via the Settings editor, you can reset all changed settings by opening <code>settings.json</code> and deleting the entries between the braces <code>{}</code>. Be careful since there is no way to recover your previous setting values.</p>
+<h2 id="_language-specific-editor-settings" data-needslink="_language-specific-editor-settings">Language specific editor settings</h2>
+<p>One way to customize language-specific settings is by opening the Settings editor, pressing on the filter button, and selecting the language option to add a language filter. Alternatively, one can directly type a language filter of the form <code>@lang:languageId</code> into the search widget. The settings that show up will be configurable for that specific language, and will show the setting value specific to that language, if applicable.</p>
+<p>When you modify a setting while there is a language filter in place, the setting is configured in the given scope for that language.
+For example, when modifying the user-scope <span class="setting"><span class="setting-dropdown" data-setting-id="diffEditor.codeLens" data-vscode-installation-info="both">
+    <span class="setting-link-main">
+      <span class="codicon codicon-settings-gear dynamic-setting-icon"></span>
+      diffEditor.codeLens
+
+    </span>
+    <button
+      type="button"
+      class="setting-dropdown-trigger"
+      data-vscode-installation-info-action
+      aria-haspopup="menu"
+      aria-expanded="false"
+      aria-label="Open setting in VS Code">
+        <svg class="setting-dropdown-chevron" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <path d="M7.976 10.072l4.357-4.357.62.618L8.284 11h-.618L3 6.333l.619-.618 4.357 4.357z"/>
+        </svg>
+    </button>
+    <span class="setting-dropdown-menu" role="menu" aria-label="Open setting">
+      <span role="menuitem" class="setting-action-item" data-vscode-installation-info-action data-version="stable" tabindex="0">Open in VS Code</span>
+      <span role="menuitem" class="setting-action-item" data-vscode-installation-info-action data-version="insiders" tabindex="-1">Open in VS Code Insiders</span>
+    </span>
+  </span></span> setting while there is a <code>@lang:css</code> filter in the search widget, the Settings editor saves the new value to the CSS-specific section of the user settings file.</p>
+<p><img src="/assets/docs/configure/settings/settings-css-example.png" alt="Editing the CSS-specific user-scoped diffEditor.codeLens setting in the Settings editor" loading="lazy"></p>
+<div class="markdown-alert note" dir="auto">
+      <span>
+        <svg class="markdown-alert-icon" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true">
+          <path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm8-6.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM6.5 7.75A.75.75 0 0 1 7.25 7h1a.75.75 0 0 1 .75.75v2.75h.25a.75.75 0 0 1 0 1.5h-2a.75.75 0 0 1 0-1.5h.25v-2h-.25a.75.75 0 0 1-.75-.75ZM8 6a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z">
+          </path>
+        </svg>
+        Note
+      </span><p>If you enter more than one language filter in the search widget, the current behavior is that only the first language filter will be used.</p>
+</div><p>Another way to customize your editor by language is by running the global command <strong>Preferences: Configure Language Specific Settings</strong> (command ID: <code>workbench.action.configureLanguageBasedSettings</code>) from the <strong>Command Palette</strong> (<span class="dynamic-keybinding" data-commandId="workbench.action.showCommands" data-osx="⇧⌘P" data-win="Ctrl+Shift+P" data-linux="Ctrl+Shift+P"><span class="keybinding">⇧⌘P</span> (Windows, Linux <span class="keybinding">Ctrl+Shift+P</span>)</span>) which opens the language picker. Select the language you want. Then, the Settings editor opens with a language filter for the selected language, which allows you to modify language-specific settings for that language. Though, if you have the <span class="setting"><span class="setting-dropdown" data-setting-id="workbench.settings.editor" data-vscode-installation-info="both">
+    <span class="setting-link-main">
+      <span class="codicon codicon-settings-gear dynamic-setting-icon"></span>
+      workbench.settings.editor
+
+    </span>
+    <button
+      type="button"
+      class="setting-dropdown-trigger"
+      data-vscode-installation-info-action
+      aria-haspopup="menu"
+      aria-expanded="false"
+      aria-label="Open setting in VS Code">
+        <svg class="setting-dropdown-chevron" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <path d="M7.976 10.072l4.357-4.357.62.618L8.284 11h-.618L3 6.333l.619-.618 4.357 4.357z"/>
+        </svg>
+    </button>
+    <span class="setting-dropdown-menu" role="menu" aria-label="Open setting">
+      <span role="menuitem" class="setting-action-item" data-vscode-installation-info-action data-version="stable" tabindex="0">Open in VS Code</span>
+      <span role="menuitem" class="setting-action-item" data-vscode-installation-info-action data-version="insiders" tabindex="-1">Open in VS Code Insiders</span>
+    </span>
+  </span></span> setting set to <code>json</code>, then the <code>settings.json</code> file opens with a new language entry where you can add applicable settings.</p>
+<p><img src="/assets/docs/configure/settings/pref-config-lang-settings.png" alt="Configure language-specific settings command typed up in the Command Palette" loading="lazy"></p>
+<p>Select the language via the dropdown:</p>
+<p><img src="/assets/docs/configure/settings/lang-selection.png" alt="Select language dropdown" loading="lazy"></p>
+<p>Now you can start editing settings specifically for that language:</p>
+<p><img src="/assets/docs/configure/settings/lang-based-settings-editor.png" alt="Settings editor showing a specific language filter" loading="lazy"></p>
+<p>Or, if <span class="setting"><span class="setting-dropdown" data-setting-id="workbench.settings.editor" data-vscode-installation-info="both">
+    <span class="setting-link-main">
+      <span class="codicon codicon-settings-gear dynamic-setting-icon"></span>
+      workbench.settings.editor
+
+    </span>
+    <button
+      type="button"
+      class="setting-dropdown-trigger"
+      data-vscode-installation-info-action
+      aria-haspopup="menu"
+      aria-expanded="false"
+      aria-label="Open setting in VS Code">
+        <svg class="setting-dropdown-chevron" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <path d="M7.976 10.072l4.357-4.357.62.618L8.284 11h-.618L3 6.333l.619-.618 4.357 4.357z"/>
+        </svg>
+    </button>
+    <span class="setting-dropdown-menu" role="menu" aria-label="Open setting">
+      <span role="menuitem" class="setting-action-item" data-vscode-installation-info-action data-version="stable" tabindex="0">Open in VS Code</span>
+      <span role="menuitem" class="setting-action-item" data-vscode-installation-info-action data-version="insiders" tabindex="-1">Open in VS Code Insiders</span>
+    </span>
+  </span></span> is set to <code>json</code>, now you can start adding language-specific settings to your user settings:</p>
+<p><img src="/assets/docs/configure/settings/lang-based-settings.png" alt="Suggestions for language-specific settings shown in the settings JSON file" loading="lazy"></p>
+<p>If you have a file open and you want to customize the editor for this file type, select the Language Mode in the Status Bar to the bottom-right of the VS Code window. This opens the Language Mode picker with an option <strong>Configure 'language_name' language based settings</strong>. Selecting this opens your user <code>settings.json</code> with the language entry where you can add applicable settings.</p>
+<p>Language-specific editor settings always override non-language-specific editor settings, even if the non-language-specific setting
+has a narrower scope. For example, language-specific user settings override non-language-specific workspace settings.</p>
+<p>You can scope language-specific settings to the workspace by placing them in the workspace settings just like other settings. If you have settings defined for the same language in both user and workspace scopes, then they are merged by giving precedence to the ones defined in the workspace.</p>
+<p>The following example can be pasted into a settings JSON file to customize editor settings for the <code>typescript</code> and <code>markdown</code> language modes.</p>
+<pre class="shiki" data-lang="json" shiki-themes dark-plus light-plus" style="--shiki-dark:#D4D4D4;--shiki-light:#000000;--shiki-dark-bg:#1E1E1E;--shiki-light-bg:#FFFFFF" tabindex="0"><code><span class="line"><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">{</span></span>
+<span class="line"><span style="--shiki-dark:#9CDCFE;--shiki-light:#0451A5">  "[typescript]"</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">: {</span></span>
+<span class="line"><span style="--shiki-dark:#9CDCFE;--shiki-light:#0451A5">    "editor.formatOnSave"</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">: </span><span style="--shiki-dark:#569CD6;--shiki-light:#0000FF">true</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">,</span></span>
+<span class="line"><span style="--shiki-dark:#9CDCFE;--shiki-light:#0451A5">    "editor.formatOnPaste"</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">: </span><span style="--shiki-dark:#569CD6;--shiki-light:#0000FF">true</span></span>
+<span class="line"><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">  },</span></span>
+<span class="line"><span style="--shiki-dark:#9CDCFE;--shiki-light:#0451A5">  "[markdown]"</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">: {</span></span>
+<span class="line"><span style="--shiki-dark:#9CDCFE;--shiki-light:#0451A5">    "editor.formatOnSave"</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">: </span><span style="--shiki-dark:#569CD6;--shiki-light:#0000FF">true</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">,</span></span>
+<span class="line"><span style="--shiki-dark:#9CDCFE;--shiki-light:#0451A5">    "editor.wordWrap"</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">: </span><span style="--shiki-dark:#CE9178;--shiki-light:#A31515">"on"</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">,</span></span>
+<span class="line"><span style="--shiki-dark:#9CDCFE;--shiki-light:#0451A5">    "editor.renderWhitespace"</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">: </span><span style="--shiki-dark:#CE9178;--shiki-light:#A31515">"all"</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">,</span></span>
+<span class="line"><span style="--shiki-dark:#9CDCFE;--shiki-light:#0451A5">    "editor.acceptSuggestionOnEnter"</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">: </span><span style="--shiki-dark:#CE9178;--shiki-light:#A31515">"off"</span></span>
+<span class="line"><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">  }</span></span>
+<span class="line"><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">}</span></span>
+<span class="line"></span></code></pre>
+<p>You can use IntelliSense in <code>settings.json</code> to help you find language-specific settings. All editor settings and some non-editor settings are supported. Some languages have default language-specific settings already set, which you can review in <code>defaultSettings.json</code> by running the <strong>Preferences: Open Default Settings</strong> command.</p>
+<h3 id="_multiple-language-specific-editor-settings" data-needslink="_multiple-language-specific-editor-settings">Multiple language-specific editor settings</h3>
+<p>You can configure language specific editor settings for multiple languages at once. The following example shows how you can customize settings for <code>javascript</code> and <code>typescript</code> languages together in your <code>settings.json</code> file:</p>
+<pre class="shiki" data-lang="json" shiki-themes dark-plus light-plus" style="--shiki-dark:#D4D4D4;--shiki-light:#000000;--shiki-dark-bg:#1E1E1E;--shiki-light-bg:#FFFFFF" tabindex="0"><code><span class="line"><span style="--shiki-dark:#CE9178;--shiki-light:#A31515">"[javascript][typescript]"</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">: {</span></span>
+<span class="line"><span style="--shiki-dark:#9CDCFE;--shiki-light:#0451A5">  "editor.maxTokenizationLineLength"</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">: </span><span style="--shiki-dark:#B5CEA8;--shiki-light:#098658">2500</span></span>
+<span class="line"><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">}</span></span>
+<span class="line"></span></code></pre>
+<p>If a setting is configured in both a single-language block and a multiple-language block, the single-language value takes precedence. This precedence is applied before the normal setting scope precedence rules.</p>
+<h2 id="_profile-settings" data-needslink="_profile-settings">Profile settings</h2>
+<p>You can use <a href="/docs/configure/profiles">profiles in VS Code</a> to create sets of customizations and quickly switch between them. For example, they are a great way to customize VS Code for a specific programming language.</p>
+<p>When you switch to a profile, the user settings are scoped to only that profile. When you switch to another profile, the user settings of that other profile are applied. This way, you can have different settings for different profiles.</p>
+<p>The user settings JSON file for a profile is located in the following directory:</p>
+<ul>
+<li><strong>Windows</strong> <code>%APPDATA%\Code\User\profiles\&lt;profile ID&gt;\settings.json</code></li>
+<li><strong>macOS</strong> <code>$HOME/Library/Application\ Support/Code/User/profiles/&lt;profile ID&gt;/settings.json</code></li>
+<li><strong>Linux</strong> <code>$HOME/.config/Code/User/profiles/&lt;profile ID&gt;/settings.json</code></li>
+</ul>
+<p>The <code>&lt;profile ID&gt;</code> is the unique identifier of the profile. For each profile that overrides settings, there will be a corresponding profile settings file.</p>
+<div class="markdown-alert note" dir="auto">
+      <span>
+        <svg class="markdown-alert-icon" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true">
+          <path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm8-6.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM6.5 7.75A.75.75 0 0 1 7.25 7h1a.75.75 0 0 1 .75.75v2.75h.25a.75.75 0 0 1 0 1.5h-2a.75.75 0 0 1 0-1.5h.25v-2h-.25a.75.75 0 0 1-.75-.75ZM8 6a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z">
+          </path>
+        </svg>
+        Note
+      </span><p>The <code>settings.json</code> file for a profile is only created when you modify a setting for that profile.</p>
+</div><p>When you're using a non-default profile, you can access the <code>settings.json</code> file that is associated with the default profile by using the <strong>Preferences: Open Application Settings (JSON)</strong> command in the Command Palette (<span class="dynamic-keybinding" data-commandId="workbench.action.showCommands" data-osx="⇧⌘P" data-win="Ctrl+Shift+P" data-linux="Ctrl+Shift+P"><span class="keybinding">⇧⌘P</span> (Windows, Linux <span class="keybinding">Ctrl+Shift+P</span>)</span>).</p>
+<h2 id="_settings-precedence" data-needslink="_settings-precedence">Settings precedence</h2>
+<p>Configurations can be overridden at multiple levels by the different setting scopes. In the following list, <strong>later scopes override earlier scopes</strong>:</p>
+<ul>
+<li>Default settings - This scope represents the default unconfigured setting values.</li>
+<li>User settings - Apply globally to all VS Code instances.</li>
+<li>Remote settings - Apply to a remote machine opened by a user.</li>
+<li>Workspace settings - Apply to the open folder or workspace.</li>
+<li>Workspace Folder settings - Apply to a specific folder of a <a href="/docs/editing/workspaces/multi-root-workspaces">multi-root workspace</a>.</li>
+<li>Language-specific default settings - These are language-specific default values that can be contributed by extensions.</li>
+<li>Language-specific user settings - Same as User settings, but specific to a language.</li>
+<li>Language-specific remote settings - Same as Remote settings, but specific to a language.</li>
+<li>Language-specific workspace settings - Same as Workspace settings, but specific to a language.</li>
+<li>Language-specific workspace folder settings - Same as Workspace Folder settings, but specific to a language.</li>
+<li>Policy settings - Set by the system administrator, these values always override other setting values.</li>
+</ul>
+<p>If a setting is managed by your organization, contact your administrator about changes. Administrators investigating an unexpected value can <a href="/docs/enterprise/troubleshooting#_check-delivery-and-precedence">check policy delivery and precedence</a>.</p>
+<p>Setting values can be of various types:</p>
+<ul>
+<li>String - <code>&quot;files.autoSave&quot;: &quot;afterDelay&quot;</code></li>
+<li>Boolean - <code>&quot;editor.minimap.enabled&quot;: true</code></li>
+<li>Number - <code>&quot;files.autoSaveDelay&quot;: 1000</code></li>
+<li>Array - <code>&quot;editor.rulers&quot;: []</code></li>
+<li>Object - <code>&quot;search.exclude&quot;: { &quot;**/node_modules&quot;: true, &quot;**/bower_components&quot;: true }</code></li>
+</ul>
+<div class="markdown-alert note" dir="auto">
+      <span>
+        <svg class="markdown-alert-icon" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true">
+          <path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm8-6.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM6.5 7.75A.75.75 0 0 1 7.25 7h1a.75.75 0 0 1 .75.75v2.75h.25a.75.75 0 0 1 0 1.5h-2a.75.75 0 0 1 0-1.5h.25v-2h-.25a.75.75 0 0 1-.75-.75ZM8 6a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z">
+          </path>
+        </svg>
+        Note
+      </span><p>Settings like <code>files.exclude</code> and <code>search.exclude</code> use <a href="/docs/editor/glob-patterns">glob patterns</a> that follow your operating system's file system case sensitivity (case-insensitive on Windows/macOS, case-sensitive on Linux). Similarly, <code>.gitignore</code> file patterns (used with the <span class="setting"><span class="setting-dropdown" data-setting-id="explorer.excludeGitIgnore" data-vscode-installation-info="both">
+    <span class="setting-link-main">
+      <span class="codicon codicon-settings-gear dynamic-setting-icon"></span>
+      explorer.excludeGitIgnore
+
+    </span>
+    <button
+      type="button"
+      class="setting-dropdown-trigger"
+      data-vscode-installation-info-action
+      aria-haspopup="menu"
+      aria-expanded="false"
+      aria-label="Open setting in VS Code">
+        <svg class="setting-dropdown-chevron" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <path d="M7.976 10.072l4.357-4.357.62.618L8.284 11h-.618L3 6.333l.619-.618 4.357 4.357z"/>
+        </svg>
+    </button>
+    <span class="setting-dropdown-menu" role="menu" aria-label="Open setting">
+      <span role="menuitem" class="setting-action-item" data-vscode-installation-info-action data-version="stable" tabindex="0">Open in VS Code</span>
+      <span role="menuitem" class="setting-action-item" data-vscode-installation-info-action data-version="insiders" tabindex="-1">Open in VS Code Insiders</span>
+    </span>
+  </span></span> setting) also follow platform-specific case sensitivity rules.</p>
+</div><p>Values with primitive types and Array types are overridden, meaning a configured value in a scope that takes precedence over another scope is used instead of the value in the other scope. But, values with Object types are merged.</p>
+<p>For example, <span class="setting"><span class="setting-dropdown" data-setting-id="workbench.colorCustomizations" data-vscode-installation-info="both">
+    <span class="setting-link-main">
+      <span class="codicon codicon-settings-gear dynamic-setting-icon"></span>
+      workbench.colorCustomizations
+
+    </span>
+    <button
+      type="button"
+      class="setting-dropdown-trigger"
+      data-vscode-installation-info-action
+      aria-haspopup="menu"
+      aria-expanded="false"
+      aria-label="Open setting in VS Code">
+        <svg class="setting-dropdown-chevron" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <path d="M7.976 10.072l4.357-4.357.62.618L8.284 11h-.618L3 6.333l.619-.618 4.357 4.357z"/>
+        </svg>
+    </button>
+    <span class="setting-dropdown-menu" role="menu" aria-label="Open setting">
+      <span role="menuitem" class="setting-action-item" data-vscode-installation-info-action data-version="stable" tabindex="0">Open in VS Code</span>
+      <span role="menuitem" class="setting-action-item" data-vscode-installation-info-action data-version="insiders" tabindex="-1">Open in VS Code Insiders</span>
+    </span>
+  </span></span> takes an Object that specifies a group of UI elements and their desired colors. If your user settings set the editor backgrounds to blue and green:</p>
+<pre class="shiki" data-lang="json" shiki-themes dark-plus light-plus" style="--shiki-dark:#D4D4D4;--shiki-light:#000000;--shiki-dark-bg:#1E1E1E;--shiki-light-bg:#FFFFFF" tabindex="0"><code><span class="line"><span style="--shiki-dark:#CE9178;--shiki-light:#A31515">  "workbench.colorCustomizations"</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">: {</span></span>
+<span class="line"><span style="--shiki-dark:#9CDCFE;--shiki-light:#0451A5">    "editor.background"</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">: </span><span style="--shiki-dark:#CE9178;--shiki-light:#A31515">"#000088"</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">,</span></span>
+<span class="line"><span style="--shiki-dark:#9CDCFE;--shiki-light:#0451A5">    "editor.selectionBackground"</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">: </span><span style="--shiki-dark:#CE9178;--shiki-light:#A31515">"#008800"</span></span>
+<span class="line"><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">  }</span></span>
+<span class="line"></span></code></pre>
+<p>And your open workspace settings set the editor foreground to red:</p>
+<pre class="shiki" data-lang="json" shiki-themes dark-plus light-plus" style="--shiki-dark:#D4D4D4;--shiki-light:#000000;--shiki-dark-bg:#1E1E1E;--shiki-light-bg:#FFFFFF" tabindex="0"><code><span class="line"><span style="--shiki-dark:#CE9178;--shiki-light:#A31515">  "workbench.colorCustomizations"</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">: {</span></span>
+<span class="line"><span style="--shiki-dark:#9CDCFE;--shiki-light:#0451A5">    "editor.foreground"</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">: </span><span style="--shiki-dark:#CE9178;--shiki-light:#A31515">"#880000"</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">,</span></span>
+<span class="line"><span style="--shiki-dark:#9CDCFE;--shiki-light:#0451A5">    "editor.selectionBackground"</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">: </span><span style="--shiki-dark:#CE9178;--shiki-light:#A31515">"#00FF00"</span></span>
+<span class="line"><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">  }</span></span>
+<span class="line"></span></code></pre>
+<p>The result, when that workspace is open, is the combination of those two color customizations, as if you had specified:</p>
+<pre class="shiki" data-lang="json" shiki-themes dark-plus light-plus" style="--shiki-dark:#D4D4D4;--shiki-light:#000000;--shiki-dark-bg:#1E1E1E;--shiki-light-bg:#FFFFFF" tabindex="0"><code><span class="line"><span style="--shiki-dark:#CE9178;--shiki-light:#A31515">  "workbench.colorCustomizations"</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">: {</span></span>
+<span class="line"><span style="--shiki-dark:#9CDCFE;--shiki-light:#0451A5">    "editor.background"</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">: </span><span style="--shiki-dark:#CE9178;--shiki-light:#A31515">"#000088"</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">,</span></span>
+<span class="line"><span style="--shiki-dark:#9CDCFE;--shiki-light:#0451A5">    "editor.selectionBackground"</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">: </span><span style="--shiki-dark:#CE9178;--shiki-light:#A31515">"#00FF00"</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">,</span></span>
+<span class="line"><span style="--shiki-dark:#9CDCFE;--shiki-light:#0451A5">    "editor.foreground"</span><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">: </span><span style="--shiki-dark:#CE9178;--shiki-light:#A31515">"#880000"</span></span>
+<span class="line"><span style="--shiki-dark:#D4D4D4;--shiki-light:#000000">  }</span></span>
+<span class="line"></span></code></pre>
+<p>If there are conflicting values, such as <code>editor.selectionBackground</code> in the example above, the usual override behavior occurs, with workspace values taking precedence over user values, and language-specific values taking precedence over non-language-specific values.</p>
+<h3 id="_note-about-multiple-language-specific-settings" data-needslink="_note-about-multiple-language-specific-settings">Note about multiple language specific settings</h3>
+<p>If you are using <a href="#_multiple-language-specific-editor-settings">multiple language-specific settings</a>, be aware that language-specific settings are merged and precedence is set based on the full language string (for example <code>&quot;[typescript][javascript]&quot;</code>) and not the individual language IDs (<code>typescript</code> and <code>javascript</code>). This means that for example, a <code>&quot;[typescript][javascript]&quot;</code> workspace setting will not override a <code>&quot;[javascript]&quot;</code> user setting.</p>
+<h2 id="_settings-and-security" data-needslink="_settings-and-security">Settings and security</h2>
+<p>Some settings allow you to specify an executable that VS Code will run to perform certain operations. For example, you can choose which shell the Integrated Terminal should use. For enhanced security, such settings can only be defined in user settings and not at workspace scope.</p>
+<p>Here is the list of settings not supported in workspace settings:</p>
+<ul>
+<li><span class="setting"><span class="setting-dropdown" data-setting-id="git.path" data-vscode-installation-info="both">
+    <span class="setting-link-main">
+      <span class="codicon codicon-settings-gear dynamic-setting-icon"></span>
+      git.path
+
+    </span>
+    <button
+      type="button"
+      class="setting-dropdown-trigger"
+      data-vscode-installation-info-action
+      aria-haspopup="menu"
+      aria-expanded="false"
+      aria-label="Open setting in VS Code">
+        <svg class="setting-dropdown-chevron" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <path d="M7.976 10.072l4.357-4.357.62.618L8.284 11h-.618L3 6.333l.619-.618 4.357 4.357z"/>
+        </svg>
+    </button>
+    <span class="setting-dropdown-menu" role="menu" aria-label="Open setting">
+      <span role="menuitem" class="setting-action-item" data-vscode-installation-info-action data-version="stable" tabindex="0">Open in VS Code</span>
+      <span role="menuitem" class="setting-action-item" data-vscode-installation-info-action data-version="insiders" tabindex="-1">Open in VS Code Insiders</span>
+    </span>
+  </span></span></li>
+<li><span class="setting"><span class="setting-dropdown" data-setting-id="terminal.external.windowsExec" data-vscode-installation-info="both">
+    <span class="setting-link-main">
+      <span class="codicon codicon-settings-gear dynamic-setting-icon"></span>
+      terminal.external.windowsExec
+
+    </span>
+    <button
+      type="button"
+      class="setting-dropdown-trigger"
+      data-vscode-installation-info-action
+      aria-haspopup="menu"
+      aria-expanded="false"
+      aria-label="Open setting in VS Code">
+        <svg class="setting-dropdown-chevron" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <path d="M7.976 10.072l4.357-4.357.62.618L8.284 11h-.618L3 6.333l.619-.618 4.357 4.357z"/>
+        </svg>
+    </button>
+    <span class="setting-dropdown-menu" role="menu" aria-label="Open setting">
+      <span role="menuitem" class="setting-action-item" data-vscode-installation-info-action data-version="stable" tabindex="0">Open in VS Code</span>
+      <span role="menuitem" class="setting-action-item" data-vscode-installation-info-action data-version="insiders" tabindex="-1">Open in VS Code Insiders</span>
+    </span>
+  </span></span></li>
+<li><span class="setting"><span class="setting-dropdown" data-setting-id="terminal.external.osxExec" data-vscode-installation-info="both">
+    <span class="setting-link-main">
+      <span class="codicon codicon-settings-gear dynamic-setting-icon"></span>
+      terminal.external.osxExec
+
+    </span>
+    <button
+      type="button"
+      class="setting-dropdown-trigger"
+      data-vscode-installation-info-action
+      aria-haspopup="menu"
+      aria-expanded="false"
+      aria-label="Open setting in VS Code">
+        <svg class="setting-dropdown-chevron" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <path d="M7.976 10.072l4.357-4.357.62.618L8.284 11h-.618L3 6.333l.619-.618 4.357 4.357z"/>
+        </svg>
+    </button>
+    <span class="setting-dropdown-menu" role="menu" aria-label="Open setting">
+      <span role="menuitem" class="setting-action-item" data-vscode-installation-info-action data-version="stable" tabindex="0">Open in VS Code</span>
+      <span role="menuitem" class="setting-action-item" data-vscode-installation-info-action data-version="insiders" tabindex="-1">Open in VS Code Insiders</span>
+    </span>
+  </span></span></li>
+<li><span class="setting"><span class="setting-dropdown" data-setting-id="terminal.external.linuxExec" data-vscode-installation-info="both">
+    <span class="setting-link-main">
+      <span class="codicon codicon-settings-gear dynamic-setting-icon"></span>
+      terminal.external.linuxExec
+
+    </span>
+    <button
+      type="button"
+      class="setting-dropdown-trigger"
+      data-vscode-installation-info-action
+      aria-haspopup="menu"
+      aria-expanded="false"
+      aria-label="Open setting in VS Code">
+        <svg class="setting-dropdown-chevron" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        <path d="M7.976 10.072l4.357-4.357.62.618L8.284 11h-.618L3 6.333l.619-.618 4.357 4.357z"/>
+        </svg>
+    </button>
+    <span class="setting-dropdown-menu" role="menu" aria-label="Open setting">
+      <span role="menuitem" class="setting-action-item" data-vscode-installation-info-action data-version="stable" tabindex="0">Open in VS Code</span>
+      <span role="menuitem" class="setting-action-item" data-vscode-installation-info-action data-version="insiders" tabindex="-1">Open in VS Code Insiders</span>
+    </span>
+  </span></span></li>
+</ul>
+<p>The first time you open a workspace that defines any of these settings, VS Code will warn you and then always ignore the values after that.</p>
+<h2 id="_settings-sync" data-needslink="_settings-sync">Settings Sync</h2>
+<p>You can share your user settings across your VS Code instances with the <a href="/docs/configure/settings-sync">Settings Sync</a> feature. This feature lets you share settings, keyboard shortcuts, and installed extensions across your VS Code installs on various machines. You can enable Settings Sync via the <strong>Backup and Sync Settings</strong> command on the right of the Settings editor or on the <strong>Accounts</strong> Activity Bar context menu.</p>
+<p><img src="/assets/docs/configure/settings/accounts-context-menu.png" alt="Turn on Settings Sync command in the Accounts Activity Bar menu" loading="lazy"></p>
+<p>You can learn more about turning on and configuring Settings Sync in the <a href="/docs/configure/settings-sync">Settings Sync</a> user guide.</p>
+<div class="markdown-alert note" dir="auto">
+      <span>
+        <svg class="markdown-alert-icon" viewBox="0 0 16 16" version="1.1" width="16" height="16" aria-hidden="true">
+          <path d="M0 8a8 8 0 1 1 16 0A8 8 0 0 1 0 8Zm8-6.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM6.5 7.75A.75.75 0 0 1 7.25 7h1a.75.75 0 0 1 .75.75v2.75h.25a.75.75 0 0 1 0 1.5h-2a.75.75 0 0 1 0-1.5h.25v-2h-.25a.75.75 0 0 1-.75-.75ZM8 6a1 1 0 1 1 0-2 1 1 0 0 1 0 2Z">
+          </path>
+        </svg>
+        Note
+      </span><p>VS Code does not synchronize your extensions to or from a <a href="/docs/remote/remote-overview">remote</a> window, such as when you're connected to SSH, a development container (devcontainer), or WSL.</p>
+</div><h2 id="_feature-lifecycle" data-needslink="_feature-lifecycle">Feature lifecycle</h2>
+<p>Features and their corresponding settings can be in one of the following states. Depending on the state, you might be cautious about using the feature or setting in your workflow.</p>
+<ul>
+<li>
+<p><strong>Experimental</strong> - Exploratory features available for early adopters. These features might change or be removed in the future. In the Settings editor, these settings have an <code>Experimental</code> label. You can also search experimental settings by entering <code>@tag:experimental</code> in the search box.</p>
+<p><img src="/assets/docs/configure/settings/settings-editor-experimental.png" alt="Settings editor filtered with '@tag:experimental' showing experimental settings." loading="lazy"></p>
+</li>
+<li>
+<p><strong>Preview</strong> - Preview features and settings have the final functionality but might still be iterated on for stability and polishing. Usually, preview features are disabled by default. In the Settings editor, these settings have a <code>Preview</code> label. You can also search preview settings by entering <code>@tag:preview</code> in the search box.</p>
+<p><img src="/assets/docs/configure/settings/settings-editor-preview.png" alt="Settings editor filtered with '@tag:preview' showing preview settings." loading="lazy"></p>
+</li>
+<li>
+<p><strong>Stable</strong> - The feature is stable and fully supported in VS Code.</p>
+</li>
+</ul>
+<p>Experimental and preview features enable you to try out new features and provide feedback. Share your feedback in <a href="https://github.com/microsoft/vscode/issues" class="external-link" target="_blank">our VS Code issues</a>.</p>
+<h2 id="_related-resources" data-needslink="_related-resources">Related resources</h2>
+<ul>
+<li><a href="/docs/reference/default-settings">VS Code default settings reference</a></li>
+<li><a href="/docs/configure/settings-sync">Synchronize settings across machines</a></li>
+</ul>
+<h2 id="_common-questions" data-needslink="_common-questions">Common questions</h2>
+<h3 id="_vs-code-says-unable-to-write-settings" data-needslink="_vs-code-says-unable-to-write-settings">VS Code says &quot;Unable to write settings.&quot;</h3>
+<p>If you try to change a setting (for example turning on Auto Save or selecting a new Color Theme) and you see &quot;Unable to write into user settings. Please open user settings to correct errors/warnings in it and try again.&quot;, it means your <code>settings.json</code> file is ill-formed or has errors. The error can be as simple as a missing comma or incorrect setting value. Open the <code>settings.json</code> file with the <strong>Preferences: Open User Settings (JSON)</strong> command in the Command Palette (<span class="dynamic-keybinding" data-commandId="workbench.action.showCommands" data-osx="⇧⌘P" data-win="Ctrl+Shift+P" data-linux="Ctrl+Shift+P"><span class="keybinding">⇧⌘P</span> (Windows, Linux <span class="keybinding">Ctrl+Shift+P</span>)</span>) and you should see the error highlighted with red squiggles.</p>
+<h3 id="_how-can-i-reset-my-user-settings" data-needslink="_how-can-i-reset-my-user-settings">How can I reset my user settings?</h3>
+<p>The easiest way to reset VS Code back to the default settings is to clear your user <code>settings.json</code> file. You can open the <code>settings.json</code> file with the <strong>Preferences: Open User Settings (JSON)</strong> command in the Command Palette (<span class="dynamic-keybinding" data-commandId="workbench.action.showCommands" data-osx="⇧⌘P" data-win="Ctrl+Shift+P" data-linux="Ctrl+Shift+P"><span class="keybinding">⇧⌘P</span> (Windows, Linux <span class="keybinding">Ctrl+Shift+P</span>)</span>). Once the file is open in an editor, delete everything between the two curly braces <code>{}</code>, save the file, and VS Code will go back to using the default values.</p>
+<h3 id="_when-does-it-make-sense-to-use-workspace-settings" data-needslink="_when-does-it-make-sense-to-use-workspace-settings">When does it make sense to use workspace settings?</h3>
+<p>If you're using a workspace that needs custom settings but you don't want to apply them to your other VS Code projects. A good example is language-specific linting rules.</p>
+<h3 id="_where-can-i-find-extension-settings" data-needslink="_where-can-i-find-extension-settings">Where can I find extension settings?</h3>
+<p>In general, VS Code extensions store their settings in your user or workspaces settings files and they are available through the Settings editor UI (<strong>Preferences: Open Settings (UI)</strong> command) or via IntelliSense in your <code>settings.json</code> file (<strong>Preferences: Open User Settings (JSON)</strong> command). Searching by the extension name (for example <code>gitlens</code> or <code>python</code>) can help filter down settings to just those contributed by an extension.</p>
+
+
+                <div class="feedback" data-edit-url="https://vscode.dev/github/microsoft/vscode-docs/blob/main/docs/configure/settings.md"></div>
+
+                <div class="body-footer">11/25/2026</div>
+
+            </main>
+        </div>
+
+        <!-- Mobile connect widget -->
+        <div class="docs-mobile-widgets visible-xs">
+            <div class="connect-widget"></div>
+        </div>
+    </div>
+</div>
+		</main>
+	</div>
+
+	<div id="search-popup-overlay" class="search-popup-overlay" role="dialog" aria-modal="true" aria-label="Search">
+		<div class="search-popup-container">
+			<div class="search-popup-header">
+				<form class="search-popup-form">
+					<div class="input-group">
+						<input type="text" name="q" class="search-box form-control" placeholder="Search the website"
+							aria-label="Search text" role="combobox" aria-expanded="false"
+							aria-autocomplete="list" aria-controls="search-results-listbox"
+							aria-activedescendant="" />
+						<span class="input-group-btn">
+							<button tabindex="0" class="btn" type="submit" aria-label="Search">
+								<img class="search-icon-dark" src="/assets/icons/search-dark.svg" alt="Search" />
+								<img class="search-icon-light" src="/assets/icons/search.svg" alt="Search" />
+							</button>
+						</span>
+					</div>
+				</form>
+				<button class="search-popup-close" type="button" aria-label="Close search"><i class="codicon codicon-close" aria-hidden="true"></i></button>
+			</div>
+			<div class="search-popup-results">
+				<ul class="search-popup-results-list" id="search-results-listbox" role="listbox" aria-label="Search results"></ul>
+			</div>
+			<div class="sr-only" role="status" aria-live="polite" aria-atomic="true" id="search-popup-status"></div>
+		</div>
+	</div>
+	<div class="hf-page-footer">
+		<footer class="ft" data-a11y-beat="footer" data-a11y-canonical>
+			<div class="ft-in">
+				<div class="ft-top">
+					<a class="ft-ms" href="https://www.microsoft.com" aria-label="Microsoft homepage" rel="noopener noreferrer">
+						<svg class="ft-mark" viewBox="0 0 23 23" aria-hidden="true" focusable="false"><rect width="11" height="11"/><rect x="12" width="11" height="11"/><rect y="12" width="11" height="11"/><rect x="12" y="12" width="11" height="11"/></svg>
+						<span class="ft-word">Microsoft</span>
+					</a>
+					<div class="ft-desk">
+						<section class="ft-col">
+							<h2 class="ft-h">Community</h2>
+							<ul class="ft-links" role="list" aria-label="Community">
+								<li><a href="https://github.com/microsoft/vscode" rel="noopener noreferrer">GitHub</a></li>
+								<li><a href="https://www.reddit.com/r/vscode/" rel="noopener noreferrer">Reddit</a></li>
+								<li><a href="https://go.microsoft.com/fwlink/?LinkID&#x3D;533687" rel="noopener noreferrer">X</a></li>
+								<li><a href="https://bsky.app/profile/vscode.dev" rel="noopener noreferrer">Bluesky</a></li>
+								<li><a href="https://www.linkedin.com/showcase/vs-code" rel="noopener noreferrer">LinkedIn</a></li>
+							</ul>
+						</section>
+						<section class="ft-col">
+							<h2 class="ft-h">Watch &amp; listen</h2>
+							<ul class="ft-links" role="list" aria-label="Watch and listen">
+								<li><a href="https://www.youtube.com/@code" rel="noopener noreferrer">YouTube</a></li>
+								<li><a href="https://www.vscodepodcast.com" rel="noopener noreferrer">Podcast</a></li>
+								<li><a href="https://www.tiktok.com/@vscode" rel="noopener noreferrer">TikTok</a></li>
+								<li><a href="https://www.instagram.com/vscode" rel="noopener noreferrer">Instagram</a></li>
+							</ul>
+						</section>
+						<section class="ft-col">
+							<h2 class="ft-h">Legal</h2>
+							<ul class="ft-links" role="list" aria-label="Legal">
+								<li><a href="https://go.microsoft.com/fwlink/?LinkId&#x3D;521839" rel="noopener noreferrer">Privacy</a></li>
+								<li><a href="https://www.microsoft.com/legal/terms-of-use" rel="noopener noreferrer">Terms of Use</a></li>
+							</ul>
+						</section>
+						<section class="ft-col">
+							<h2 class="ft-h">Help</h2>
+							<ul class="ft-links" role="list" aria-label="Help">
+								<li><a href="/docs/supporting/faq" rel="noopener noreferrer">Support</a></li>
+								<li><a href="/license" rel="noopener noreferrer">License</a></li>
+							</ul>
+						</section>
+					</div>
+					<div class="ft-mob">
+						<details>
+							<summary>Community</summary>
+							<ul class="ft-links" role="list" aria-label="Community">
+								<li><a href="https://github.com/microsoft/vscode" rel="noopener noreferrer">GitHub</a></li>
+								<li><a href="https://www.reddit.com/r/vscode/" rel="noopener noreferrer">Reddit</a></li>
+								<li><a href="https://go.microsoft.com/fwlink/?LinkID&#x3D;533687" rel="noopener noreferrer">X</a></li>
+								<li><a href="https://bsky.app/profile/vscode.dev" rel="noopener noreferrer">Bluesky</a></li>
+								<li><a href="https://www.linkedin.com/showcase/vs-code" rel="noopener noreferrer">LinkedIn</a></li>
+							</ul>
+						</details>
+						<details>
+							<summary>Watch &amp; listen</summary>
+							<ul class="ft-links" role="list" aria-label="Watch and listen">
+								<li><a href="https://www.youtube.com/@code" rel="noopener noreferrer">YouTube</a></li>
+								<li><a href="https://www.vscodepodcast.com" rel="noopener noreferrer">Podcast</a></li>
+								<li><a href="https://www.tiktok.com/@vscode" rel="noopener noreferrer">TikTok</a></li>
+								<li><a href="https://www.instagram.com/vscode" rel="noopener noreferrer">Instagram</a></li>
+							</ul>
+						</details>
+						<details>
+							<summary>Legal</summary>
+							<ul class="ft-links" role="list" aria-label="Legal">
+								<li><a href="https://go.microsoft.com/fwlink/?LinkId&#x3D;521839" rel="noopener noreferrer">Privacy</a></li>
+								<li><a href="https://www.microsoft.com/legal/terms-of-use" rel="noopener noreferrer">Terms of Use</a></li>
+							</ul>
+						</details>
+						<details>
+							<summary>Help</summary>
+							<ul class="ft-links" role="list" aria-label="Help">
+								<li><a href="/docs/supporting/faq" rel="noopener noreferrer">Support</a></li>
+								<li><a href="/license" rel="noopener noreferrer">License</a></li>
+							</ul>
+						</details>
+					</div>
+				</div>
+				<div class="ft-base">
+					<a class="ft-health" href="https://go.microsoft.com/fwlink/?linkid=2259814" rel="noopener noreferrer">Consumer Health Privacy</a>
+					<span class="ft-cookies" style="display: none;"><button id="footer-cookie-link" type="button">Manage Cookies</button></span>
+					<p class="ft-agree">By using VS Code, you agree to its <a href="/license">license</a> and <a href="https://go.microsoft.com/fwlink/?LinkId=521839" rel="noopener noreferrer">privacy statement</a>.</p>
+					<a class="ft-choices" href="https://aka.ms/YourCaliforniaPrivacyChoices" rel="noopener noreferrer">
+						<svg class="ft-pc" viewBox="0 0 30 14" aria-hidden="true" focusable="false"><path fill="var(--pc-light)" d="M7.4 12.8h6.8l3.1-11.6H7.4C4.2 1.2 1.6 3.8 1.6 7s2.6 5.8 5.8 5.8z"/><path fill="var(--pc-blue)" d="M22.6 0H7.4c-3.9 0-7 3.1-7 7s3.1 7 7 7h15.2c3.9 0 7-3.1 7-7s-3.2-7-7-7zm-21 7c0-3.2 2.6-5.8 5.8-5.8h9.9l-3.1 11.6H7.4c-3.2 0-5.8-2.6-5.8-5.8z"/><path fill="var(--pc-light)" d="M24.6 4c.2.2.2.6 0 .8L22.5 7l2.2 2.2c.2.2.2.6 0 .8s-.6.2-.8 0l-2.2-2.2-2.2 2.2c-.2.2-.6.2-.8 0s-.2-.6 0-.8L20.8 7l-2.2-2.2c-.2-.2-.2-.6 0-.8s.6-.2.8 0l2.2 2.2L23.8 4c.2-.2.6-.2.8 0z"/><path fill="var(--pc-blue)" d="M12.7 4.1c.2.2.3.6.1.8L8.6 9.8c-.1.1-.2.2-.3.2-.2.1-.5.1-.7-.1L5.4 7.7c-.2-.2-.2-.6 0-.8s.6-.2.8 0L8 8.6l3.8-4.5c.2-.2.6-.2.9 0z"/></svg>
+						<span>Your Privacy Choices</span>
+					</a>
+				</div>
+			</div>
+		</footer>
+	</div>
+	<script type="module">
+		document.addEventListener('DOMContentLoaded', () => {
+			const copilotDeepLinks = document.querySelectorAll('.copilot-deep-link');
+			if (copilotDeepLinks.length === 0) {
+				return;
+			}
+			if (window.innerWidth < 992) {
+				for (const link of copilotDeepLinks) {
+					link.href = 'https://aka.ms/vscode-activatecopilotfree';
+				}
+			}
+		});
+	</script>
+
+	<script src="/dist/index.js?v&#x3D;96f7efaadfec026c" onload="document.documentElement.classList.remove('site-header-loading')" onerror="document.documentElement.classList.remove('site-header-loading')"></script>
+
+
+
+	<script type="application/ld+json">
+		{
+			"@context" : "http://schema.org",
+			"@type" : "SoftwareApplication",
+			"name" : "Visual Studio Code",
+			"softwareVersion": "1.148",
+			"offers": {
+				"@type": "Offer",
+				"price": "0",
+				"priceCurrency": "USD"
+			},
+			"applicationCategory": "DeveloperApplication",
+			"applicationSubCategory": "AI Code Editor",
+			"description": "Visual Studio Code is a free, open source AI code editor for agent-first development. Build with AI agents, manage multi-agent workflows, and code across any environment.",
+			"alternateName": "VS Code",
+			"datePublished": "2021-11-03",
+			"operatingSystem": "Mac, Linux, Windows",
+			"logo": "https://code.visualstudio.com/assets/apple-touch-icon.png",
+			"screenshot": "https://code.visualstudio.com/assets/images/product-screenshot.png",
+			"releaseNotes": "https://code.visualstudio.com/updates",
+			"downloadUrl": "https://code.visualstudio.com/download",
+			"license": "https://code.visualstudio.com/license",
+			"softwareRequirements": "https://code.visualstudio.com/docs/supporting/requirements",
+			"url" : "https://code.visualstudio.com",
+			"author": {
+				"@type": "Organization",
+				"name": "Microsoft"
+			},
+			"publisher": {
+				"@type": "Organization",
+				"name": "Microsoft"
+			},
+			"maintainer": {
+				"@type": "Organization",
+				"name": "Microsoft"
+			},
+			"potentialAction": {
+				"@type": "SearchAction",
+				"target": "https://code.visualstudio.com/Search?q={search_term_string}",
+				"query-input": "required name=search_term_string"
+			},
+			"sameAs" : [
+				"https://en.wikipedia.org/wiki/Visual_Studio_Code",
+				"https://twitter.com/code",
+				"https://www.youtube.com/code",
+				"https://www.tiktok.com/@vscode",
+				"https://github.com/microsoft/vscode"
+			]
+		}
+	</script>
+</body>
+
+</html>

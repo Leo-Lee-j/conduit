@@ -1,0 +1,176 @@
+{
+  "url": "https://code.visualstudio.com/docs/configure/settings",
+  "title": [
+    "User and workspace settings"
+  ],
+  "images": [
+    {
+      "src": "https://code.visualstudio.com/assets/branding/code-stable.png",
+      "alt": "",
+      "width": "28",
+      "height": "28"
+    },
+    {
+      "class": "search-icon-dark",
+      "src": "https://code.visualstudio.com/assets/icons/search-dark.svg",
+      "alt": ""
+    },
+    {
+      "class": "search-icon-light",
+      "src": "https://code.visualstudio.com/assets/icons/search.svg",
+      "alt": ""
+    },
+    {
+      "src": "https://code.visualstudio.com/assets/docs/configure/settings/settings-editor-user-tab.png",
+      "alt": "Settings editor with User tab highlighted",
+      "loading": "lazy"
+    },
+    {
+      "src": "https://code.visualstudio.com/assets/docs/configure/settings/settings-editor-workspace-tab.png",
+      "alt": "Settings editor with Workspace tab highlighted",
+      "loading": "lazy"
+    },
+    {
+      "src": "https://code.visualstudio.com/assets/docs/configure/settings/settings-search.png",
+      "alt": "Filtering settings by searching in the Settings editor",
+      "loading": "lazy"
+    },
+    {
+      "src": "https://code.visualstudio.com/assets/docs/configure/settings/settings-modified.png",
+      "alt": "Modified settings in the Settings editor showing blue vertical bars to the left of them",
+      "loading": "lazy"
+    },
+    {
+      "src": "https://code.visualstudio.com/assets/docs/configure/settings/more-actions-context-menu.png",
+      "alt": "Settings edit gear context menu",
+      "loading": "lazy"
+    },
+    {
+      "src": "https://code.visualstudio.com/assets/docs/configure/settings/settings-groups.png",
+      "alt": "Settings editor with the Source Control section of the table of contents selected",
+      "loading": "lazy"
+    },
+    {
+      "src": "https://code.visualstudio.com/assets/docs/configure/settings/modified-filter-settings.png",
+      "alt": "Settings editor with @modified filter showing changed settings",
+      "loading": "lazy"
+    },
+    {
+      "src": "https://code.visualstudio.com/assets/docs/configure/settings/settings-editor-filters.png",
+      "alt": "Setting editor @ tag filter dropdown",
+      "loading": "lazy"
+    },
+    {
+      "src": "https://code.visualstudio.com/assets/docs/configure/settings/clear-search-input-button.png",
+      "alt": "Clear Settings Search Input button in the right of the Settings editor",
+      "loading": "lazy"
+    },
+    {
+      "src": "https://code.visualstudio.com/assets/docs/configure/settings/cpp-extension-settings.png",
+      "alt": "C++ extension settings in the Settings editor",
+      "loading": "lazy"
+    },
+    {
+      "src": "https://code.visualstudio.com/assets/docs/configure/settings/python-feature-contributions.png",
+      "alt": "Python extension Settings list under Feature Contributions tab",
+      "loading": "lazy"
+    },
+    {
+      "src": "https://code.visualstudio.com/assets/docs/configure/settings/settings-json-in-editor.png",
+      "alt": "User settings.json open in the editor",
+      "loading": "lazy"
+    },
+    {
+      "src": "https://code.visualstudio.com/assets/docs/configure/settings/settings-json-intellisense.png",
+      "alt": "IntelliSense for settings.json open in the editor",
+      "loading": "lazy"
+    },
+    {
+      "src": "https://code.visualstudio.com/assets/docs/configure/settings/edit-in-settings-json-link.png",
+      "alt": "Workbench: Color Customizations setting with Edit in settings.json link",
+      "loading": "lazy"
+    },
+    {
+      "src": "https://code.visualstudio.com/assets/docs/configure/settings/settings-json-under-vscode.png",
+      "alt": "The File Explorer displaying settings.json under the .vscode folder",
+      "loading": "lazy"
+    },
+    {
+      "src": "https://code.visualstudio.com/assets/docs/configure/settings/settings-css-example.png",
+      "alt": "Editing the CSS-specific user-scoped diffEditor.codeLens setting in the Settings editor",
+      "loading": "lazy"
+    },
+    {
+      "src": "https://code.visualstudio.com/assets/docs/configure/settings/pref-config-lang-settings.png",
+      "alt": "Configure language-specific settings command typed up in the Command Palette",
+      "loading": "lazy"
+    },
+    {
+      "src": "https://code.visualstudio.com/assets/docs/configure/settings/lang-selection.png",
+      "alt": "Select language dropdown",
+      "loading": "lazy"
+    },
+    {
+      "src": "https://code.visualstudio.com/assets/docs/configure/settings/lang-based-settings-editor.png",
+      "alt": "Settings editor showing a specific language filter",
+      "loading": "lazy"
+    },
+    {
+      "src": "https://code.visualstudio.com/assets/docs/configure/settings/lang-based-settings.png",
+      "alt": "Suggestions for language-specific settings shown in the settings JSON file",
+      "loading": "lazy"
+    },
+    {
+      "src": "https://code.visualstudio.com/assets/docs/configure/settings/accounts-context-menu.png",
+      "alt": "Turn on Settings Sync command in the Accounts Activity Bar menu",
+      "loading": "lazy"
+    },
+    {
+      "src": "https://code.visualstudio.com/assets/docs/configure/settings/settings-editor-experimental.png",
+      "alt": "Settings editor filtered with '@tag:experimental' showing experimental settings.",
+      "loading": "lazy"
+    },
+    {
+      "src": "https://code.visualstudio.com/assets/docs/configure/settings/settings-editor-preview.png",
+      "alt": "Settings editor filtered with '@tag:preview' showing preview settings.",
+      "loading": "lazy"
+    },
+    {
+      "class": "search-icon-dark",
+      "src": "https://code.visualstudio.com/assets/icons/search-dark.svg",
+      "alt": "Search"
+    },
+    {
+      "class": "search-icon-light",
+      "src": "https://code.visualstudio.com/assets/icons/search.svg",
+      "alt": "Search"
+    }
+  ],
+  "links": [
+    "https://code.visualstudio.com/docs/agents/reference/ai-settings",
+    "https://code.visualstudio.com/docs/configure/settings",
+    "https://code.visualstudio.com/docs/configure/settings-sync",
+    "https://code.visualstudio.com/docs/configure/extensions/extensions",
+    "https://code.visualstudio.com/docs/configure/extensions/extension-marketplace",
+    "https://code.visualstudio.com/docs/configure/extensions/extension-runtime-security",
+    "https://code.visualstudio.com/docs/reference/default-settings",
+    "https://code.visualstudio.com/docs/enterprise/manage-ai-settings",
+    "https://code.visualstudio.com/docs/enterprise/extensions",
+    "https://code.visualstudio.com/docs/extension-docs/overview",
+    "https://code.visualstudio.com/docs/configure/settings#_user-settings",
+    "https://code.visualstudio.com/docs/configure/settings#_workspace-settings",
+    "https://code.visualstudio.com/docs/configure/settings#_settings-editor",
+    "https://code.visualstudio.com/docs/configure/settings#_extension-settings",
+    "https://code.visualstudio.com/docs/configure/settings#_settings-json-file",
+    "https://code.visualstudio.com/docs/configure/settings#_reset-settings",
+    "https://code.visualstudio.com/docs/configure/settings#_language-specific-editor-settings",
+    "https://code.visualstudio.com/docs/configure/settings#_profile-settings",
+    "https://code.visualstudio.com/docs/configure/settings#_settings-precedence",
+    "https://code.visualstudio.com/docs/configure/settings#_settings-and-security",
+    "https://code.visualstudio.com/docs/configure/settings#_settings-sync",
+    "https://code.visualstudio.com/docs/configure/settings.md",
+    "vscode://GitHub.Copilot-Chat/chat?prompt=Read%20https%3A%2F%2Fcode.visualstudio.com%2Fdocs%2Fconfigure%2Fsettings%20and%20answer%20questions%20about%20the%20content.&windowId=_blank",
+    "vscode-insiders://GitHub.Copilot-Chat/chat?prompt=Read%20https%3A%2F%2Fcode.visualstudio.com%2Fdocs%2Fconfigure%2Fsettings%20and%20answer%20questions%20about%20the%20content.&windowId=_blank",
+    "vscode://GitHub.Copilot-Chat/chat?prompt=Read%20https%3A%2F%2Fcode.visualstudio.com%2Fdocs%2Fconfigure%2Fsettings%20and%20answer%20questions%20about%20the%20content.&windowId=_blank"
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "url": "https://manual.raycast.com/extensions",
+  "title": [
+    "Extensions | Raycast Manual"
+  ],
+  "images": [
+    {
+      "src": "https://manual.raycast.com/wordmark-light.svg",
+      "alt": "Raycast",
+      "width": "130",
+      "height": "50",
+      "class": "EKN27G_logoWordmark EKN27G_logoWordmarkLight"
+    },
+    {
+      "src": "https://manual.raycast.com/wordmark-dark.svg",
+      "alt": "Raycast",
+      "width": "130",
+      "height": "50",
+      "class": "EKN27G_logoWordmark EKN27G_logoWordmarkDark"
+    },
+    {
+      "src": "https://manual.raycast.com/wordmark-light.svg",
+      "alt": "Raycast",
+      "class": "lUN8Fa_logoWordmark lUN8Fa_logoWordmarkLight"
+    },
+    {
+      "src": "https://manual.raycast.com/wordmark-dark.svg",
+      "alt": "Raycast",
+      "class": "lUN8Fa_logoWordmark lUN8Fa_logoWordmarkDark"
+    },
+    {
+      "alt": "Screenshot showing the Store extension in Raycast",
+      "data-platform-image": "mac",
+      "loading": "lazy",
+      "width": "2000",
+      "height": "1250",
+      "decoding": "async",
+      "data-nimg": "1",
+      "class": "UQ0s-W_image",
+      "style": "color:transparent;background-size:cover;background-position:50% 50%;background-repeat:no-repeat;background-image:url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2000 1250'%3E%3Cfilter id='b' color-interpolation-filters='sRGB'%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3CfeColorMatrix values='1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 100 -1' result='s'/%3E%3CfeFlood x='0' y='0' width='100%25' height='100%25'/%3E%3CfeComposite operator='out' in='s'/%3E%3CfeComposite in2='SourceGraphic'/%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3C/filter%3E%3Cimage width='100%25' height='100%25' x='0' y='0' preserveAspectRatio='none' style='filter: url(%23b);' href='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAGCAYAAAD68A/GAAAACXBIWXMAAAsSAAALEgHS3X78AAAA1UlEQVQImR3LvU6DUADF8RtSEzAhFgWBC4l8lASiaSckDAxtZ6ytdjA6ErY6oI71SXiC+o79m9zhDOfkd8Q4juff45HPw4FhGOj7nv3+leftjvuHBYZxyfWNfRan0x9v7x+s1muapmG+mJMkCXEcUxQFaZpi2zai6zo2uy1VVZFlGUEQEEWRQnmeM5tluJ6HmFxMuIti9XRdFymlgoGUqluWhaZpiLqueSxLBaTvE4ahAo7jqG16NaUsS8TP9xcvmyeWyxXOrYuu6xiGgWmaKp7n07Yt/1MmXak0DRiYAAAAAElFTkSuQmCC'/%3E%3C/svg%3E\")",
+      "sizes": "(max-width: 768px) 100vw, (max-width: 1200px) 80vw, 800px",
+      "srcset": "/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fextensions%2Fmac-extensions-store.png&w=640&q=75 640w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fextensions%2Fmac-extensions-store.png&w=750&q=75 750w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fextensions%2Fmac-extensions-store.png&w=828&q=75 828w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fextensions%2Fmac-extensions-store.png&w=1080&q=75 1080w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fextensions%2Fmac-extensions-store.png&w=1200&q=75 1200w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fextensions%2Fmac-extensions-store.png&w=1920&q=75 1920w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fextensions%2Fmac-extensions-store.png&w=2048&q=75 2048w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fextensions%2Fmac-extensions-store.png&w=3840&q=75 3840w",
+      "src": "https://manual.raycast.com/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fextensions%2Fmac-extensions-store.png&w=3840&q=75"
+    },
+    {
+      "src": "https://manual.raycast.com/logo-light.svg",
+      "alt": "Raycast",
+      "class": "CgEBhW_logoMark CgEBhW_logoMarkLight"
+    },
+    {
+      "src": "https://manual.raycast.com/logo-dark.svg",
+      "alt": "Raycast",
+      "class": "CgEBhW_logoMark CgEBhW_logoMarkDark"
+    }
+  ],
+  "links": [
+    "https://manual.raycast.com/settings",
+    "https://manual.raycast.com/extensions",
+    "https://manual.raycast.com/browser-extension",
+    "https://manual.raycast.com/ai/ai-extensions",
+    "https://manual.raycast.com/ai/extension-models",
+    "https://manual.raycast.com/ios/share-extension",
+    "https://manual.raycast.com/enterprise/private-extension-publishing",
+    "https://manual.raycast.com/enterprise/extensions-allow-list",
+    "https://manual.raycast.com/extensions-guidelines",
+    "https://manual.raycast.com/ai/ai-extensions",
+    "raycast://extensions/raycast/ai/ai-chat?fallbackText=Read%20https%3A%2F%2Fmanual.raycast.com%2Fextensions.md.%20I%20want%20to%20ask%20you%20questions%20about%20Extensions%20in%20the%20Raycast%20Manual.",
+    "https://manual.raycast.com/extensions#installed-extensions",
+    "https://manual.raycast.com/extensions#ai-extensions",
+    "raycast://extensions/raycast/ai/ai-chat?fallbackText=Read%20https%3A%2F%2Fmanual.raycast.com%2Fextensions.md.%20I%20want%20to%20ask%20you%20questions%20about%20Extensions%20in%20the%20Raycast%20Manual."
+  ]
+}

@@ -1,0 +1,42 @@
+[
+  {
+    "name": "vscode-settings",
+    "url": "https://code.visualstudio.com/assets/docs/configure/settings/settings-editor-user-tab.png",
+    "size": [
+      1285,
+      466
+    ]
+  },
+  {
+    "name": "vscode-filter",
+    "url": "https://code.visualstudio.com/assets/docs/configure/settings/modified-filter-settings.png",
+    "size": [
+      2270,
+      1170
+    ]
+  },
+  {
+    "name": "jetbrains-settings",
+    "url": "https://resources.jetbrains.com/help/img/idea/2026.3/SettingsSearch.png",
+    "size": [
+      1890,
+      1400
+    ]
+  },
+  {
+    "name": "raycast-agents",
+    "url": "https://fz1sd71lwhbqy6sh.public.blob.vercel-storage.com/raycast/images/app/basics/mac-settings-ai-agents-aicommands-aiextensions.png",
+    "size": [
+      2100,
+      1580
+    ]
+  },
+  {
+    "name": "raycast-settings",
+    "url": "https://fz1sd71lwhbqy6sh.public.blob.vercel-storage.com/raycast/images/app/basics/mac-basics-settings-launcher.png",
+    "size": [
+      2100,
+      1580
+    ]
+  }
+]

@@ -151,11 +151,15 @@ impl Render for ModelEditor {
         .enumerate()
         {
             body = body.child(
-                v_flex().gap_1().child(label).child(
-                    Input::new(&self.fields[index])
-                        .disabled(disabled)
-                        .aria_label(label),
-                ),
+                v_flex()
+                    .gap_1()
+                    .text_size(ui_text_size(14.))
+                    .child(label)
+                    .child(
+                        settings_input(&self.fields[index])
+                            .disabled(disabled)
+                            .aria_label(label),
+                    ),
             );
         }
         body = body.when_some(self.error.clone(), |body, error| {
@@ -167,6 +171,9 @@ impl Render for ModelEditor {
                 .justify_end()
                 .child(
                     Button::new("model-editor-cancel")
+                        .small()
+                        .h(ui_text_size(32.))
+                        .text_size(ui_text_size(14.))
                         .label(conduit::i18n::text_static("git_branches.cancel"))
                         .ghost()
                         .disabled(self.saving)
@@ -174,6 +181,9 @@ impl Render for ModelEditor {
                 )
                 .child(
                     Button::new("model-editor-save")
+                        .small()
+                        .h(ui_text_size(32.))
+                        .text_size(ui_text_size(14.))
                         .debug_selector(|| "model-editor-save".into())
                         .label(conduit::i18n::text_static(
                             "settings.model_management.save_model",
@@ -345,7 +355,7 @@ impl ConduitApp {
                     .child(
                         Button::new("model-add")
                             .debug_selector(|| "model-add".into())
-                            .small()
+                            .small().h(ui_text_size(32.)).text_size(ui_text_size(14.))
                             .outline()
                             .label(conduit::i18n::text_static("settings.model_management.add_model"))
                             .disabled(disabled)
@@ -358,15 +368,16 @@ impl ConduitApp {
             );
             list = list
                 .child(
-                    Input::new(&search)
-                        .small()
+                    settings_input(&search)
+                        .w_full()
+                        .max_w(ui_text_size(320.))
                         .aria_label(conduit::i18n::text_static(
                             "settings.model_management.search_cli_models",
                         )),
                 )
                 .child(
                     div()
-                        .text_size(ui_text_size(11.))
+                        .text_size(ui_text_size(12.))
                         .text_color(rgb(palette().muted))
                         .child(conduit::i18n::format(
                             "settings.model_management.showing_matching_models_definitions_total",
@@ -419,6 +430,7 @@ impl ConduitApp {
                 list = list.child(
                     v_flex()
                         .w_full()
+                        .min_w_0()
                         .gap_2()
                         .py_2()
                         .border_b_1()
@@ -426,6 +438,7 @@ impl ConduitApp {
                         .child(
                             h_flex()
                                 .w_full()
+                                .min_w_0()
                                 .gap_2()
                                 .items_start()
                                 .child(model_mark(engine, Some(&model.id)))
@@ -435,19 +448,23 @@ impl ConduitApp {
                                         .min_w_0()
                                         .child(
                                             div()
-                                                .text_size(ui_text_size(13.))
+                                                .min_w_0()
+                                                .truncate()
+                                                .text_size(ui_text_size(14.))
                                                 .font_semibold()
                                                 .child(model.label.clone()),
                                         )
                                         .child(
                                             div()
+                                                .min_w_0()
+                                                .truncate()
                                                 .text_size(ui_text_size(12.))
                                                 .text_color(rgb(palette().muted))
                                                 .child(model.id.clone()),
                                         )
                                         .child(
                                             div()
-                                                .text_size(ui_text_size(11.))
+                                                .text_size(ui_text_size(12.))
                                                 .text_color(rgb(palette().muted))
                                                 .child(badges.join(" · ")),
                                         )
@@ -459,7 +476,7 @@ impl ConduitApp {
                                             )
                                         })
                                         .when_some(model.context_window, |row, tokens| {
-                                            row.child(div().text_size(ui_text_size(11.)).child(
+                                            row.child(div().text_size(ui_text_size(12.)).child(
                                                 conduit::i18n::format(
                                                     "settings.model_management.context_tokens",
                                                     &[("tokens", format!("{}", tokens))],
@@ -475,6 +492,8 @@ impl ConduitApp {
                                 .child(
                                     Button::new(("model-default", index))
                                         .small()
+                                        .h(ui_text_size(32.))
+                                        .text_size(ui_text_size(14.))
                                         .outline()
                                         .label(conduit::i18n::text_static(
                                             "settings.models.use_for_new_sessions",
@@ -495,6 +514,8 @@ impl ConduitApp {
                                 .child(
                                     Button::new(("model-edit", index))
                                         .small()
+                                        .h(ui_text_size(32.))
+                                        .text_size(ui_text_size(14.))
                                         .ghost()
                                         .label(conduit::i18n::text_static(
                                             "settings.extensions.edit",
@@ -515,6 +536,8 @@ impl ConduitApp {
                                     Button::new(("model-hide", index))
                                         .debug_selector(move || format!("model-hide-{index}"))
                                         .small()
+                                        .h(ui_text_size(32.))
+                                        .text_size(ui_text_size(14.))
                                         .ghost()
                                         .label(if hidden {
                                             conduit::i18n::text_static(
@@ -546,6 +569,8 @@ impl ConduitApp {
                                     row.child(
                                         Button::new(("model-remove", index))
                                             .small()
+                                            .h(ui_text_size(32.))
+                                            .text_size(ui_text_size(14.))
                                             .ghost()
                                             .label(conduit::i18n::text_static(
                                                 "settings.model_management.remove_local_definition",
@@ -574,6 +599,8 @@ impl ConduitApp {
                 list = list.child(
                     Button::new("models-load-more")
                         .small()
+                        .h(ui_text_size(32.))
+                        .text_size(ui_text_size(14.))
                         .outline()
                         .label(conduit::i18n::text_static(
                             "settings.model_management.show_50_more_models",

@@ -679,6 +679,15 @@ impl ConduitApp {
                 .min(1.)
                 .max(u32::MAX as f64)
         });
+        let appearance_filter = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(conduit::i18n::text_static(
+                "settings.appearance.filter_placeholder",
+            ))
+        });
+        let appearance_filter_subscription =
+            cx.subscribe(&appearance_filter, |_, _, _: &InputEvent, cx| {
+                cx.notify();
+            });
         let auto_collapse_days_subscription = cx.subscribe_in(
             &auto_collapse_inactive_days,
             window,
@@ -826,6 +835,10 @@ impl ConduitApp {
                 layout_compact: Default::default(),
                 restore_navigation_focus: Default::default(),
                 search: settings_search,
+                appearance_filter,
+                appearance_modified_only: false,
+                appearance_group: None,
+                appearance_preview_open: false,
                 auto_collapse_inactive_days,
                 naming_expanded: false,
                 git_expanded: false,
@@ -901,6 +914,7 @@ impl ConduitApp {
             workspace_color_target: None,
             _subscriptions: vec![
                 settings_search_subscription,
+                appearance_filter_subscription,
                 auto_collapse_days_subscription,
                 skill_search_subscription,
                 model_search_subscription,

@@ -45,7 +45,8 @@ impl ConduitApp {
                 });
             });
         }
-        if previous_layout.is_some_and(|previous| previous != narrow)
+        if (previous_layout.is_some_and(|previous| previous != narrow)
+            || (self.settings_ui.page == 1 && self.settings_ui.appearance_modified_only))
             && !window.has_active_dialog(cx)
             && self.settings_ui.focus.contains_focused(window, cx)
             && let Some(previous_focus) = window.focused(cx)
@@ -82,6 +83,43 @@ impl ConduitApp {
             .min_w_0()
             .bg(chrome_background(palette().canvas))
             .text_color(rgb(palette().text))
+            .child(
+                h_flex()
+                    .id("settings-search-bar")
+                    .debug_selector(|| "settings-search-bar".into())
+                    .w_full()
+                    .min_w_0()
+                    .flex_shrink_0()
+                    .px_3()
+                    .py_2()
+                    .gap_3()
+                    .border_b_1()
+                    .border_color(rgb(palette().border))
+                    .child(
+                        Button::new("settings-back-to-workbench")
+                            .debug_selector(|| "settings-back-to-workbench".into())
+                            .small()
+                            .ghost()
+                            .h(ui_text_size(32.))
+                            .icon(FullIconName::ArrowLeft)
+                            .label(conduit::i18n::text_static(
+                                "settings.workspace.back_to_workbench",
+                            ))
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.close_settings(window, cx)),
+                            ),
+                    )
+                    .child(
+                        div().flex_1().min_w_0().max_w(px(480.)).child(
+                            settings_input(&self.settings_ui.search)
+                                .prefix(FullIconName::Search)
+                                .aria_label(conduit::i18n::text_static(
+                                    "settings.workspace.search_all_settings",
+                                ))
+                                .cleanable(true),
+                        ),
+                    ),
+            )
             .child(self.settings_body(window, navigation_width, available_width, cx.entity(), cx))
             .child(self.settings_save_status())
             .on_action(cx.listener(|this, _: &OpenSettingsShortcut, window, cx| {
@@ -111,9 +149,13 @@ impl ConduitApp {
     pub(super) fn settings_content_pane(
         &self,
         compact: bool,
+        searching: bool,
         content: SettingsContent,
         view: Entity<Self>,
     ) -> impl IntoElement {
+        let route =
+            SettingsRoute::from_index(self.settings_ui.page).unwrap_or(SettingsRoute::General);
+        let (section, title, _) = navigation::PAGES[route.navigation_index()];
         v_flex()
             .flex_1()
             .min_w_0()
@@ -124,37 +166,80 @@ impl ConduitApp {
                         .id("settings-category-bar")
                         .debug_selector(|| "settings-category-bar".into())
                         .px_4()
-                        .pt_3()
+                        .py_2()
+                        .border_b_1()
+                        .border_color(rgb(palette().border))
                         .flex_shrink_0()
                         .child(self.settings_category_selector(view)),
                 )
             })
+            .when(!compact, |pane| {
+                pane.child(
+                    h_flex()
+                        .id("settings-page-heading")
+                        .debug_selector(|| "settings-page-heading".into())
+                        .w_full()
+                        .min_w_0()
+                        .flex_shrink_0()
+                        .px_4()
+                        .py_2()
+                        .min_h(ui_text_size(36.))
+                        .gap_2()
+                        .flex_wrap()
+                        .border_b_1()
+                        .border_color(rgb(palette().border))
+                        .text_size(ui_text_size(14.))
+                        .when(!searching, |bar| {
+                            bar.child(
+                                div()
+                                    .text_color(rgb(palette().muted))
+                                    .child(conduit::i18n::source(section)),
+                            )
+                            .child(
+                                Icon::new(FullIconName::ChevronRight)
+                                    .small()
+                                    .text_color(rgb(palette().muted)),
+                            )
+                        })
+                        .child(div().font_semibold().child(if searching {
+                            conduit::i18n::text_static("settings.workspace.search_results")
+                        } else {
+                            conduit::i18n::source(title)
+                        })),
+                )
+            })
             .child(
-                div()
-                    .id("settings-search-bar")
-                    .debug_selector(|| "settings-search-bar".into())
-                    .w_full()
+                v_flex()
+                    .flex_1()
+                    .min_h_0()
                     .min_w_0()
-                    .flex_shrink_0()
-                    .px_4()
-                    .py_3()
-                    .border_b_1()
-                    .border_color(rgb(palette().border))
-                    .child(
-                        Input::new(&self.settings_ui.search)
-                            .prefix(FullIconName::Search)
-                            .aria_label(conduit::i18n::text_static(
-                                "settings.workspace.search_all_settings",
-                            ))
-                            .cleanable(true),
-                    ),
+                    .w_full()
+                    .max_w(px(SETTINGS_CONTENT_MAX_WIDTH))
+                    .child(content.into_element()),
             )
-            .child(content.into_element())
     }
 
     fn settings_escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.settings_ui.search.read(cx).value().is_empty() {
-            if self.settings_ui.page == 8 && self.connection_settings.service_detail_open {
+            if self.settings_ui.page == 1
+                && (!self
+                    .settings_ui
+                    .appearance_filter
+                    .read(cx)
+                    .value()
+                    .is_empty()
+                    || self.settings_ui.appearance_modified_only
+                    || self.settings_ui.appearance_group.is_some()
+                    || self.settings_ui.group.is_some())
+            {
+                self.clear_appearance_filters(window, cx);
+                return;
+            }
+            if self.settings_ui.page == 3 && self.connection_settings.engine_detail_open {
+                self.connection_settings.engine_detail_open = false;
+                self.settings_ui.focus.focus(window, cx);
+                cx.notify();
+            } else if self.settings_ui.page == 8 && self.connection_settings.service_detail_open {
                 self.connection_settings.service_detail_open = false;
                 self.settings_ui.focus.focus(window, cx);
                 cx.notify();

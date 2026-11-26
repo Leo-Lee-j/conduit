@@ -92,6 +92,7 @@ pub(super) fn fetch_incoming(
             timeout: Duration::from_secs(20),
             stop_when_full: false,
             background: true,
+            input: None,
         },
     )?;
     Ok(())

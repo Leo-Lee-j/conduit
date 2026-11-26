@@ -1,0 +1,174 @@
+{
+  "pages": [
+    {
+      "page": "general",
+      "scroll": 1440,
+      "client": 1440,
+      "text": 255,
+      "brokenImages": 0,
+      "name": "general",
+      "scrollCoverage": {
+        "height": 896,
+        "view": 725
+      }
+    },
+    {
+      "page": "appearance",
+      "scroll": 1440,
+      "client": 1440,
+      "text": 456,
+      "brokenImages": 0,
+      "name": "appearance",
+      "scrollCoverage": {
+        "height": 1449,
+        "view": 725
+      }
+    },
+    {
+      "page": "shortcuts",
+      "scroll": 1440,
+      "client": 1440,
+      "text": 332,
+      "brokenImages": 0,
+      "name": "shortcuts"
+    },
+    {
+      "page": "engines",
+      "scroll": 1440,
+      "client": 1440,
+      "text": 385,
+      "brokenImages": 0,
+      "name": "engines"
+    },
+    {
+      "page": "services",
+      "scroll": 1440,
+      "client": 1440,
+      "text": 557,
+      "brokenImages": 0,
+      "name": "services",
+      "scrollCoverage": {
+        "height": 832,
+        "view": 725
+      }
+    },
+    {
+      "page": "sessions",
+      "scroll": 1440,
+      "client": 1440,
+      "text": 559,
+      "brokenImages": 0,
+      "name": "sessions",
+      "scrollCoverage": {
+        "height": 1165,
+        "view": 725
+      }
+    },
+    {
+      "page": "git",
+      "scroll": 1440,
+      "client": 1440,
+      "text": 222,
+      "brokenImages": 0,
+      "name": "git"
+    },
+    {
+      "page": "skills",
+      "scroll": 1440,
+      "client": 1440,
+      "text": 387,
+      "brokenImages": 0,
+      "name": "skills"
+    },
+    {
+      "page": "mcp",
+      "scroll": 1440,
+      "client": 1440,
+      "text": 490,
+      "brokenImages": 0,
+      "name": "mcp"
+    },
+    {
+      "page": "plugins",
+      "scroll": 1440,
+      "client": 1440,
+      "text": 292,
+      "brokenImages": 0,
+      "name": "plugins"
+    },
+    {
+      "page": "maintenance",
+      "scroll": 1440,
+      "client": 1440,
+      "text": 315,
+      "brokenImages": 0,
+      "name": "maintenance"
+    }
+  ],
+  "layouts": [
+    {
+      "width": 1100,
+      "name": "services",
+      "scroll": 1100,
+      "client": 1100,
+      "overflow": []
+    },
+    {
+      "width": 1100,
+      "name": "appearance",
+      "scroll": 1100,
+      "client": 1100,
+      "overflow": []
+    },
+    {
+      "width": 1100,
+      "name": "skills",
+      "scroll": 1100,
+      "client": 1100,
+      "overflow": []
+    },
+    {
+      "width": 800,
+      "name": "services",
+      "scroll": 800,
+      "client": 800,
+      "overflow": []
+    },
+    {
+      "width": 800,
+      "name": "appearance",
+      "scroll": 800,
+      "client": 800,
+      "overflow": []
+    },
+    {
+      "width": 800,
+      "name": "skills",
+      "scroll": 800,
+      "client": 800,
+      "overflow": []
+    },
+    {
+      "width": 375,
+      "name": "services",
+      "scroll": 375,
+      "client": 375,
+      "overflow": []
+    },
+    {
+      "width": 375,
+      "name": "appearance",
+      "scroll": 375,
+      "client": 375,
+      "overflow": []
+    },
+    {
+      "width": 375,
+      "name": "skills",
+      "scroll": 375,
+      "client": 375,
+      "overflow": []
+    }
+  ],
+  "errors": []
+}

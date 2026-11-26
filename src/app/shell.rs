@@ -365,7 +365,9 @@ impl Render for ConduitApp {
             .map(|width| f32::from(*width))
             .filter(|width| *width > 0.)
             .unwrap_or(self.plugins.dock.width);
-        self.plugins.dock.width = measured_detail.clamp(260., max_detail_width);
+        if !self.settings_ui.open {
+            self.plugins.dock.width = measured_detail.clamp(260., max_detail_width);
+        }
         let detail_width = self.plugins.dock.width;
         let settings_width = (viewport_width
             - measured_sidebar
@@ -376,15 +378,16 @@ impl Render for ConduitApp {
                 0.
             })
         .max(0.);
-        self.update_content_pane_layout(settings_width, window, cx);
+        if !self.settings_ui.open {
+            self.update_content_pane_layout(settings_width, window, cx);
+        }
         let mut conversation = if self.settings_ui.open {
             v_flex()
                 .flex_1()
                 .min_w_0()
                 .min_h_0()
                 .h_full()
-                .child(self.session_tab_bar(cx))
-                .child(self.render_settings_workspace(window, settings_width, cx))
+                .child(self.render_settings_workspace(window, viewport_width, cx))
         } else if let Some(panel) = self
             .github_ui
             .active
@@ -575,7 +578,11 @@ impl Render for ConduitApp {
                         })),
                 ),
         );
-        let conversation = self.render_content_panes(conversation.into_any_element(), cx);
+        let conversation = if self.settings_ui.open {
+            conversation.into_any_element()
+        } else {
+            self.render_content_panes(conversation.into_any_element(), cx)
+        };
         let conversation = if self.settings_ui.open
             || self.usage_ui.active.is_some()
             || self.github_ui.active.is_some()
@@ -637,7 +644,11 @@ impl Render for ConduitApp {
         );
         // Both sidebars use the same resizable panels and overlay handles.
         // A nested group keeps the right sidebar independent of left navigation.
-        let (detail_panel, overlay) = self.render_detail_dock(window, cx);
+        let (detail_panel, overlay) = if self.settings_ui.open {
+            (None, None)
+        } else {
+            self.render_detail_dock(window, cx)
+        };
         #[cfg(all(test, feature = "ui-tests", conduit_shell_desktop))]
         let detail_panel = detail_panel.map(|panel| {
             chat::profiling::host_element(panel, ["dock_layout", "dock_prepaint", "dock_paint"])
@@ -664,7 +675,9 @@ impl Render for ConduitApp {
                 .into_any_element(),
             None => conversation.into_any_element(),
         };
-        let body = if self.plugins.collapsed() {
+        let body = if self.settings_ui.open {
+            conversation_area
+        } else if self.plugins.collapsed() {
             h_flex()
                 .size_full()
                 .child(
@@ -685,7 +698,9 @@ impl Render for ConduitApp {
             h_flex()
                 .size_full()
                 .child(div().flex_1().min_w_0().h_full().child(body))
-                .child(self.render_right_navigation(cx)),
+                .when(!self.settings_ui.open, |layout| {
+                    layout.child(self.render_right_navigation(cx))
+                }),
         );
         if let Some(panel) = overlay {
             main_area = main_area.child(panel);

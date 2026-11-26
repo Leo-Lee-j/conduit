@@ -13,6 +13,10 @@ pub(in crate::app) struct SettingsUi {
     /// A dialog may outlive the navigation control that owned its return focus.
     pub restore_navigation_focus: std::cell::Cell<bool>,
     pub search: Entity<InputState>,
+    pub appearance_filter: Entity<InputState>,
+    pub appearance_modified_only: bool,
+    pub appearance_group: Option<super::appearance::editor::AppearanceGroup>,
+    pub appearance_preview_open: bool,
     pub auto_collapse_inactive_days: Entity<InputState>,
     pub naming_expanded: bool,
     pub git_expanded: bool,
@@ -130,7 +134,7 @@ const PAGE_ORDER: [usize; 11] = [0, 1, 2, 3, 8, 10, 6, 4, 9, 11, 7];
 /// A compact pane has a full text category selector instead of an icon-only rail.
 pub(super) fn settings_navigation_width(available_width: f32, font_size: f32) -> f32 {
     let scale = (font_size / DEFAULT_UI_FONT_SIZE).max(1.);
-    let expanded = 224. * scale;
+    let expanded = 184. * scale;
     if available_width < expanded + 480. * scale {
         0.
     } else {
@@ -156,25 +160,14 @@ impl ConduitApp {
             conduit::i18n::source(section),
             conduit::i18n::source(title)
         );
-        Button::new("settings-category-selector")
+        settings_dropdown("settings-category-selector")
             .debug_selector(|| "settings-category-selector".into())
             .accessibility_label(conduit::i18n::text_static(
                 "settings.workspace.choose_category",
             ))
-            .outline()
             .w_full()
             .min_w_0()
-            .h(px(36.
-                * (self.store.ui.ui_font_size / DEFAULT_UI_FONT_SIZE)
-                    .max(1.)))
-            .child(
-                h_flex()
-                    .w_full()
-                    .min_w_0()
-                    .gap_2()
-                    .child(div().flex_1().min_w_0().truncate().child(label))
-                    .child(Icon::new(FullIconName::ChevronDown).small().flex_shrink_0()),
-            )
+            .label(label)
             .dropdown_menu(move |mut menu, _, _| {
                 for index in PAGE_ORDER {
                     let select = view.clone();
@@ -211,7 +204,7 @@ impl ConduitApp {
                 group = section;
                 navigation = navigation.child(
                     div()
-                        .pt(px(if first_group { 12. } else { 20. }))
+                        .pt(px(if first_group { 12. } else { 16. }))
                         .pb_1()
                         .px_3()
                         .text_size(ui_text_size(12.))
@@ -256,11 +249,11 @@ impl ConduitApp {
                     )
                     .ghost()
                     .h_auto()
-                    .min_h(px(36. * font_scale))
-                    .py(px(7. * font_scale))
+                    .min_h(px(32. * font_scale))
+                    .py(px(5. * font_scale))
                     .w_full()
                     .justify_start()
-                    .text_size(ui_text_size(13.))
+                    .text_size(ui_text_size(14.))
                     .selected(selected)
                     .when(selected, |button| {
                         button.font_medium().text_color(rgb(palette().text))
@@ -283,7 +276,8 @@ impl ConduitApp {
     ) -> impl IntoElement {
         let disabled = !self.writable || self.closing;
         let compact = navigation_width == 0.;
-        let content_width = (available_width - navigation_width).max(0.);
+        let content_width =
+            (available_width - navigation_width).clamp(0., SETTINGS_CONTENT_MAX_WIDTH);
         let route =
             SettingsRoute::from_index(self.settings_ui.page).unwrap_or(SettingsRoute::General);
         let query = self.settings_ui.search.read(cx).value();
@@ -292,6 +286,9 @@ impl ConduitApp {
             SettingsContent::new(self.settings_search_results(&query, view.clone()))
         } else {
             match route {
+                SettingsRoute::Appearance => {
+                    self.settings_appearance_content(content_width, view.clone(), cx)
+                }
                 SettingsRoute::Shortcuts => self.settings_shortcuts_page(view.clone()),
                 SettingsRoute::Plugins => self.settings_plugins_content(view.clone()),
                 SettingsRoute::Engines | SettingsRoute::Services => {
@@ -302,9 +299,6 @@ impl ConduitApp {
                 }
                 _ => {
                     let page = match route {
-                        SettingsRoute::Appearance => {
-                            self.settings_appearance_page(disabled, view.clone())
-                        }
                         SettingsRoute::AutomaticNaming => {
                             self.settings_session_page(disabled, view.clone())
                         }
@@ -353,7 +347,7 @@ impl ConduitApp {
                                 .flex_1()
                                 .min_h_0()
                                 .w_full()
-                                .px_3()
+                                .px_2()
                                 .pb_3()
                                 .overflow_y_scroll()
                                 .child(self.settings_navigation(route, searching, view.clone())),
@@ -362,13 +356,13 @@ impl ConduitApp {
                             div()
                                 .px_4()
                                 .py_3()
-                                .text_size(ui_text_size(11.))
+                                .text_size(ui_text_size(12.))
                                 .text_color(rgb(palette().muted))
                                 .child(format!("Conduit {}", env!("CARGO_PKG_VERSION"))),
                         ),
                 )
             })
-            .child(self.settings_content_pane(compact, content, view))
+            .child(self.settings_content_pane(compact, searching, content, view))
     }
 
     pub(super) fn select_settings_page(
@@ -385,6 +379,11 @@ impl ConduitApp {
         }
         self.settings_ui.page = route.index();
         self.settings_ui.group = None;
+        self.settings_ui.appearance_group = None;
+        self.settings_ui.appearance_modified_only = false;
+        self.settings_ui
+            .appearance_filter
+            .update(cx, |input, cx| input.set_value("", window, cx));
         self.settings_ui
             .search
             .update(cx, |input, cx| input.set_value("", window, cx));

@@ -1,6 +1,7 @@
 //! Provider, permission, and model selection controls.
 
 use super::generation::GenerationKind;
+use super::settings::settings_dropdown;
 use super::*;
 
 #[cfg(all(test, feature = "ui-tests"))]
@@ -1476,38 +1477,14 @@ impl ConduitApp {
             .unwrap_or(conduit::i18n::text_static(
                 "generation.follow_current_session",
             ));
-        let trigger = Button::new("naming-provider-trigger")
-            .ghost()
-            .small()
-            .h(px(24.))
-            .px_2()
-            .rounded_full()
+        let trigger = settings_dropdown("naming-provider-trigger")
+            .w(ui_text_size(192.))
+            .label(label)
             .disabled(disabled)
             .when(!disabled, |button| button.cursor_pointer())
             .accessibility_label(conduit::i18n::text_static(
                 "model_picker.select_naming_engine",
-            ))
-            .child(
-                h_flex()
-                    .gap_1()
-                    .items_center()
-                    .when_some(current, |row, provider| row.child(provider_icon(provider)))
-                    .child(
-                        div()
-                            .text_size(ui_text_size(12.))
-                            .text_color(rgb(if disabled {
-                                palette().faint
-                            } else {
-                                palette().muted
-                            }))
-                            .child(label),
-                    )
-                    .child(
-                        Icon::new(IconName::ChevronDown)
-                            .small()
-                            .text_color(rgb(palette().faint)),
-                    ),
-            );
+            ));
         Popover::new("naming-provider-popover")
             .anchor(Anchor::BottomRight)
             .offset(px(6.))
@@ -1592,37 +1569,14 @@ impl ConduitApp {
     pub(super) fn naming_mode_picker(&self, view: Entity<Self>, disabled: bool) -> AnyElement {
         let current = self.store.ui.naming_mode;
         let label = naming_mode_label(current);
-        let trigger = Button::new("naming-mode-trigger")
-            .ghost()
-            .small()
-            .h(px(24.))
-            .px_2()
-            .rounded_full()
+        let trigger = settings_dropdown("naming-mode-trigger")
+            .w(ui_text_size(192.))
+            .label(label)
             .disabled(disabled)
             .when(!disabled, |button| button.cursor_pointer())
             .accessibility_label(conduit::i18n::text_static(
                 "model_picker.select_automatic_renaming_mode",
-            ))
-            .child(
-                h_flex()
-                    .gap_1()
-                    .items_center()
-                    .child(
-                        div()
-                            .text_size(ui_text_size(12.))
-                            .text_color(rgb(if disabled {
-                                palette().faint
-                            } else {
-                                palette().muted
-                            }))
-                            .child(label),
-                    )
-                    .child(
-                        Icon::new(IconName::ChevronDown)
-                            .small()
-                            .text_color(rgb(palette().faint)),
-                    ),
-            );
+            ));
         Popover::new("naming-mode-popover")
             .anchor(Anchor::BottomRight)
             .offset(px(6.))
@@ -1736,40 +1690,15 @@ impl ConduitApp {
             .unwrap_or_else(|| default_label.to_string());
         let models = merged.models;
         let provider_label = provider.label();
-        let trigger = Button::new("naming-model-trigger")
-            .ghost()
-            .small()
-            .h(px(24.))
-            .px_2()
-            .rounded_full()
+        let trigger = settings_dropdown("naming-model-trigger")
+            .w(ui_text_size(192.))
+            .tooltip(trigger_label.clone())
+            .label(trigger_label)
             .disabled(disabled)
             .when(!disabled, |button| button.cursor_pointer())
             .accessibility_label(conduit::i18n::text_static(
                 "model_picker.select_naming_model",
-            ))
-            .child(
-                h_flex()
-                    .gap_1()
-                    .items_center()
-                    .child(model_mark(provider, selected_model.as_deref()))
-                    .child(
-                        div()
-                            .max_w(px(180.))
-                            .truncate()
-                            .text_size(ui_text_size(12.))
-                            .text_color(rgb(if disabled {
-                                palette().faint
-                            } else {
-                                palette().muted
-                            }))
-                            .child(trigger_label),
-                    )
-                    .child(
-                        Icon::new(IconName::ChevronDown)
-                            .small()
-                            .text_color(rgb(palette().faint)),
-                    ),
-            );
+            ));
         Popover::new("naming-model-popover")
             .anchor(Anchor::BottomRight)
             .offset(px(8.))
@@ -1894,38 +1823,14 @@ impl ConduitApp {
             .unwrap_or(conduit::i18n::text_static(
                 "generation.follow_current_session",
             ));
-        let trigger = Button::new("git-provider-trigger")
-            .ghost()
-            .small()
-            .h(px(24.))
-            .px_2()
-            .rounded_full()
+        let trigger = settings_dropdown("git-provider-trigger")
+            .w(ui_text_size(192.))
+            .label(label)
             .disabled(disabled)
             .when(!disabled, |button| button.cursor_pointer())
             .accessibility_label(conduit::i18n::text_static(
                 "model_picker.select_generation_cli",
-            ))
-            .child(
-                h_flex()
-                    .gap_1()
-                    .items_center()
-                    .when_some(current, |row, provider| row.child(provider_icon(provider)))
-                    .child(
-                        div()
-                            .text_size(ui_text_size(12.))
-                            .text_color(rgb(if disabled {
-                                palette().faint
-                            } else {
-                                palette().muted
-                            }))
-                            .child(label),
-                    )
-                    .child(
-                        Icon::new(IconName::ChevronDown)
-                            .small()
-                            .text_color(rgb(palette().faint)),
-                    ),
-            );
+            ));
         Popover::new("git-provider-popover")
             .anchor(Anchor::BottomRight)
             .offset(px(6.))
@@ -2027,40 +1932,15 @@ impl ConduitApp {
             .unwrap_or_else(|| default_label.to_string());
         let models = merged.models;
         let provider_label = provider.label();
-        let trigger = Button::new("git-model-trigger")
-            .ghost()
-            .small()
-            .h(px(24.))
-            .px_2()
-            .rounded_full()
+        let trigger = settings_dropdown("git-model-trigger")
+            .w(ui_text_size(192.))
+            .tooltip(trigger_label.clone())
+            .label(trigger_label)
             .disabled(disabled)
             .when(!disabled, |button| button.cursor_pointer())
             .accessibility_label(conduit::i18n::text_static(
                 "model_picker.select_generation_model",
-            ))
-            .child(
-                h_flex()
-                    .gap_1()
-                    .items_center()
-                    .child(model_mark(provider, selected_model.as_deref()))
-                    .child(
-                        div()
-                            .max_w(px(180.))
-                            .truncate()
-                            .text_size(ui_text_size(12.))
-                            .text_color(rgb(if disabled {
-                                palette().faint
-                            } else {
-                                palette().muted
-                            }))
-                            .child(trigger_label),
-                    )
-                    .child(
-                        Icon::new(IconName::ChevronDown)
-                            .small()
-                            .text_color(rgb(palette().faint)),
-                    ),
-            );
+            ));
         Popover::new("git-model-popover")
             .anchor(Anchor::BottomRight)
             .offset(px(8.))

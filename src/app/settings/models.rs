@@ -384,7 +384,7 @@ impl ProviderEditor {
 fn provider_field_label(label: &'static str, required: bool) -> impl IntoElement {
     h_flex()
         .gap_1()
-        .text_size(ui_text_size(12.))
+        .text_size(ui_text_size(14.))
         .font_medium()
         .child(label)
         .when(required, |row| {
@@ -406,11 +406,11 @@ impl ProviderEditor {
             .gap_2()
             .child(provider_field_label(label, false))
             .child(if env_auth {
-                Input::new(&self.fields[2])
+                settings_input(&self.fields[2])
                     .disabled(self.probing || self.saving)
                     .aria_label(label)
             } else {
-                Input::new(&self.key)
+                settings_input(&self.key)
                     .mask_toggle()
                     .disabled(self.probing || self.saving)
                     .aria_label(label)
@@ -437,6 +437,8 @@ impl ProviderEditor {
                 body.child(
                     Button::new("clear-provider-key")
                         .small()
+                        .h(ui_text_size(32.))
+                        .text_size(ui_text_size(14.))
                         .ghost()
                         .label(conduit::i18n::text_static(
                             "settings.models.remove_saved_credentials",
@@ -458,6 +460,8 @@ impl ProviderEditor {
                 Button::new(("custom-provider-engine", i))
                     .outline()
                     .small()
+                    .h(ui_text_size(32.))
+                    .text_size(ui_text_size(14.))
                     .label(engine.label())
                     .disabled(self.id.is_some() || self.probing || self.saving)
                     .selected(self.engine == engine)
@@ -484,6 +488,8 @@ impl ProviderEditor {
             authentication = authentication.child(
                 Button::new(id)
                     .small()
+                    .h(ui_text_size(32.))
+                    .text_size(ui_text_size(14.))
                     .outline()
                     .label(label)
                     .selected(self.env_auth == env_auth)
@@ -507,8 +513,8 @@ impl ProviderEditor {
             v_flex()
                 .debug_selector(|| "provider-advanced-fields".into())
                 .w_full()
-                .p_4()
-                .gap_4()
+                .py_2()
+                .gap_3()
                 .child(
                     h_flex()
                         .items_start()
@@ -579,10 +585,11 @@ impl Render for ProviderEditor {
             .id("provider-editor-body")
             .debug_selector(|| "provider-editor-body".into())
             .w_full()
+            .text_size(ui_text_size(14.))
             .min_h_0()
             .max_h((window.viewport_size().height - px(210.)).max(px(120.)))
             .overflow_y_scroll()
-            .gap_4()
+            .gap_3()
             .when(shared, |form| {
                 form.child(
                     v_flex()
@@ -593,7 +600,7 @@ impl Render for ProviderEditor {
                         .pb_3()
                         .border_b_1()
                         .border_color(rgb(palette().border))
-                        .child(div().font_medium().text_size(ui_text_size(13.)).child(
+                        .child(div().font_medium().text_size(ui_text_size(14.)).child(
                             conduit::i18n::format(
                                 "settings.models.shared_configuration",
                                 &[("count", references.len().to_string())],
@@ -620,7 +627,7 @@ impl Render for ProviderEditor {
                             .gap_2()
                             .child(
                                 h_flex()
-                                    .size(px(32.))
+                                    .size(ui_text_size(24.))
                                     .flex_shrink_0()
                                     .items_center()
                                     .justify_center()
@@ -629,13 +636,13 @@ impl Render for ProviderEditor {
                                     .border_color(rgb(palette().border))
                                     .bg(rgb(palette().surface_strong))
                                     .text_color(rgb(palette().muted))
-                                    .text_size(ui_text_size(13.))
+                                    .text_size(ui_text_size(14.))
                                     .font_medium()
                                     .child(initial),
                             )
                             .child(
                                 div().flex_1().min_w_0().child(
-                                    Input::new(&self.fields[0])
+                                    settings_input(&self.fields[0])
                                         .disabled(self.probing || self.saving)
                                         .aria_label(name_label),
                                 ),
@@ -649,13 +656,13 @@ impl Render for ProviderEditor {
                     .gap_2()
                     .child(provider_field_label(endpoint_label, true))
                     .child(
-                        Input::new(&self.fields[1])
+                        settings_input(&self.fields[1])
                             .disabled(self.probing || self.saving)
                             .aria_label(endpoint_label),
                     )
                     .child(
                         div()
-                            .text_size(ui_text_size(11.))
+                            .text_size(ui_text_size(12.))
                             .text_color(rgb(palette().muted))
                             .child(conduit::i18n::text_static(
                                 "settings.models.endpoint_version_hint",
@@ -674,7 +681,7 @@ impl Render for ProviderEditor {
                         .child(error),
                 )
             });
-        v_flex().w_full().min_h_0().gap_4().child(form).child(
+        v_flex().w_full().min_h_0().gap_3().child(form).child(
             h_flex()
                 .debug_selector(|| "provider-editor-actions".into())
                 .w_full()
@@ -689,6 +696,8 @@ impl Render for ProviderEditor {
                     Button::new("custom-provider-cancel")
                         .ghost()
                         .small()
+                        .h(ui_text_size(32.))
+                        .text_size(ui_text_size(14.))
                         .label(if self.confirm_discard {
                             conduit::i18n::text_static("settings.config_editor.continue_editing")
                         } else {
@@ -711,6 +720,8 @@ impl Render for ProviderEditor {
                             .debug_selector(|| "custom-provider-stop-discovery".into())
                             .ghost()
                             .small()
+                            .h(ui_text_size(32.))
+                            .text_size(ui_text_size(14.))
                             .label(conduit::i18n::text_static("settings.models.stop_waiting"))
                             .on_click(cx.listener(|this, _, _, cx| this.stop_discovery(cx))),
                     )
@@ -722,6 +733,8 @@ impl Render for ProviderEditor {
                                 "settings.config_editor.discard_unsaved_changes",
                             ))
                             .small()
+                            .h(ui_text_size(32.))
+                            .text_size(ui_text_size(14.))
                             .ghost()
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
@@ -730,6 +743,8 @@ impl Render for ProviderEditor {
                     Button::new("custom-provider-save")
                         .primary()
                         .small()
+                        .h(ui_text_size(32.))
+                        .text_size(ui_text_size(14.))
                         .loading(self.saving)
                         .label(conduit::i18n::text_static(if shared {
                             "settings.models.save_shared_configuration"
@@ -763,12 +778,13 @@ impl ConduitApp {
         let engine = self.connection_settings.engine;
         let editor = cx.new(|cx| ProviderEditor::new(app, provider, engine, window, cx));
         window.open_dialog(cx, move |dialog, window, cx| {
-            let width = (f32::from(window.viewport_size().width) - 48.).clamp(0., 860.);
+            let width = (window.viewport_size().width - px(48.))
+                .clamp(px(0.), ui_text_size(640.).to_pixels(window.rem_size()));
             let editor = editor.clone();
             let dismiss = editor.clone();
             let saving = editor.read(cx).saving;
             dialog
-                .w(px(width))
+                .w(width)
                 .centered()
                 .overlay_closable(false)
                 .keyboard(!saving)
@@ -834,6 +850,17 @@ impl ConduitApp {
     }
 
     pub(super) fn models_source_group(&self, engine: Provider, view: Entity<Self>) -> SettingGroup {
+        SettingGroup::new()
+            .variant(GroupBoxVariant::Normal)
+            .content_style(&settings_group_style().p_0().border_0())
+            .items(self.models_source_items(engine, view))
+    }
+
+    pub(super) fn models_source_items(
+        &self,
+        engine: Provider,
+        view: Entity<Self>,
+    ) -> Vec<SettingItem> {
         let expanded = self.connection_settings.sources_expanded;
         let config_path = self
             .catalogs
@@ -903,9 +930,7 @@ impl ConduitApp {
                 .keywords([conduit::i18n::text_static("settings.models.error")]),
             );
         }
-        SettingGroup::new()
-            .variant(GroupBoxVariant::Normal)
-            .items(items)
+        items
     }
 
     pub(super) fn models_provider_group(
@@ -913,6 +938,28 @@ impl ConduitApp {
         provider: Provider,
         view: Entity<Self>,
     ) -> SettingGroup {
+        let (items, note) = self.models_provider_items(provider, view);
+        let group = SettingGroup::new()
+            .variant(GroupBoxVariant::Normal)
+            .content_style(&settings_group_style().p_0().border_0())
+            .title(if provider == Provider::OpenCode {
+                conduit::i18n::text_static("settings.models.opencode_native_models")
+            } else {
+                conduit::i18n::text_static("settings.models.cli_defaults")
+            })
+            .items(items);
+        if let Some(note) = note {
+            group.footer(move |_, _| note.clone())
+        } else {
+            group
+        }
+    }
+
+    pub(super) fn models_provider_items(
+        &self,
+        provider: Provider,
+        view: Entity<Self>,
+    ) -> (Vec<SettingItem>, Option<String>) {
         let catalog = self.engine_catalog(provider);
         let current = catalog
             .and_then(|catalog| catalog.current.clone())
@@ -983,6 +1030,8 @@ impl ConduitApp {
                             Button::new("settings-opencode-refresh")
                                 .ghost()
                                 .small()
+                                .h(ui_text_size(32.))
+                                .text_size(ui_text_size(14.))
                                 .label(conduit::i18n::text_static("settings.models.refresh_models"))
                                 .disabled(closing)
                                 .on_click(move |_, _, cx| {
@@ -1022,18 +1071,7 @@ impl ConduitApp {
                 .keywords([conduit::i18n::text_static("settings.models.error")]),
             );
         }
-        let group = SettingGroup::new()
-            .title(if provider == Provider::OpenCode {
-                conduit::i18n::text_static("settings.models.opencode_native_models")
-            } else {
-                conduit::i18n::text_static("settings.models.cli_defaults")
-            })
-            .items(items);
-        if let Some(note) = note {
-            group.footer(move |_, _| note.clone())
-        } else {
-            group
-        }
+        (items, note)
     }
 }
 

@@ -12,7 +12,7 @@ pub(super) fn management_badge(label: impl Into<SharedString>, active: bool) -> 
         } else {
             rgb(palette().surface_strong)
         })
-        .text_size(ui_text_size(11.))
+        .text_size(ui_text_size(12.))
         .text_color(rgb(if active {
             palette().activity_running
         } else {
@@ -50,7 +50,8 @@ pub(super) fn engine_tabs(
                 .selected(selected)
                 .flex_shrink_0()
                 .px_3()
-                .h(px(32.))
+                .h(ui_text_size(32.))
+                .text_size(ui_text_size(14.))
                 .rounded_md()
                 .child(
                     h_flex()
@@ -75,7 +76,90 @@ pub(super) fn engine_tabs(
     tabs.into_any_element()
 }
 
-/// Engine choices and page modes share a toolbar, wrapping when space is limited.
+#[derive(IntoElement)]
+struct ManagementToolbar {
+    engine: Provider,
+    extensions: bool,
+    mode_tabs: Option<AnyElement>,
+    actions: Option<AnyElement>,
+    view: Entity<ConduitApp>,
+}
+
+impl RenderOnce for ManagementToolbar {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let font_size = self.view.read(cx).store.ui.ui_font_size;
+        let viewport_width = f32::from(window.viewport_size().width);
+        let content_width = (viewport_width
+            - navigation::settings_navigation_width(viewport_width, font_size))
+        .min(SETTINGS_CONTENT_MAX_WIDTH);
+        let compact = content_width < 820. * (font_size / DEFAULT_UI_FONT_SIZE);
+        let engine = self.engine;
+        let extensions = self.extensions;
+        let tabs = if compact {
+            let view = self.view;
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(
+                    settings_dropdown("management-engine-picker")
+                        .debug_selector(|| "management-engine-picker".into())
+                        .w(ui_text_size(184.))
+                        .max_w_full()
+                        .label(engine.label())
+                        .dropdown_menu(move |mut menu, _, _| {
+                            for (index, candidate) in Provider::ALL.into_iter().enumerate() {
+                                let view = view.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::element(move |_, _| {
+                                        h_flex()
+                                            .gap_2()
+                                            .debug_selector(move || {
+                                                format!(
+                                                    "{}-engine-{index}",
+                                                    if extensions {
+                                                        "extensions"
+                                                    } else {
+                                                        "settings"
+                                                    }
+                                                )
+                                            })
+                                            .child(provider_icon(candidate))
+                                            .child(candidate.label())
+                                    })
+                                    .checked(candidate == engine)
+                                    .on_click(
+                                        move |_, window, cx| {
+                                            view.update(cx, |app, cx| {
+                                                app.select_settings_engine(candidate, window, cx)
+                                            });
+                                        },
+                                    ),
+                                );
+                            }
+                            menu
+                        }),
+                )
+                .into_any_element()
+        } else {
+            engine_tabs(engine, extensions, self.view)
+        };
+        h_flex()
+            .debug_selector(|| "management-engine-bar".into())
+            .w_full()
+            .min_w_0()
+            .flex_shrink_0()
+            .flex_wrap()
+            .items_center()
+            .gap_2()
+            .px(px(settings_content_inset()))
+            .py_2()
+            .child(tabs)
+            .when_some(self.mode_tabs, |bar, modes| bar.child(modes))
+            .when_some(self.actions, |bar, actions| bar.child(actions))
+    }
+}
+
+/// Compact windows keep the engine context on one row with page actions.
 pub(super) fn management_toolbar(
     engine: Provider,
     extensions: bool,
@@ -83,22 +167,14 @@ pub(super) fn management_toolbar(
     actions: Option<AnyElement>,
     view: Entity<ConduitApp>,
 ) -> AnyElement {
-    let inset = settings_content_inset();
-    let tabs = engine_tabs(engine, extensions, view);
-    h_flex()
-        .debug_selector(|| "management-engine-bar".into())
-        .w_full()
-        .min_w_0()
-        .flex_shrink_0()
-        .flex_wrap()
-        .items_center()
-        .gap_2()
-        .px(px(inset))
-        .pt(px(inset))
-        .child(tabs)
-        .when_some(mode_tabs, |bar, modes| bar.child(modes))
-        .when_some(actions, |bar, actions| bar.child(actions))
-        .into_any_element()
+    ManagementToolbar {
+        engine,
+        extensions,
+        mode_tabs,
+        actions,
+        view,
+    }
+    .into_any_element()
 }
 
 impl ConduitApp {

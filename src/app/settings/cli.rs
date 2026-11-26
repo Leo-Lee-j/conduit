@@ -442,6 +442,21 @@ impl ConduitApp {
         disabled: bool,
         view: Entity<Self>,
     ) -> SettingGroup {
+        SettingGroup::new()
+            .variant(GroupBoxVariant::Normal)
+            .content_style(&settings_group_style().p_0().border_0())
+            .item(SettingItem::render(move |_, _, cx| {
+                view.read(cx)
+                    .settings_provider_detail(provider, disabled, view.clone())
+            }))
+    }
+
+    pub(super) fn settings_provider_detail(
+        &self,
+        provider: Provider,
+        disabled: bool,
+        view: Entity<Self>,
+    ) -> AnyElement {
         let index = provider as usize;
         let enabled = self.store.cli.enabled(provider);
         let configured = self
@@ -501,319 +516,350 @@ impl ConduitApp {
         let closing = self.closing;
         let expanded = self.connection_settings.path_help;
         let descriptor = provider.descriptor();
-        let card = SettingItem::render(move |_, _, _| {
-            let toggle = view.clone();
-            let choose = view.clone();
-            let clear = view.clone();
-            let update = view.clone();
-            let help = view.clone();
-            v_flex()
-                .w_full()
-                .gap_2()
-                .child(
-                    h_flex()
-                        .debug_selector(|| "engine-detail-heading".into())
-                        .w_full()
-                        .gap_2()
-                        .flex_wrap()
-                        .child(
-                            div()
-                                .size(px(32.))
-                                .flex_shrink_0()
-                                .rounded_lg()
-                                .bg(rgb(palette().surface_strong))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(provider_icon(provider)),
-                        )
-                        .child(
-                            h_flex()
-                                .min_w_0()
-                                .gap_2()
-                                .flex_wrap()
-                                .child(
-                                    div()
-                                        .text_size(ui_text_size(14.))
-                                        .font_semibold()
-                                        .child(provider.label()),
-                                )
-                                .child(
-                                    h_flex()
-                                        .gap_2()
-                                        .flex_wrap()
-                                        .child(management_badge(
-                                            if available {
-                                                conduit::i18n::text_static("settings.cli.cli_found")
-                                            } else {
-                                                conduit::i18n::text_static(
-                                                    "settings.cli.cli_not_found",
-                                                )
-                                            },
-                                            available,
-                                        ))
-                                        .child(management_badge(
-                                            descriptor.capabilities.protocol,
-                                            false,
-                                        )),
-                                ),
-                        )
-                        .child(
-                            div().debug_selector(move || format!("engine-enabled-{index}"))
-                            .child(Switch::new(("engine-enabled", index))
-                                .checked(enabled)
-                                .label(conduit::i18n::text_static("settings.cli.enable_engine"))
-                                .accessibility_label(format!(
-                                    "{} · {}",
-                                    provider.label(),
-                                    conduit::i18n::text_static("settings.cli.enable_engine")
-                                ))
-                                .disabled(disabled)
-                                .on_click(move |value, _, cx| {
-                                    toggle.update(cx, |app, cx| {
-                                        app.set_engine_enabled(provider, *value, cx)
-                                    })
-                                })),
-                        ),
-                )
-                .when(!available, |body| {
-                    body.child(
-                        h_flex().w_full().gap_3().flex_wrap()
-                            .child(Button::new(("engine-setup", index)).primary().small()
-                                .label(conduit::i18n::text_static("settings.cli.installation_and_sign_in_instructions"))
-                                .on_click(move |_, _, cx| cx.open_url(descriptor.guide))),
+        let toggle = view.clone();
+        let choose = view.clone();
+        let clear = view.clone();
+        let update = view.clone();
+        let help = view.clone();
+        v_flex()
+            .w_full()
+            .min_w_0()
+            .text_size(ui_text_size(14.))
+            .gap_2()
+            .child(
+                h_flex()
+                    .debug_selector(|| "engine-detail-heading".into())
+                    .w_full()
+                    .gap_2()
+                    .flex_wrap()
+                    .child(
+                        div()
+                            .size(ui_text_size(24.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(provider_icon(provider)),
                     )
-                })
-                .child(
-                    v_flex()
-                        .w_full()
-                        .gap_2()
-                        .pt_2()
-                        .border_t_1()
-                        .border_color(rgb(palette().border))
-                        .child(
-                            h_flex()
-                                .w_full()
-                                .gap_2()
-                                .flex_wrap()
-                                .justify_between()
-                                .child(div().text_size(ui_text_size(12.)).font_semibold().child(
-                                    conduit::i18n::text_static("settings.cli.version_and_updates"),
-                                ))
-                                .child(
-                                    h_flex().gap_2().flex_wrap().child(
-                                        Button::new(("settings-check-updates", index))
-                                            .debug_selector(move || {
-                                                format!("settings-check-updates-{index}")
-                                            })
-                                            .small()
-                                            .when(install_available || installing, |button| {
-                                                button.primary()
-                                            })
-                                            .when(!install_available && !installing, |button| {
-                                                button.outline()
-                                            })
-                                            .icon(if installing || install_available {
-                                                FullIconName::Download
-                                            } else if latest {
-                                                FullIconName::Check
-                                            } else {
-                                                FullIconName::RefreshCw
-                                            })
-                                            .label(if cancelling {
-                                                if installing {
-                                                    conduit::i18n::text_static(
-                                                        "settings.cli.stopping",
-                                                    )
-                                                } else {
-                                                    conduit::i18n::text_static(
-                                                        "settings.cli.cancelling",
-                                                    )
-                                                }
-                                            } else if installing {
-                                                conduit::i18n::text_static(
-                                                    "settings.cli.stop_update",
-                                                )
-                                            } else if checking_updates {
-                                                conduit::i18n::text_static(
-                                                    "settings.cli.cancel_check",
-                                                )
-                                            } else if probing {
-                                                conduit::i18n::text_static("settings.cli.detecting")
-                                            } else if install_available {
-                                                conduit::i18n::text_static(
-                                                    "settings.cli.update_now",
-                                                )
-                                            } else if latest {
-                                                conduit::i18n::text_static(
-                                                    "settings.cli.up_to_date",
-                                                )
-                                            } else {
-                                                conduit::i18n::text_static(
-                                                    "settings.cli.check_for_updates",
-                                                )
-                                            })
-                                            .disabled(
-                                                closing
-                                                    || cancelling
-                                                    || latest
-                                                    || (any_installing && !installing)
-                                                    || (probing
-                                                        && !checking_updates
-                                                        && !installing)
-                                                    || (!probing
-                                                        && (!available
-                                                            || (install_available
-                                                                && (!self_writable
-                                                                    || update_busy)))),
-                                            )
-                                            .on_click(move |_, _, cx| {
-                                                update.update(cx, |app, cx| {
-                                                    app.cli_update_action(provider, cx)
-                                                })
-                                            }),
-                                    ),
-                                ),
-                        )
-                        .when(update_busy && install_available && !installing, |body| {
-                            body.child(
+                    .child(
+                        h_flex()
+                            .min_w_0()
+                            .gap_2()
+                            .flex_wrap()
+                            .child(
                                 div()
-                                    .text_size(ui_text_size(11.))
-                                    .text_color(rgb(palette().muted))
-                                    .child(conduit::i18n::text_static(
-                                        "settings.cli.wait_for_running_cli_tasks_to_finish",
-                                    )),
+                                    .text_size(ui_text_size(14.))
+                                    .font_semibold()
+                                    .child(provider.label()),
                             )
-                        })
-                        .child(
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .flex_wrap()
+                                    .child(management_badge(
+                                        if available {
+                                            conduit::i18n::text_static("settings.cli.cli_found")
+                                        } else {
+                                            conduit::i18n::text_static("settings.cli.cli_not_found")
+                                        },
+                                        available,
+                                    ))
+                                    .child(management_badge(
+                                        descriptor.capabilities.protocol,
+                                        false,
+                                    )),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(move || format!("engine-enabled-{index}"))
+                            .child(
+                                Switch::new(("engine-enabled", index))
+                                    .checked(enabled)
+                                    .label(conduit::i18n::text_static("settings.cli.enable_engine"))
+                                    .accessibility_label(format!(
+                                        "{} · {}",
+                                        provider.label(),
+                                        conduit::i18n::text_static("settings.cli.enable_engine")
+                                    ))
+                                    .disabled(disabled)
+                                    .on_click(move |value, _, cx| {
+                                        toggle.update(cx, |app, cx| {
+                                            app.set_engine_enabled(provider, *value, cx)
+                                        })
+                                    }),
+                            ),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap_1()
+                    .py_2()
+                    .child(
+                        div()
+                            .text_size(ui_text_size(12.))
+                            .text_color(rgb(palette().muted))
+                            .child(conduit::i18n::text_static("settings.cli.executable_path")),
+                    )
+                    .child(
+                        div()
+                            .id("engine-effective-path")
+                            .debug_selector(|| "engine-effective-path".into())
+                            .w_full()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(ui_text_size(14.))
+                            .text_color(rgb(if available {
+                                palette().text
+                            } else {
+                                palette().danger_text
+                            }))
+                            .tooltip({
+                                let path = effective.clone();
+                                move |window, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(path.clone())
+                                        .build(window, cx)
+                                }
+                            })
+                            .child(effective.clone()),
+                    ),
+            )
+            .when(!available, |body| {
+                body.child(
+                    h_flex().w_full().gap_3().flex_wrap().child(
+                        Button::new(("engine-setup", index))
+                            .primary()
+                            .small()
+                            .h(ui_text_size(32.))
+                            .text_size(ui_text_size(14.))
+                            .label(conduit::i18n::text_static(
+                                "settings.cli.installation_and_sign_in_instructions",
+                            ))
+                            .on_click(move |_, _, cx| cx.open_url(descriptor.guide)),
+                    ),
+                )
+            })
+            .child(
+                v_flex()
+                    .w_full()
+                    .gap_2()
+                    .pt_2()
+                    .border_t_1()
+                    .border_color(rgb(palette().border))
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .gap_2()
+                            .flex_wrap()
+                            .child(div().text_size(ui_text_size(14.)).font_semibold().child(
+                                conduit::i18n::text_static("settings.cli.version_and_updates"),
+                            ))
+                            .child(
+                                h_flex().gap_2().flex_wrap().child(
+                                    Button::new(("settings-check-updates", index))
+                                        .debug_selector(move || {
+                                            format!("settings-check-updates-{index}")
+                                        })
+                                        .small()
+                                        .h(ui_text_size(32.))
+                                        .text_size(ui_text_size(14.))
+                                        .when(install_available || installing, |button| {
+                                            button.primary()
+                                        })
+                                        .when(!install_available && !installing, |button| {
+                                            button.outline()
+                                        })
+                                        .icon(if installing || install_available {
+                                            FullIconName::Download
+                                        } else if latest {
+                                            FullIconName::Check
+                                        } else {
+                                            FullIconName::RefreshCw
+                                        })
+                                        .label(if cancelling {
+                                            if installing {
+                                                conduit::i18n::text_static("settings.cli.stopping")
+                                            } else {
+                                                conduit::i18n::text_static(
+                                                    "settings.cli.cancelling",
+                                                )
+                                            }
+                                        } else if installing {
+                                            conduit::i18n::text_static("settings.cli.stop_update")
+                                        } else if checking_updates {
+                                            conduit::i18n::text_static("settings.cli.cancel_check")
+                                        } else if probing {
+                                            conduit::i18n::text_static("settings.cli.detecting")
+                                        } else if install_available {
+                                            conduit::i18n::text_static("settings.cli.update_now")
+                                        } else if latest {
+                                            conduit::i18n::text_static("settings.cli.up_to_date")
+                                        } else {
+                                            conduit::i18n::text_static(
+                                                "settings.cli.check_for_updates",
+                                            )
+                                        })
+                                        .disabled(
+                                            closing
+                                                || cancelling
+                                                || latest
+                                                || (any_installing && !installing)
+                                                || (probing && !checking_updates && !installing)
+                                                || (!probing
+                                                    && (!available
+                                                        || (install_available
+                                                            && (!self_writable || update_busy)))),
+                                        )
+                                        .on_click(move |_, _, cx| {
+                                            update.update(cx, |app, cx| {
+                                                app.cli_update_action(provider, cx)
+                                            })
+                                        }),
+                                ),
+                            ),
+                    )
+                    .when(update_busy && install_available && !installing, |body| {
+                        body.child(
                             div()
-                                .debug_selector(move || format!("settings-cli-diagnostic-{index}"))
                                 .text_size(ui_text_size(12.))
                                 .text_color(rgb(palette().muted))
-                                .child(diagnostic.clone()),
+                                .child(conduit::i18n::text_static(
+                                    "settings.cli.wait_for_running_cli_tasks_to_finish",
+                                )),
                         )
-                        .child(
-                            h_flex()
-                                .w_full()
-                                .gap_2()
-                                .flex_wrap()
-                                .child(
-                                    Button::new(("settings-update-guide", index))
+                    })
+                    .child(
+                        div()
+                            .debug_selector(move || format!("settings-cli-diagnostic-{index}"))
+                            .text_size(ui_text_size(12.))
+                            .text_color(rgb(palette().muted))
+                            .child(diagnostic.clone()),
+                    )
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .gap_2()
+                            .flex_wrap()
+                            .child(
+                                Button::new(("settings-update-guide", index))
+                                    .small()
+                                    .h(ui_text_size(32.))
+                                    .text_size(ui_text_size(14.))
+                                    .ghost()
+                                    .label(conduit::i18n::text_static(
+                                        "settings.cli.official_release_notes",
+                                    ))
+                                    .on_click(move |_, _, cx| {
+                                        cx.open_url(cli::updates::guide_url(provider))
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .text_size(ui_text_size(12.))
+                                    .text_color(rgb(palette().faint))
+                                    .child(conduit::i18n::format(
+                                        "settings.cli.verified_version",
+                                        &[("arg0", cli::tested_version(provider).to_string())],
+                                    )),
+                            ),
+                    ),
+            )
+            .child(settings_accordion(
+                "settings-path-help",
+                conduit::i18n::text_static("settings.cli.advanced_configuration"),
+                expanded,
+                v_flex()
+                    .w_full()
+                    .gap_2()
+                    .pt_2()
+                    .child(
+                        div()
+                            .text_size(ui_text_size(12.))
+                            .font_semibold()
+                            .child(conduit::i18n::text_static("settings.cli.executable_path")),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .id("engine-configured-path")
+                            .truncate()
+                            .text_size(ui_text_size(12.))
+                            .tooltip({
+                                let path = configured.clone();
+                                move |window, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(path.clone())
+                                        .build(window, cx)
+                                }
+                            })
+                            .child(configured.clone()),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .flex_wrap()
+                            .child(
+                                Button::new(("settings-choose", index))
+                                    .small()
+                                    .h(ui_text_size(32.))
+                                    .text_size(ui_text_size(14.))
+                                    .outline()
+                                    .icon(FullIconName::FolderOpen)
+                                    .label(conduit::i18n::text_static("settings.cli.choose_file"))
+                                    .disabled(disabled)
+                                    .on_click(move |_, window, cx| {
+                                        choose.update(cx, |app, cx| {
+                                            app.choose_cli(provider, window, cx)
+                                        })
+                                    }),
+                            )
+                            .when(has_path, |row| {
+                                row.child(
+                                    Button::new(("settings-clear", index))
                                         .small()
+                                        .h(ui_text_size(32.))
+                                        .text_size(ui_text_size(14.))
                                         .ghost()
                                         .label(conduit::i18n::text_static(
-                                            "settings.cli.official_release_notes",
-                                        ))
-                                        .on_click(move |_, _, cx| {
-                                            cx.open_url(cli::updates::guide_url(provider))
-                                        }),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(ui_text_size(11.))
-                                        .text_color(rgb(palette().faint))
-                                        .child(conduit::i18n::format(
-                                            "settings.cli.verified_version",
-                                            &[("arg0", cli::tested_version(provider).to_string())],
-                                        )),
-                                ),
-                        ),
-                )
-                .child(settings_accordion(
-                    "settings-path-help",
-                    conduit::i18n::text_static("settings.cli.advanced_configuration"),
-                    expanded,
-                    v_flex()
-                        .w_full()
-                        .gap_2()
-                        .pt_2()
-                        .child(
-                            div()
-                                .text_size(ui_text_size(12.))
-                                .font_semibold()
-                                .child(conduit::i18n::text_static("settings.cli.executable_path")),
-                        )
-                        .child(
-                            div()
-                                .w_full()
-                                .min_w_0()
-                                .p_3()
-                                .rounded_md()
-                                .bg(rgb(palette().surface_strong))
-                                .text_size(ui_text_size(12.))
-                                .child(configured.clone()),
-                        )
-                        .child(
-                            div()
-                                .text_size(ui_text_size(12.))
-                                .text_color(rgb(if available {
-                                    palette().muted
-                                } else {
-                                    palette().danger_text
-                                }))
-                                .child(effective.clone()),
-                        )
-                        .child(
-                            h_flex()
-                                .gap_2()
-                                .flex_wrap()
-                                .child(
-                                    Button::new(("settings-choose", index))
-                                        .small()
-                                        .outline()
-                                        .icon(FullIconName::FolderOpen)
-                                        .label(conduit::i18n::text_static(
-                                            "settings.cli.choose_file",
+                                            "settings.cli.restore_automatic_detection",
                                         ))
                                         .disabled(disabled)
-                                        .on_click(move |_, window, cx| {
-                                            choose.update(cx, |app, cx| {
-                                                app.choose_cli(provider, window, cx)
+                                        .on_click(move |_, _, cx| {
+                                            clear.update(cx, |app, cx| {
+                                                app.set_cli_path(provider, None, cx)
                                             })
                                         }),
                                 )
-                                .when(has_path, |row| {
-                                    row.child(
-                                        Button::new(("settings-clear", index))
-                                            .small()
-                                            .ghost()
-                                            .label(conduit::i18n::text_static(
-                                                "settings.cli.restore_automatic_detection",
-                                            ))
-                                            .disabled(disabled)
-                                            .on_click(move |_, _, cx| {
-                                                clear.update(cx, |app, cx| {
-                                                    app.set_cli_path(provider, None, cx)
-                                                })
-                                            }),
-                                    )
-                                })
-                                .child(
-                                    Button::new(("engine-guide", index))
-                                        .small()
-                                        .ghost()
-                                        .label(conduit::i18n::text_static(
-                                            "settings.cli.installation_and_sign_in_instructions",
-                                        ))
-                                        .on_click(move |_, _, cx| cx.open_url(descriptor.guide)),
-                                ),
-                        )
-                        .child(div()
-                        .text_size(ui_text_size(12.))
-                        .text_color(rgb(palette().muted))
-                        .child(conduit::i18n::text_static(
-                            "settings.cli.lookup_order_environment_variable_app_specified_path",
-                        ))),
-                    move |open, _, cx| {
-                        help.update(cx, |app, cx| {
-                            app.connection_settings.path_help = open;
-                            cx.notify();
-                        })
-                    },
-                ))
-        });
-        SettingGroup::new()
-            .variant(GroupBoxVariant::Normal)
-            .item(card)
+                            })
+                            .child(
+                                Button::new(("engine-guide", index))
+                                    .small()
+                                    .h(ui_text_size(32.))
+                                    .text_size(ui_text_size(14.))
+                                    .ghost()
+                                    .label(conduit::i18n::text_static(
+                                        "settings.cli.installation_and_sign_in_instructions",
+                                    ))
+                                    .on_click(move |_, _, cx| cx.open_url(descriptor.guide)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(ui_text_size(12.))
+                            .text_color(rgb(palette().muted))
+                            .child(conduit::i18n::text_static(
+                                "settings.cli.lookup_order_environment_variable_app_specified_path",
+                            )),
+                    ),
+                move |open, _, cx| {
+                    help.update(cx, |app, cx| {
+                        app.connection_settings.path_help = open;
+                        cx.notify();
+                    })
+                },
+            ))
+            .into_any_element()
     }
 }

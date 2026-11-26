@@ -77,110 +77,107 @@ struct McpForm {
 
 impl Render for McpForm {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let form = v_flex()
-            .id("mcp-form")
-            .debug_selector(|| "mcp-form".into())
-            .gap_3()
-            .max_h((window.viewport_size().height - px(210.)).max(px(160.)))
-            .overflow_y_scroll()
-            .child(
-                div()
-                    .text_size(ui_text_size(12.))
-                    .text_color(rgb(palette().muted))
-                    .child(format!(
-                        "{} · {}",
-                        self.engine.label(),
-                        display_path(&self.path)
-                    )),
-            )
-            .child(
-                v_flex()
-                    .gap_1()
-                    .child(conduit::i18n::text_static(
-                        "settings.config_editor.service_name",
-                    ))
-                    .child(
-                        Input::new(&self.fields[0]).aria_label(conduit::i18n::text_static(
-                            "settings.config_editor.mcp_service_name",
+        let form =
+            v_flex()
+                .id("mcp-form")
+                .debug_selector(|| "mcp-form".into())
+                .gap_3()
+                .max_h((window.viewport_size().height - px(210.)).max(px(160.)))
+                .overflow_y_scroll()
+                .child(
+                    div()
+                        .text_size(ui_text_size(12.))
+                        .text_color(rgb(palette().muted))
+                        .child(format!(
+                            "{} · {}",
+                            self.engine.label(),
+                            display_path(&self.path)
                         )),
-                    ),
-            )
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(
-                        Button::new("mcp-local")
-                            .small()
-                            .outline()
-                            .label(conduit::i18n::text_static(
-                                "settings.config_editor.local_command",
-                            ))
-                            .selected(!self.remote)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.remote = false;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Button::new("mcp-remote")
-                            .small()
-                            .outline()
-                            .label(conduit::i18n::text_static(
-                                "settings.config_editor.remote_http",
-                            ))
-                            .selected(self.remote)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.remote = true;
-                                cx.notify();
-                            })),
-                    ),
-            )
-            .child(
-                v_flex()
-                    .gap_1()
-                    .child(if self.remote {
-                        conduit::i18n::text_static("settings.config_editor.service_url")
-                    } else {
-                        conduit::i18n::text_static(
-                            "settings.config_editor.executable_command_e_g_npx_uvx_or",
-                        )
-                    })
-                    .child(
-                        Input::new(&self.fields[1]).aria_label(conduit::i18n::text_static(
-                            "settings.config_editor.mcp_command_or_url",
-                        )),
-                    ),
-            )
-            .when(!self.remote, |body| {
-                body.child(
+                )
+                .child(
                     v_flex()
                         .gap_1()
                         .child(conduit::i18n::text_static(
-                            "settings.config_editor.arguments_one_per_line_no_extra_quotes",
+                            "settings.config_editor.service_name",
                         ))
-                        .child(Textarea::new(&self.arguments).h(px(90.)).aria_label(
-                            conduit::i18n::text_static(
-                                "settings.config_editor.mcp_command_arguments",
-                            ),
+                        .child(settings_input(&self.fields[0]).aria_label(
+                            conduit::i18n::text_static("settings.config_editor.mcp_service_name"),
                         )),
                 )
-            })
-            .child(
-                div()
-                    .text_size(ui_text_size(11.))
-                    .text_color(rgb(palette().muted))
-                    .child(conduit::i18n::text_static(
-                        "settings.config_editor.preview_the_merged_configuration_next_you_can",
-                    )),
-            )
-            .when_some(self.error.clone(), |body, error| {
-                body.child(
-                    div()
-                        .text_size(ui_text_size(12.))
-                        .text_color(rgb(palette().danger_text))
-                        .child(error),
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            Button::new("mcp-local")
+                                .small()
+                                .outline()
+                                .label(conduit::i18n::text_static(
+                                    "settings.config_editor.local_command",
+                                ))
+                                .selected(!self.remote)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.remote = false;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Button::new("mcp-remote")
+                                .small()
+                                .outline()
+                                .label(conduit::i18n::text_static(
+                                    "settings.config_editor.remote_http",
+                                ))
+                                .selected(self.remote)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.remote = true;
+                                    cx.notify();
+                                })),
+                        ),
                 )
-            });
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child(if self.remote {
+                            conduit::i18n::text_static("settings.config_editor.service_url")
+                        } else {
+                            conduit::i18n::text_static(
+                                "settings.config_editor.executable_command_e_g_npx_uvx_or",
+                            )
+                        })
+                        .child(settings_input(&self.fields[1]).aria_label(
+                            conduit::i18n::text_static("settings.config_editor.mcp_command_or_url"),
+                        )),
+                )
+                .when(!self.remote, |body| {
+                    body.child(
+                        v_flex()
+                            .gap_1()
+                            .child(conduit::i18n::text_static(
+                                "settings.config_editor.arguments_one_per_line_no_extra_quotes",
+                            ))
+                            .child(settings_textarea(&self.arguments).h(px(90.)).aria_label(
+                                conduit::i18n::text_static(
+                                    "settings.config_editor.mcp_command_arguments",
+                                ),
+                            )),
+                    )
+                })
+                .child(
+                    div()
+                        .text_size(ui_text_size(11.))
+                        .text_color(rgb(palette().muted))
+                        .child(conduit::i18n::text_static(
+                            "settings.config_editor.preview_the_merged_configuration_next_you_can",
+                        )),
+                )
+                .when_some(self.error.clone(), |body, error| {
+                    body.child(
+                        div()
+                            .text_size(ui_text_size(12.))
+                            .text_color(rgb(palette().danger_text))
+                            .child(error),
+                    )
+                });
         v_flex().gap_3().child(form).child(
             h_flex()
                 .justify_end()
@@ -380,14 +377,14 @@ impl Render for ConfigEditor {
                         .child(conduit::i18n::text_static(
                             "settings.config_editor.skill_folder_name",
                         ))
-                        .child(Input::new(&name).disabled(self.saving).aria_label(
+                        .child(settings_input(&name).disabled(self.saving).aria_label(
                             conduit::i18n::text_static("settings.config_editor.skill_folder_name"),
                         )),
                 )
             })
             .child(
                 div().h(px(height)).flex_shrink_0().w_full().child(
-                    Textarea::new(&self.text)
+                    settings_textarea(&self.text)
                         .disabled(self.saving)
                         .h_full()
                         .aria_label(conduit::i18n::text_static(

@@ -1,0 +1,41 @@
+{
+  "url": "https://www.jetbrains.com/help/idea/settings-preferences-dialog.html",
+  "title": [
+    "Settings | IntelliJ&nbsp;IDEA Documentation"
+  ],
+  "images": [
+    {
+      "src": "https://resources.jetbrains.com/help/img/idea/2026.3/app.expui.general.projectConfigurable.svg",
+      "class": "inline-icon-",
+      "data-dark-src": "https://resources.jetbrains.com/help/img/idea/2026.3/app.expui.general.projectConfigurable_dark.svg",
+      "id": "z5y551p_19",
+      "title": "Project settings",
+      "alt": "Project settings",
+      "width": "16",
+      "height": "16"
+    },
+    {
+      "src": "https://resources.jetbrains.com/help/img/idea/2026.3/app.actions.searchWithHistory.svg",
+      "class": "inline-icon-",
+      "id": "z5y551p_20",
+      "title": "the Search button",
+      "alt": "the Search button",
+      "width": "16",
+      "height": "16"
+    },
+    {
+      "alt": "IntelliJ IDEA: searching settings",
+      "src": "https://resources.jetbrains.com/help/img/idea/2026.3/SettingsSearch.png",
+      "class": "article__bordered-element--rounded",
+      "title": "IntelliJ IDEA: searching settings",
+      "data-dark-src": "https://resources.jetbrains.com/help/img/idea/2026.3/SettingsSearch_dark.png",
+      "width": "706",
+      "height": "523"
+    }
+  ],
+  "links": [
+    "https://www.jetbrains.com/help/idea/settings-preferences-dialog.html.md",
+    "https://www.jetbrains.com/help/idea/configuring-project-and-ide-settings.html",
+    "https://www.jetbrains.com/help/idea/configure-project-settings.html"
+  ]
+}

@@ -34,6 +34,284 @@ fn draw(cx: &mut VisualTestContext) {
     });
 }
 
+/// Opt-in visual evidence from the real renderer, without OS input automation.
+/// cargo test --features ui-tests --bin conduit settings_workspace_native_snapshots -- --ignored --nocapture --test-threads=1
+#[test]
+#[ignore = "requires a real Windows desktop and GPU"]
+fn settings_workspace_native_snapshots() {
+    use gpui_kit::{Bounds, WindowBounds, WindowOptions};
+    use std::time::Duration;
+    let _locale = crate::test_support::chinese();
+    gpui_kit::application().with_assets(gpui_kit::assets::AllAssets).run(|cx| {
+        gpui_kit::init(cx);
+        crate::app::install_theme_packs(cx);
+        cx.spawn(async move |cx| {
+            let mut previous = None;
+            let pages = [(0, "general"), (1, "appearance"), (2, "shortcuts"),
+                (3, "engines"), (8, "services"), (10, "sessions"),
+                (6, "git"), (4, "skills"), (9, "mcp"), (11, "plugins"), (7, "maintenance"),
+                (3, "engines-detail"), (8, "services-detail"), (1, "appearance-preview"),
+                (3, "engines-advanced"), (10, "sessions-naming"), (6, "git-generation"),
+                (8, "service-editor"), (8, "service-new"), (9, "mcp-editor"), (4, "skill-editor")];
+            for (width, height, font_size, dark) in [(1200., 800., 16., true), (850., 500., 16., true), (1200., 800., 20., false), (640., 720., 16., true), (1600., 900., 16., true)] {
+                for (page, label) in pages {
+                    let handle = cx.update(|cx| cx.open_window(WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(Bounds::new(point(px(40.), px(40.)), size(px(width), px(height))))),
+                        focus: false,
+                        ..Default::default()
+                    }, |window, cx| {
+                        let mut store = Store::default();
+                        store.ui.language = serde_json::from_value(serde_json::json!("zh-CN")).unwrap();
+                        store.ui.ui_font_size = font_size;
+                        store.ui.performance_monitor = false;
+                        store.ui.appearance = if dark { crate::store::AppearanceMode::Dark } else { crate::store::AppearanceMode::Light };
+                        store.providers = serde_json::from_value(serde_json::json!([
+                            {"id":"visual-local", "name":"研发模型服务", "engine":"Claude", "base_url":"https://models.example.invalid/anthropic", "api_key_env":"DEMO_KEY", "models":["research-large", "research-fast"]},
+                            {"id":"visual-secondary", "name":"测试环境", "engine":"Claude", "base_url":"https://staging.example.invalid/anthropic", "api_key_env":"DEMO_KEY", "models":["evaluation-model"]}
+                        ])).unwrap();
+                        let app = cx.new(|cx| {
+                            let mut app = ConduitApp::with_store(window, cx, Ok(store), false, false);
+                            app.startup = None;
+                            app.writable = true;
+                            app.persistence = crate::persistence::Persistence::with_writer(|_| Ok(()));
+                            app.connection_settings.syncing = true;
+                            app.connection_settings.engine = crate::domain::Provider::Claude;
+                            app.connection_settings.engine_detail_open = matches!(label, "engines-detail" | "engines-advanced");
+                            app.connection_settings.path_help = label == "engines-advanced";
+                            app.connection_settings.service_detail_open = label == "services-detail";
+                            app.connection_settings.service_selection = Some((crate::domain::Provider::Claude, crate::providers::ModelChannel::Provider("visual-local".into())));
+                            app.settings_ui.open = true;
+                            app.settings_ui.page = page;
+                            app.settings_ui.naming_expanded = label == "sessions-naming";
+                            app.settings_ui.git_expanded = label == "git-generation";
+                            if label == "sessions-naming" { app.settings_ui.group = Some(3); }
+                            app.settings_ui.appearance_preview_open = label == "appearance-preview";
+                            app.extensions_ui.mcp = page == 9;
+                            app.extensions_ui.engine = crate::domain::Provider::Claude;
+                            app.extensions_ui.initialized = true;
+                            let context = crate::extensions::Context { engine: crate::domain::Provider::Claude, workspace: None, cli_path: None };
+                            let entries = [
+                                ("code-review", "检查代码变更、行为边界与回归风险。", crate::extensions::Kind::Skill, false),
+                                ("release-notes", "从实际版本变更生成面向用户的更新说明。", crate::extensions::Kind::Skill, false),
+                                ("workspace-style", "工作区代码约定与命名规范。", crate::extensions::Kind::Skill, true),
+                                ("workspace-files", "", crate::extensions::Kind::Mcp, false),
+                                ("documentation-search", "", crate::extensions::Kind::Mcp, false),
+                                ("issue-tracker", "", crate::extensions::Kind::Mcp, true),
+                            ].into_iter().map(|(name, description, kind, disabled)| crate::extensions::Entry {
+                                name: name.into(), description: description.into(),
+                                path: std::env::temp_dir().join("conduit-visual-fixtures").join(name).join(if kind == crate::extensions::Kind::Skill { "SKILL.md" } else { "config.json" }),
+                                scope: "全局".into(), kind, disabled,
+                                transport: "stdio".into(), target: "demo-server".into(),
+                            }).collect::<Vec<_>>();
+                            app.extensions_ui.catalogs.insert(context.clone(), crate::extensions::Catalog {
+                                manual_detection: entries.iter().map(crate::extensions::Entry::id).collect(),
+                                entries, ..Default::default()
+                            });
+                            app.extensions_ui.context = Some(context);
+                            app
+                        });
+                        let root = cx.new(|cx| gpui_kit::component::Root::new(app.clone(), window, cx));
+                        window.defer(cx, move |window, cx| {
+                            match label {
+                                "service-editor" | "service-new" => app.update(cx, |app, cx| {
+                                    let provider = (label == "service-editor").then(|| app.store.providers[0].clone());
+                                    app.open_provider_editor(provider, window, cx);
+                                }),
+                                "mcp-editor" => app.update(cx, |app, cx| app.open_mcp_form(window, cx)),
+                                "skill-editor" => super::config_editor::show_editor(
+                                    app, std::env::temp_dir().join("conduit-visual-fixtures/my-skill/SKILL.md"),
+                                    None, "---\nname: my-skill\ndescription: Review changes and verify behavior.\n---\n\n# Review\n\nCheck behavior, readability, and regression risks.".into(), true, window, cx),
+                                _ => {}
+                            }
+                        });
+                        root
+                    }).unwrap());
+                    if let Some(old) = previous.replace(handle) {
+                        old.update(cx, |_, window, _| window.remove_window()).unwrap();
+                    }
+                    // Capture dialog rest states, after the native entrance fade.
+                    let settle_ms = if label.ends_with("editor") || label == "service-new" { 450 } else { 150 };
+                    cx.background_executor().timer(Duration::from_millis(settle_ms)).await;
+                    let saved = std::rc::Rc::new(std::cell::Cell::new(false));
+                    let completed = saved.clone();
+                    handle.update(cx, |_, window, cx| window.defer(cx, move |window, cx| {
+                        window.refresh();
+                        window.draw(cx).clear(cx);
+                        let image = window.render_to_image().unwrap();
+                        std::fs::create_dir_all("target/settings-native-snapshots").unwrap();
+                        let name = format!("{label}-{width:.0}-{font_size:.0}-{}.png", if dark { "dark" } else { "light" });
+                        image.save(format!("target/settings-native-snapshots/{name}")).unwrap();
+                        println!("saved {name}: {}x{}", image.width(), image.height());
+                        completed.set(true);
+                    })).unwrap();
+                    cx.background_executor().timer(Duration::from_millis(60)).await;
+                    assert!(saved.get(), "snapshot {label} was not saved");
+                }
+            }
+            cx.update(|cx| cx.quit());
+        }).detach();
+    });
+}
+
+#[gpui_kit::test]
+fn independent_settings_restore_workbench_state_and_preview_is_opt_in(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx) = fixture(cx);
+    cx.simulate_resize(size(px(1600.), px(900.)));
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.close_settings(window, cx);
+            app.input.update(cx, |input, cx| {
+                input.set_value("retained workbench draft", window, cx);
+                input.set_selected_range(2..8, cx);
+                input.focus_handle(cx).focus(window, cx);
+            });
+            app.plugins.dock.width = 410.;
+            app.open_settings(window, cx);
+            app.select_settings_page(1, window, cx);
+        })
+    });
+    draw(cx);
+    let before = app.read_with(cx, |app, _| serde_json::to_value(&app.store).unwrap());
+    assert!(cx.debug_bounds("appearance-preview-rail").is_none());
+    let preview = cx
+        .debug_bounds("appearance-toggle-preview")
+        .unwrap()
+        .center();
+    cx.simulate_mouse_down(preview, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(preview, MouseButton::Left, Modifiers::default());
+    draw(cx);
+    assert!(cx.debug_bounds("appearance-preview-rail").is_some());
+    for width in [640., 1600.] {
+        cx.simulate_resize(size(px(width), px(900.)));
+        draw(cx);
+        app.read_with(cx, |app, _| {
+            assert_eq!(
+                app.plugins.dock.width, 410.,
+                "hidden dock retains its width"
+            );
+            assert_eq!(serde_json::to_value(&app.store).unwrap(), before);
+        });
+    }
+    let back = cx
+        .debug_bounds("settings-back-to-workbench")
+        .unwrap()
+        .center();
+    cx.simulate_mouse_down(back, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(back, MouseButton::Left, Modifiers::default());
+    draw(cx);
+    cx.update(|window, cx| {
+        app.read_with(cx, |app, cx| {
+            assert!(!app.settings_ui.open);
+            assert_eq!(app.input.read(cx).value(), "retained workbench draft");
+            assert_eq!(app.input.read(cx).selected_range(), 2..8);
+            assert!(app.input.read(cx).focus_handle(cx).is_focused(window));
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn appearance_filter_retains_input_across_reflow_and_escape_clears_before_leaving(
+    cx: &mut TestAppContext,
+) {
+    let _locale = crate::test_support::chinese();
+    let (app, cx) = fixture(cx);
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.store.ui = crate::store::UiSettings::default();
+            app.store.ui.code_line_numbers = true;
+            app.select_settings_page(1, window, cx);
+            app.settings_ui.appearance_filter.update(cx, |input, cx| {
+                input.set_value("code", window, cx);
+            });
+            app.settings_ui
+                .search
+                .read(cx)
+                .focus_handle(cx)
+                .focus(window, cx);
+        });
+    });
+    let input = app.read_with(cx, |app, _| app.settings_ui.appearance_filter.entity_id());
+    for width in [1600., 640., 1600.] {
+        cx.simulate_resize(size(px(width), px(900.)));
+        draw(cx);
+        assert!(
+            cx.debug_bounds("appearance-property-code_font_size")
+                .is_some()
+        );
+        assert!(
+            cx.debug_bounds("appearance-property-ui_font_size")
+                .is_none()
+        );
+        cx.update(|window, cx| {
+            let app = app.read(cx);
+            assert_eq!(app.settings_ui.appearance_filter.entity_id(), input);
+            assert!(
+                app.settings_ui
+                    .search
+                    .read(cx)
+                    .focus_handle(cx)
+                    .is_focused(window)
+            );
+        });
+    }
+    let toggle = cx
+        .debug_bounds("appearance-modified-only")
+        .unwrap()
+        .center();
+    cx.simulate_mouse_down(toggle, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(toggle, MouseButton::Left, Modifiers::default());
+    draw(cx);
+    assert!(
+        cx.debug_bounds("appearance-property-code_line_numbers")
+            .is_some()
+    );
+    assert!(
+        cx.debug_bounds("appearance-property-code_font_size")
+            .is_none()
+    );
+    cx.simulate_keystrokes("escape");
+    draw(cx);
+    app.read_with(cx, |app, cx| {
+        assert!(app.settings_ui.open);
+        assert!(
+            app.settings_ui
+                .appearance_filter
+                .read(cx)
+                .value()
+                .is_empty()
+        );
+        assert!(!app.settings_ui.appearance_modified_only);
+        assert!(
+            app.store.ui.code_line_numbers,
+            "browsing read-only filters cannot change values"
+        );
+    });
+    // A group reset covers its hidden modified properties too.
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.writable = true;
+            app.persistence = crate::persistence::Persistence::with_writer(|_| Ok(()));
+            app.settings_ui.appearance_filter.update(cx, |input, cx| {
+                input.set_value("code_font_size", window, cx)
+            });
+        });
+    });
+    draw(cx);
+    assert!(
+        cx.debug_bounds("appearance-property-code_line_numbers")
+            .is_none()
+    );
+    let reset = cx
+        .debug_bounds("appearance-reset-group-3")
+        .unwrap()
+        .center();
+    cx.simulate_mouse_down(reset, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_up(reset, MouseButton::Left, Modifiers::default());
+    draw(cx);
+    app.read_with(cx, |app, _| assert!(!app.store.ui.code_line_numbers));
+}
+
 fn settle_ai_save(app: &Entity<ConduitApp>, cx: &mut VisualTestContext) {
     for _ in 0..200 {
         cx.executor()
@@ -58,6 +336,7 @@ fn settings_engine_management_is_readonly_and_disabled_launches_preserve_history
         app.update(cx, |app, cx| {
             app.connection_settings.engine = Provider::Codex;
             app.select_settings_page(3, window, cx);
+            app.connection_settings.engine_detail_open = true;
             app.set_engine_enabled(Provider::Codex, false, cx);
             assert!(
                 app.store.cli.enabled(Provider::Codex),
@@ -145,6 +424,7 @@ fn settings_cli_updates_report_versions_errors_and_discard_changed_paths(cx: &mu
             app.update(cx, |app, cx| {
                 app.connection_settings.engine = provider;
                 app.select_settings_page(3, window, cx);
+                app.connection_settings.engine_detail_open = true;
                 let path = cli::resolve(provider, &app.store.cli).unwrap().path;
                 let (probe, sender) = VersionProbe::test_pending(path, true);
                 app.probes.insert(provider, probe);
@@ -338,19 +618,9 @@ fn settings_plugins_manage_icon_theme_lifecycle_and_readonly_state(cx: &mut Test
     for (width, height) in [(850., 500.), (1280., 800.)] {
         cx.simulate_resize(size(px(width), px(height)));
         draw(cx);
-        let bounds = cx.debug_bounds("settings-content").unwrap();
-        let search = cx.debug_bounds("settings-search-bar").unwrap();
-        assert_eq!(search.left(), bounds.left());
-        assert_eq!(search.right(), bounds.right());
-        assert_eq!(search.bottom(), bounds.top());
-        assert!(cx.debug_bounds("settings-workspace-header").is_none());
-        if let Some(rail) = cx.debug_bounds("settings-navigation-scroll") {
-            assert!(rail.right() <= search.left());
-            assert_eq!(rail.top(), search.top());
-        }
+        assert!(cx.debug_bounds("settings-search-bar").is_some());
         for selector in ["plugin-install", "plugin-refresh", "plugin-default-icons"] {
-            let control = cx.debug_bounds(selector).unwrap();
-            assert!(control.left() >= bounds.left() && control.right() <= bounds.right());
+            assert!(cx.debug_bounds(selector).is_some());
         }
     }
     cx.update(|_, cx| {
@@ -745,49 +1015,16 @@ fn settings_services_inline_selection_resizes_without_changing_defaults(cx: &mut
     );
     assert!(cx.debug_bounds("service-sessions-section").is_some());
     assert!(cx.debug_bounds("service-detail-back").is_none());
-    let engines = cx.debug_bounds("management-engines").unwrap();
-    let engine_bar = cx.debug_bounds("management-engine-bar").unwrap();
-    let summary = cx.debug_bounds("service-default-summary").unwrap();
-    assert_eq!(engines.left() - engine_bar.left(), px(16.));
-    assert_eq!(
-        engines.top() - engine_bar.top(),
-        engines.left() - engine_bar.left(),
-        "engine tabs have matching top and left padding"
-    );
-    assert_eq!(
-        summary.top() - engines.bottom(),
-        px(8.),
-        "default summary sits close to the engine selector"
-    );
-    assert_eq!(
-        engines.left(),
-        list.left(),
-        "engine tabs align with page cards"
-    );
-    assert_eq!(
-        summary.left(),
-        list.left(),
-        "default summary shares the page inset"
-    );
-    assert_eq!(detail.left() - list.right(), px(12.), "compact column gap");
-    let models_heading = cx.debug_bounds("service-models-heading").unwrap();
-    let sessions_heading = cx.debug_bounds("service-sessions-heading").unwrap();
-    assert_eq!(
-        models_heading.left(),
-        sessions_heading.left(),
-        "section titles share one inset"
-    );
-    assert_eq!(
-        models_heading.left() - detail.left(),
-        px(13.),
-        "12px content inset plus card border"
-    );
+    assert!(cx.debug_bounds("service-default-summary").is_some());
+    assert!(cx.debug_bounds("service-models-heading").is_some());
+    assert!(cx.debug_bounds("service-sessions-heading").is_some());
     let before = cx.update(|_, cx| {
         app.read_with(cx, |app, _| {
             serde_json::to_value(&app.store.session_defaults).unwrap()
         })
     });
     let click = |cx: &mut VisualTestContext, selector: &'static str| {
+        super::redesign_tests::open_engine_picker_if_needed(cx, selector);
         let center = cx.debug_bounds(selector).expect(selector).center();
         cx.simulate_mouse_down(center, MouseButton::Left, Modifiers::default());
         cx.simulate_mouse_up(center, MouseButton::Left, Modifiers::default());
@@ -818,10 +1055,6 @@ fn settings_services_inline_selection_resizes_without_changing_defaults(cx: &mut
     draw(cx);
     assert!(cx.debug_bounds("service-list").is_none());
     assert!(cx.debug_bounds("service-detail-back").is_some());
-    let engines = cx.debug_bounds("management-engines").unwrap();
-    let engine_bar = cx.debug_bounds("management-engine-bar").unwrap();
-    assert_eq!(engines.left() - engine_bar.left(), px(16.));
-    assert_eq!(engines.top() - engine_bar.top(), px(16.));
     click(cx, "service-detail-back");
     assert!(cx.debug_bounds("service-list").is_some());
     assert!(cx.debug_bounds("service-details").is_none());

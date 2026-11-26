@@ -164,7 +164,7 @@ fn desktop_pet_settings_fit_and_switches_preserve_configuration(cx: &mut TestApp
                 "{id} must have a readable width"
             );
             assert!(control.right() <= card.right(), "{id} must fit in the card");
-            assert_eq!(control.size.height, px(32.));
+            assert_eq!(control.size.height, px(28.));
             assert_eq!(*left.get_or_insert(control.left()), control.left());
         }
     }

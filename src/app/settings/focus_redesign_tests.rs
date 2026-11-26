@@ -136,7 +136,7 @@ fn assert_layout(cx: &mut VisualTestContext, compact: bool) {
 }
 
 fn resize(cx: &mut VisualTestContext, compact: bool) {
-    let width = if compact { 850. } else { 1400. };
+    let width = if compact { 640. } else { 1400. };
     cx.simulate_resize(size(px(width), px(900.)));
     draw(cx);
     assert_layout(cx, compact);

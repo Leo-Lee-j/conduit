@@ -1,5 +1,6 @@
 //! Independent engine/provider/model routes for background text generation.
 
+use super::settings::settings_dropdown;
 use super::*;
 
 #[derive(Clone, Copy)]
@@ -244,12 +245,10 @@ impl ConduitApp {
                     }),
             );
         }
-        let trigger = Button::new(SharedString::from(format!("{scope}-trigger")))
-            .ghost()
-            .small()
-            .h(px(24.))
-            .px_2()
-            .rounded_full()
+        let trigger = settings_dropdown(SharedString::from(format!("{scope}-trigger")))
+            .w(ui_text_size(192.))
+            .tooltip(label.clone())
+            .label(label)
             .disabled(disabled)
             .when(!disabled, |b| b.cursor_pointer())
             .accessibility_label(match kind {
@@ -259,25 +258,7 @@ impl ConduitApp {
                 GenerationKind::Git => {
                     conduit::i18n::text_static("generation.select_generation_provider")
                 }
-            })
-            .child(
-                h_flex()
-                    .gap_1()
-                    .items_center()
-                    .child(
-                        div()
-                            .max_w(px(220.))
-                            .truncate()
-                            .text_size(ui_text_size(11.))
-                            .text_color(rgb(palette().muted))
-                            .child(label),
-                    )
-                    .child(
-                        Icon::new(IconName::ChevronDown)
-                            .small()
-                            .text_color(rgb(palette().faint)),
-                    ),
-            );
+            });
         Popover::new(SharedString::from(format!("{scope}-popover")))
             .anchor(Anchor::BottomRight)
             .offset(px(6.))

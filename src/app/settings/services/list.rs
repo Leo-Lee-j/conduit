@@ -16,13 +16,13 @@ pub(super) fn service_badge(label: &'static str) -> impl IntoElement {
 pub(super) fn service_avatar(name: &str, selected: bool) -> impl IntoElement {
     div()
         .flex_shrink_0()
-        .size(px(32.))
+        .size(ui_text_size(24.))
         .flex()
         .items_center()
         .justify_center()
         .rounded_md()
         .font_semibold()
-        .text_size(ui_text_size(13.))
+        .text_size(ui_text_size(14.))
         .bg(rgb(palette().surface_strong))
         .when(selected, |avatar| {
             avatar
@@ -81,12 +81,8 @@ impl ConduitApp {
             .debug_selector(|| "service-list".into())
             .w_full()
             .min_w_0()
-            .p_2()
-            .gap_1()
-            .rounded_lg()
-            .border_1()
-            .border_color(rgb(palette().border))
-            .bg(rgb(palette().surface));
+            .refine_style(&settings_group_style().p_0().border_0())
+            .gap_0();
         for imported in [true, false] {
             let group: Vec<_> = providers
                 .iter()
@@ -100,10 +96,10 @@ impl ConduitApp {
                     h_flex()
                         .w_full()
                         .gap_2()
-                        .px_1()
+                        .px_2()
                         .pt_2()
                         .pb_1()
-                        .child(div().text_size(ui_text_size(11.)).font_medium().child(
+                        .child(div().text_size(ui_text_size(12.)).font_medium().child(
                             if imported {
                                 "cc-switch"
                             } else {
@@ -112,7 +108,7 @@ impl ConduitApp {
                         ))
                         .child(
                             div()
-                                .text_size(ui_text_size(11.))
+                                .text_size(ui_text_size(12.))
                                 .text_color(rgb(palette().muted))
                                 .child(group.len().to_string()),
                         ),
@@ -177,7 +173,7 @@ impl ConduitApp {
                                                         .flex_1()
                                                         .min_w_0()
                                                         .truncate()
-                                                        .text_size(ui_text_size(13.))
+                                                        .text_size(ui_text_size(14.))
                                                         .font_semibold()
                                                         .child(provider.name.clone()),
                                                 )
@@ -247,17 +243,25 @@ impl ConduitApp {
                 .ghost()
                 .w_full()
                 .h_auto()
-                .px_1()
+                .min_w_0()
+                .min_h(ui_text_size(40.))
+                .px_2()
                 .py_2()
+                .rounded(px(4.))
+                .when(*selected == ModelChannel::Cli, |row| {
+                    row.bg(gpui_kit::rgba((palette().activity_running << 8) | 0x0c))
+                })
                 .selected(*selected == ModelChannel::Cli)
                 .child(
                     h_flex()
                         .w_full()
+                        .min_w_0()
                         .gap_2()
                         .child(
                             div()
                                 .flex_1()
-                                .text_size(ui_text_size(11.))
+                                .min_w_0()
+                                .text_size(ui_text_size(14.))
                                 .child(service_text("settings.defaults.native_cli_configuration")),
                         )
                         .when(defaults.channel == ModelChannel::Cli, |row| {

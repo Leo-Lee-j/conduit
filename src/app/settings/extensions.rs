@@ -1,4 +1,5 @@
 //! Native extensions, scoped independently from connections and conversations.
+use super::extension_catalog::{resource_badge, resource_button, resource_row};
 use super::*;
 use crate::extensions::management::{self, Filter};
 use crate::extensions::{self, Catalog, Kind};
@@ -117,7 +118,7 @@ impl ConduitApp {
             .gap_2()
             .flex_wrap()
             .child(
-                Button::new("extensions-add")
+                resource_button("extensions-add")
                     .debug_selector(|| "extensions-add".into())
                     .primary()
                     .small()
@@ -152,7 +153,7 @@ impl ConduitApp {
             )
             .when(kind == Kind::Skill, |row| {
                 row.child(
-                    Button::new("extensions-import")
+                    resource_button("extensions-import")
                         .outline()
                         .small()
                         .icon(FullIconName::FolderOpen)
@@ -480,10 +481,8 @@ impl ConduitApp {
             .unwrap_or_else(|| conduit::i18n::text_static("settings.extensions.global").into());
         let scope_view = view.clone();
         controls = controls.child(
-            Button::new("extensions-scope")
+            settings_dropdown("extensions-scope")
                 .debug_selector(|| "extensions-scope".into())
-                .small()
-                .ghost()
                 .when_some(self.extensions_ui.workspace.as_ref(), |button, path| {
                     button.tooltip(display_path(path))
                 })
@@ -491,12 +490,11 @@ impl ConduitApp {
                     "settings.extensions.scope",
                     &[("current", current.to_string())],
                 ))
-                .max_w(px(if narrow { 110. } else { 150. }))
+                .max_w(px(240.))
                 .child(div().truncate().child(conduit::i18n::format(
                     "settings.extensions.scope",
                     &[("current", current.to_string())],
                 )))
-                .icon(FullIconName::ChevronDown)
                 .dropdown_menu(move |mut menu, _, _| {
                     for (path, name) in &choices {
                         let path = path.clone();
@@ -622,8 +620,7 @@ impl ConduitApp {
         let actions = self.extension_actions(narrow, view.clone());
         let search = || {
             div().flex_1().min_w(px(120.)).max_w(px(480.)).child(
-                Input::new(&self.extensions_ui.searches[selected])
-                    .small()
+                settings_input(&self.extensions_ui.searches[selected])
                     .prefix(FullIconName::Search)
                     .cleanable(true)
                     .aria_label(conduit::i18n::text_static(
@@ -634,12 +631,9 @@ impl ConduitApp {
         let toolbar = controls
             .when(!narrow, |row| row.child(search()))
             .child(
-                Button::new("extensions-filter-trigger")
+                settings_dropdown("extensions-filter-trigger")
                     .debug_selector(|| "extensions-filter-trigger".into())
-                    .small()
-                    .outline()
                     .label(filter.label())
-                    .icon(FullIconName::ChevronDown)
                     .dropdown_menu(move |mut menu, _, _| {
                         for option in Filter::ALL {
                             let view = filter_view.clone();
@@ -657,7 +651,7 @@ impl ConduitApp {
                     }),
             )
             .child(
-                Button::new("extensions-refresh")
+                resource_button("extensions-refresh")
                     .debug_selector(|| "extensions-refresh".into())
                     .small()
                     .outline()
@@ -686,7 +680,7 @@ impl ConduitApp {
             )
             .when(probing, |row| {
                 row.child(
-                    Button::new("extensions-cancel")
+                    resource_button("extensions-cancel")
                         .small()
                         .ghost()
                         .label(conduit::i18n::text_static("git_branches.cancel"))
@@ -721,10 +715,27 @@ impl ConduitApp {
                     .py_2()
                     .gap_1()
                     .child(toolbar)
+                    .child(settings_description(conduit::i18n::text_static(if mcp {
+                        "settings.extensions.connection_session_hint"
+                    } else if self.extensions_ui.workspace.is_some() {
+                        "settings.extensions.workspace_scope_hint"
+                    } else {
+                        "settings.extensions.global_scope_hint"
+                    })))
+                    .when(
+                        matches!(
+                            self.extensions_ui.engine,
+                            Provider::Qoder | Provider::Gemini
+                        ),
+                        |body| {
+                            body.child(settings_description(conduit::i18n::text_static(
+                                "catalog.read_only",
+                            )))
+                        },
+                    )
                     .when_some(self.extensions_ui.feedback.clone(), |body, message| {
                         body.child(div().text_size(ui_text_size(12.)).child(message))
-                    })
-                    ,
+                    }),
             )
             .child(
                 div()
@@ -736,7 +747,7 @@ impl ConduitApp {
                     .child(
                         v_flex()
                             .size_full()
-                            .rounded_lg()
+                            .rounded(px(4.))
                             .border_1()
                             .border_color(rgb(palette().border))
                             .overflow_hidden()
@@ -744,27 +755,26 @@ impl ConduitApp {
                                 h_flex()
                                     .w_full()
                                     .flex_shrink_0()
-                                    .px_4()
-                                    .py(px(if narrow { 4. } else { 8. }))
+                                    .px_3()
+                                    .py_2()
+                                    .gap_2()
+                                    .flex_wrap()
                                     .justify_between()
                                     .bg(rgb(palette().surface_strong))
-                                    .text_size(ui_text_size(11.))
+                                    .text_size(ui_text_size(12.))
                                     .text_color(rgb(palette().muted))
-                                    .child(if narrow {
-                                        format!(
-                                            "{} · {count} / {total}",
-                                            if mcp {
-                                                conduit::i18n::text_static("settings.extensions.service_connection_address")
-                                            } else {
-                                                conduit::i18n::text_static("settings.extensions.skill_description")
-                                            }
+                                    .child(if mcp {
+                                        conduit::i18n::text_static(
+                                            "settings.extensions.service_connection_address",
                                         )
-                                    } else if mcp {
-                                        conduit::i18n::text_static("settings.extensions.service_connection_address").to_owned()
+                                        .to_owned()
                                     } else {
-                                        conduit::i18n::text_static("settings.extensions.skill_description").to_owned()
+                                        conduit::i18n::text_static(
+                                            "settings.extensions.skill_description",
+                                        )
+                                        .to_owned()
                                     })
-                                    .child(div().truncate().child(info)),
+                                    .child(div().child(info)),
                             )
                             .child(
                                 div()
@@ -831,7 +841,7 @@ fn show_mcp_tools(
                                             div()
                                                 .px_2()
                                                 .py_2()
-                                                .text_size(ui_text_size(13.))
+                                                .text_size(ui_text_size(14.))
                                                 .child(names[index].clone())
                                                 .into_any_element()
                                         })
@@ -842,7 +852,7 @@ fn show_mcp_tools(
                         })
                         .child(
                             h_flex().justify_end().child(
-                                Button::new("mcp-tools-close")
+                                resource_button("mcp-tools-close")
                                     .outline()
                                     .label(conduit::i18n::text_static(
                                         "settings.extensions.close_tools",
@@ -911,8 +921,8 @@ fn render_extension_row(
                 && !queued
                 && !manual_detection
                 && connection_result.is_some();
-            let entry_status = if !mcp || entry.disabled {
-                entry.status()
+            let entry_status = if entry.disabled {
+                conduit::i18n::text_static("settings.extensions.not_tested")
             } else if report.is_some() {
                 conduit::i18n::text_static("settings.extensions.connected")
             } else if this_probe {
@@ -936,7 +946,7 @@ fn render_extension_row(
                 palette().muted
             };
             let status_badge = || {
-                management_badge(entry_status, false)
+                resource_badge(entry_status, false)
                     .text_color(rgb(status_color))
                     .bg(gpui_kit::rgba((status_color << 8) | 0x12))
             };
@@ -949,7 +959,7 @@ fn render_extension_row(
                         "settings.extensions.available_tools",
                         &[("arg0", report.count().to_string())],
                     );
-                    Button::new(("mcp-tool-count", index))
+                    resource_button(("mcp-tool-count", index))
                         .debug_selector(move || format!("mcp-tool-count-{index}"))
                         .small()
                         .ghost()
@@ -970,22 +980,16 @@ fn render_extension_row(
             } else {
                 entry.description.replace('\n', " ")
             };
+            let summary = format!("{} · {}", conduit::i18n::source(&entry.scope), summary);
             let summary_hint = summary.clone();
-            v_flex()
-                .w_full()
-                .px_3()
-                .py_3()
-                .gap_2()
-                .border_b_1()
-                .border_color(settings_group_border())
+            resource_row()
                 .child(
                     h_flex()
                         .w_full()
-                        .gap_3()
+                        .gap_2()
                         .items_start()
                         .child(
-                            div().size(px(28.)).flex_shrink_0().rounded_md()
-                                .bg(rgb(palette().surface_strong))
+                            div().w(px(20.)).h(px(32.)).flex_shrink_0()
                                 .flex().items_center().justify_center()
                                 .child(Icon::new(if mcp { FullIconName::Server } else { FullIconName::Blocks })
                                     .small().text_color(rgb(palette().muted))),
@@ -996,14 +1000,18 @@ fn render_extension_row(
                                     h_flex().w_full().gap_2().flex_wrap()
                                         .child(div().id(("extension-name", index))
                                             .debug_selector(move || format!("extension-name-{index}"))
-                                            .min_w_0().truncate().font_semibold().text_size(ui_text_size(13.))
+                                            .min_w_0().truncate().font_semibold().text_size(ui_text_size(14.))
                                             .tooltip({ let name = entry.name.clone(); move |window, cx| {
                                                 gpui_kit::component::tooltip::Tooltip::new(name.clone()).build(window, cx)
                                             }})
                                             .child(entry.name.clone()))
-                                        .child(status_badge())
-                                        .child(management_badge(conduit::i18n::source(&entry.scope).to_string(), false))
-                                        .when(*duplicate, |row| row.child(management_badge(
+                                        .child(resource_badge(
+                                            conduit::i18n::text_static(if entry.disabled {
+                                                "extensions.configuration_disabled"
+                                            } else if mcp {
+                                                "settings.extensions.configuration_enabled"
+                                            } else { "settings.plugins.enabled" }), !entry.disabled))
+                                        .when(*duplicate, |row| row.child(resource_badge(
                                             conduit::i18n::text_static("settings.extensions.duplicate_name"), false))),
                                 )
                                 .child(div().id(("extension-summary", index))
@@ -1014,8 +1022,8 @@ fn render_extension_row(
                                     .child(summary)),
                         )
                         .child(
-                            h_flex().gap_1().flex_wrap()
-                                .child(Button::new(("extension-detail", index))
+                            h_flex().gap_1().flex_shrink_0().flex_wrap()
+                                .child(resource_button(("extension-detail", index))
                                     .debug_selector(move || format!("extension-detail-{index}"))
                                     .small().ghost().selected(expanded)
                                     .icon(if expanded { FullIconName::ChevronUp } else { FullIconName::ChevronDown })
@@ -1034,7 +1042,7 @@ fn render_extension_row(
                                         });
                                     }))
                                 .when(!managed && toggle_supported, |row| row.child(
-                                    Button::new(("extension-toggle", index)).small().ghost()
+                                    resource_button(("extension-toggle", index)).small().ghost()
                                         .label(conduit::i18n::text_static(if entry.disabled {
                                             "settings.extensions.restore"
                                         } else { "settings.extensions.disable" }))
@@ -1043,14 +1051,15 @@ fn render_extension_row(
                                             app.open_extension_toggle(state_entry.clone(), window, cx)
                                         })),
                                 ))
-                                .when(managed, |row| row.child(management_badge(
+                                .when(managed, |row| row.child(resource_badge(
                                     conduit::i18n::text_static("settings.extensions.plugin_managed"), false))),
                         ),
                 )
                 .when(mcp, |body| body.child(
                     h_flex().w_full().gap_2().flex_wrap()
+                        .child(status_badge())
                         .when_some(tool_count, |row, count| row.child(count))
-                        .child(Button::new(("mcp-test", index))
+                        .child(resource_button(("mcp-test", index))
                             .debug_selector(move || format!("mcp-test-{index}"))
                             .small().outline().icon(FullIconName::RefreshCw)
                             .label(conduit::i18n::text_static(if this_probe {
@@ -1063,8 +1072,12 @@ fn render_extension_row(
                             .on_click(move |_, _, cx| test_view.update(cx, |app, cx| {
                                 app.test_mcp_connection(test_entry.clone(), cx)
                             })))
+                        .when(manual_detection && !entry.disabled, |row| row.child(
+                            div().min_w_0().text_size(ui_text_size(12.)).text_color(rgb(palette().muted))
+                                .child(connection_result.clone().unwrap_or_default()),
+                        ))
                         .when(this_probe, |row| row.child(
-                            Button::new(("mcp-cancel", index)).small().ghost()
+                            resource_button(("mcp-cancel", index)).small().ghost()
                                 .label(conduit::i18n::text_static("git_branches.cancel"))
                                 .on_click(move |_, _, cx| cancel_view.update(cx, |app, cx| {
                                     if let Some(probe) = app.extensions_ui.connection_probe.take() {
@@ -1080,16 +1093,14 @@ fn render_extension_row(
                     div().text_size(ui_text_size(12.)).text_color(rgb(palette().warning_text))
                         .child(connection_result.clone().unwrap_or_default()),
                 ))
-                .when(manual_detection && !entry.disabled, |body| body.child(
-                    settings_description(connection_result.clone().unwrap_or_default()),
-                ))
                 .when(expanded, |body| body.child(
-                    v_flex().w_full().gap_2().p_3().rounded_md()
-                        .bg(rgb(palette().surface_strong)).text_size(ui_text_size(12.))
+                    v_flex().w_full().min_w_0().gap_2().pt_2()
+                        .border_t_1().border_color(settings_group_border())
+                        .text_size(ui_text_size(14.))
                         .when(!entry.description.is_empty(), |details| details.child(entry.description.clone()))
                         .child(div().id(("extension-source", index))
                             .debug_selector(move || format!("extension-source-{index}"))
-                            .truncate().text_color(rgb(palette().muted))
+                            .min_w_0().truncate().text_size(ui_text_size(12.)).text_color(rgb(palette().muted))
                             .tooltip({ let path = copy_path.clone(); move |window, cx| {
                                 gpui_kit::component::tooltip::Tooltip::new(path.clone()).build(window, cx)
                             }})
@@ -1100,7 +1111,7 @@ fn render_extension_row(
                                 "settings.extensions.edit_the_source_configuration_to_enable_or")),
                         ))
                         .child(h_flex().gap_2().flex_wrap()
-                            .child(Button::new(("extension-edit", index)).small().outline()
+                            .child(resource_button(("extension-edit", index)).small().outline()
                                 .label(conduit::i18n::text_static("settings.extensions.edit_source_file"))
                                 .disabled(disabled || managed)
                                 .tooltip(conduit::i18n::text_static(if managed {
@@ -1109,45 +1120,67 @@ fn render_extension_row(
                                 .on_click(move |_, window, cx| edit_view.update(cx, |app, cx| {
                                     app.open_native_config(edit_path.clone(), kind, false, window, cx)
                                 })))
-                            .child(Button::new(("extension-reveal", index)).small().ghost()
+                            .child(resource_button(("extension-reveal", index)).small().ghost()
                                 .label(conduit::i18n::text_static("settings.extensions.show_in_folder"))
                                 .on_click(move |_, _, cx| cx.reveal_path(&reveal_path)))
-                            .child(Button::new(("extension-copy-path", index)).small().ghost()
+                            .child(resource_button(("extension-copy-path", index)).small().ghost()
                                 .label(conduit::i18n::text_static("settings.extensions.copy_source_path"))
                                 .on_click(move |_, _, cx| cx.write_to_clipboard(
                                     ClipboardItem::new_string(copy_path.clone()))))),
                 ))
                 .into_any_element()
         }
-        ExtensionRow::Empty(kind, message) => v_flex()
-            .w_full()
-            .items_center()
-            .gap_3()
-            .p_6()
-            .child(
-                div()
-                    .size(px(40.))
-                    .rounded_lg()
-                    .bg(rgb(palette().surface_strong))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        Icon::new(if *kind == Kind::Mcp {
-                            FullIconName::Server
-                        } else {
-                            FullIconName::Blocks
-                        })
-                        .text_color(rgb(palette().muted)),
-                    ),
-            )
-            .child(
-                div()
-                    .text_size(ui_text_size(13.))
-                    .text_color(rgb(palette().muted))
-                    .child(message.clone()),
-            )
-            .into_any_element(),
+        ExtensionRow::Empty(kind, message) => {
+            let selected = usize::from(*kind == Kind::Mcp);
+            let filtered = view.read(cx).extensions_ui.filters[selected] != Filter::All
+                || !view.read(cx).extensions_ui.searches[selected]
+                    .read(cx)
+                    .value()
+                    .is_empty();
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .px_3()
+                .py_3()
+                .gap_2()
+                .flex_wrap()
+                .child(
+                    Icon::new(if *kind == Kind::Mcp {
+                        FullIconName::Server
+                    } else {
+                        FullIconName::Blocks
+                    })
+                    .small()
+                    .text_color(rgb(palette().muted)),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(ui_text_size(14.))
+                        .text_color(rgb(palette().muted))
+                        .child(message.clone()),
+                )
+                .when(filtered, |row| {
+                    row.child(
+                        resource_button("extensions-clear-filter")
+                            .ghost()
+                            .label(conduit::i18n::text_static(
+                                "settings.appearance.clear_filters",
+                            ))
+                            .on_click(move |_, window, cx| {
+                                view.update(cx, |app, cx| {
+                                    app.extensions_ui.filters[selected] = Filter::All;
+                                    app.extensions_ui.searches[selected]
+                                        .update(cx, |input, cx| input.set_value("", window, cx));
+                                    app.extensions_ui.lists = new_lists();
+                                    cx.notify();
+                                })
+                            }),
+                    )
+                })
+                .into_any_element()
+        }
         ExtensionRow::Message(message, error) => div()
             .px_3()
             .py_2()
@@ -1190,7 +1223,7 @@ fn render_extension_row(
                                 .child(text.clone()),
                         )
                         .child(
-                            Button::new(("extensions-source-copy", index))
+                            resource_button(("extensions-source-copy", index))
                                 .small()
                                 .ghost()
                                 .label(conduit::i18n::text_static("settings.extensions.copy_path"))

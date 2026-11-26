@@ -1,4 +1,7 @@
 //! Plugin management is separate from CLI Skills and MCP services.
+use super::extension_catalog::{
+    ResourceDetails, resource_badge, resource_button, resource_list, resource_meta, resource_row,
+};
 use super::*;
 use gpui_kit::component::switch::Switch;
 mod catalog;
@@ -25,18 +28,22 @@ fn pet_setting_row(
             div()
                 .flex_1()
                 .min_w(px(160.))
-                .text_size(ui_text_size(13.))
+                .text_size(ui_text_size(14.))
                 .child(conduit::i18n::text_static(label)),
         )
         .child(control)
 }
 
 fn pet_picker_control(control: impl IntoElement) -> Div {
-    div().w(px(288.)).max_w_full().min_w_0().child(control)
+    div()
+        .w(ui_text_size(288.))
+        .max_w_full()
+        .min_w_0()
+        .child(control)
 }
 
 fn pet_switch_control(control: impl IntoElement) -> Div {
-    h_flex().h(px(32.)).justify_end().child(control)
+    h_flex().h(ui_text_size(28.)).justify_end().child(control)
 }
 fn text(key: &str) -> String {
     conduit::i18n::text(&format!("settings.plugins.{key}"))
@@ -57,12 +64,13 @@ impl ConduitApp {
         let default_view = view.clone();
         let default_active = self.store.ui.plugins.file_icon_theme.is_none();
         let mut content = settings_scroll_area("settings-plugins-list")
+            .gap_2()
             .child(
                 h_flex()
                     .flex_wrap()
                     .gap_2()
                     .child(
-                        Button::new("plugin-install")
+                        resource_button("plugin-install")
                             .debug_selector(|| "plugin-install".into())
                             .icon(FullIconName::Plus)
                             .label(text("install"))
@@ -73,7 +81,7 @@ impl ConduitApp {
                             }),
                     )
                     .child(
-                        Button::new("plugin-refresh")
+                        resource_button("plugin-refresh")
                             .debug_selector(|| "plugin-refresh".into())
                             .icon(IconName::RefreshCw)
                             .label(text("refresh"))
@@ -83,7 +91,7 @@ impl ConduitApp {
                             }),
                     )
                     .child(
-                        Button::new("plugin-folder")
+                        resource_button("plugin-folder")
                             .label(text("open_folder"))
                             .ghost()
                             .disabled(disabled)
@@ -97,53 +105,55 @@ impl ConduitApp {
             )
             .when_some(state.feedback.clone(), |list, message| {
                 list.child(caption(message))
-            })
+            });
+        let mut resources = resource_list()
             .child(
-                v_flex()
-                    .w_full()
-                    .gap_2()
+                resource_row()
                     .child(
                         h_flex()
                             .gap_2()
-                            .child(Icon::new(FullIconName::Blocks).small())
-                            .child(
-                                div()
-                                    .text_size(ui_text_size(14.))
-                                    .font_medium()
-                                    .child(text("core")),
-                            )
-                            .child(caption(text("built_in"))),
+                            .flex_wrap()
+                            .child(div().font_medium().child(text("core")))
+                            .child(resource_badge(text("built_in"), false)),
                     )
                     .child(caption(text("core_description"))),
             )
-            .child(self.settings_encourager_content(view.clone()))
             .child(
-                v_flex()
-                    .w_full()
-                    .gap_3()
-                    .refine_style(&settings_group_style())
-                    .child(
-                        div()
-                            .text_size(ui_text_size(14.))
-                            .font_medium()
-                            .child(text("default_icons")),
-                    )
-                    .child(caption(text("default_description")))
-                    .child(
-                        Button::new("plugin-default-icons")
-                            .debug_selector(|| "plugin-default-icons".into())
-                            .label(text(if default_active {
-                                "active"
-                            } else {
-                                "use_icons"
-                            }))
-                            .selected(default_active)
-                            .disabled(disabled || default_active)
-                            .on_click(move |_, _, cx| {
-                                default_view
-                                    .update(cx, |app, cx| app.select_file_icon_theme(None, cx))
-                            }),
-                    ),
+                resource_row().child(
+                    h_flex()
+                        .w_full()
+                        .gap_2()
+                        .flex_wrap()
+                        .justify_between()
+                        .child(
+                            v_flex()
+                                .min_w_0()
+                                .gap_1()
+                                .child(
+                                    h_flex()
+                                        .gap_2()
+                                        .flex_wrap()
+                                        .child(div().font_medium().child(text("default_icons")))
+                                        .child(resource_badge(text("built_in"), false)),
+                                )
+                                .child(caption(text("default_description"))),
+                        )
+                        .child(
+                            resource_button("plugin-default-icons")
+                                .debug_selector(|| "plugin-default-icons".into())
+                                .label(text(if default_active {
+                                    "active"
+                                } else {
+                                    "use_icons"
+                                }))
+                                .selected(default_active)
+                                .disabled(disabled || default_active)
+                                .on_click(move |_, _, cx| {
+                                    default_view
+                                        .update(cx, |app, cx| app.select_file_icon_theme(None, cx))
+                                }),
+                        ),
+                ),
             );
         if state.busy && !state.initialized {
             content = content.child(caption(text("loading")));
@@ -161,121 +171,152 @@ impl ConduitApp {
             let select_view = view.clone();
             let uninstall_view = view.clone();
             let name = manifest.name.clone();
-            content = content.child(
-                v_flex()
-                    .id(SharedString::from(format!("plugin-{id}")))
-                    .debug_selector(move || format!("plugin-{id}"))
-                    .refine_style(&settings_group_style())
-                    .gap_3()
-                    .child(
-                        h_flex()
-                            .flex_wrap()
-                            .gap_2()
-                            .child(
-                                div()
+            let source = entry
+                .package
+                .source
+                .as_ref()
+                .map(|source| format!("GitHub · {}", source.repository()))
+                .unwrap_or_else(|| text("local_source"));
+            let details = v_flex()
+                .w_full()
+                .min_w_0()
+                .gap_2()
+                .child(caption(manifest.description.clone()))
+                .child(caption(format!("{} · {}", text("file_icons"), manifest.id)))
+                .child(
+                    h_flex().gap_3().flex_wrap().children(
+                        [
+                            Path::new("src"),
+                            Path::new("main.rs"),
+                            Path::new("settings.json"),
+                            Path::new("README.md"),
+                        ]
+                        .into_iter()
+                        .map(|path| {
+                            // Preview this package without changing the user's active theme.
+                            let icon = manifest
+                                .file_icons
+                                .resolve(path, path == Path::new("src"), false)
+                                .and_then(|key| entry.package.assets.get(key))
+                                .map(|bytes| Icon::default().data(bytes))
+                                .unwrap_or_else(|| Icon::new(IconName::File));
+                            h_flex()
+                                .gap_1()
+                                .child(icon.size(px(18.)).text_color(rgb(palette().muted)))
+                                .child(caption(path.to_string_lossy().into_owned()))
+                                .into_any_element()
+                        }),
+                    ),
+                )
+                .into_any_element();
+            let summary = v_flex()
+                .w_full()
+                .min_w_0()
+                .gap_1()
+                .child(
+                    h_flex()
+                        .w_full()
+                        .gap_2()
+                        .flex_wrap()
+                        .justify_between()
+                        .child(
+                            h_flex()
+                                .min_w_0()
+                                .gap_2()
+                                .flex_wrap()
+                                .child(
+                                    resource_meta(
+                                        SharedString::from(format!(
+                                            "resource-title-{}",
+                                            manifest.id
+                                        )),
+                                        manifest.name.clone(),
+                                    )
                                     .text_size(ui_text_size(14.))
-                                    .font_medium()
-                                    .child(manifest.name.clone()),
-                            )
-                            .child(caption(manifest.version.clone()))
-                            .child(caption(text(if enabled { "enabled" } else { "disabled" }))),
-                    )
-                    .child(caption(manifest.description.clone()))
-                    .child(caption(format!("{} · {}", text("file_icons"), manifest.id)))
-                    .when_some(entry.package.source.as_ref(), |card, source| {
-                        card.child(caption(format!("GitHub · {}", source.repository())))
-                    })
-                    .child(
-                        h_flex().gap_3().children(
-                            [
-                                Path::new("src"),
-                                Path::new("main.rs"),
-                                Path::new("settings.json"),
-                                Path::new("README.md"),
-                            ]
-                            .into_iter()
-                            .map(|path| {
-                                // Preview this package without changing the user's active theme.
-                                let icon = manifest
-                                    .file_icons
-                                    .resolve(path, path == Path::new("src"), false)
-                                    .and_then(|key| entry.package.assets.get(key))
-                                    .map(|bytes| Icon::default().data(bytes))
-                                    .unwrap_or_else(|| Icon::new(IconName::File));
-                                icon.size(px(20.))
-                                    .text_color(rgb(palette().muted))
-                                    .into_any_element()
-                            }),
-                        ),
-                    )
-                    .child(
-                        h_flex()
-                            .flex_wrap()
-                            .gap_2()
-                            .child(
-                                Button::new("plugin-use-icons")
-                                    .debug_selector({
-                                        let id = select_id.clone();
-                                        move || format!("plugin-use-{id}")
-                                    })
-                                    .label(text(if active { "active" } else { "use_icons" }))
-                                    .selected(active)
-                                    .disabled(disabled || !enabled || active)
-                                    .on_click(move |_, _, cx| {
-                                        select_view.update(cx, |app, cx| {
-                                            app.select_file_icon_theme(Some(select_id.clone()), cx)
+                                    .text_color(rgb(palette().text))
+                                    .font_medium(),
+                                )
+                                .child(caption(manifest.version.clone()))
+                                .child(resource_badge(
+                                    text(if enabled { "enabled" } else { "disabled" }),
+                                    enabled,
+                                )),
+                        )
+                        .child(
+                            h_flex()
+                                .flex_wrap()
+                                .gap_2()
+                                .child(
+                                    resource_button("plugin-use-icons")
+                                        .debug_selector({
+                                            let id = select_id.clone();
+                                            move || format!("plugin-use-{id}")
                                         })
-                                    }),
-                            )
-                            .child(
-                                Button::new("plugin-toggle")
-                                    .debug_selector({
-                                        let id = toggle_id.clone();
-                                        move || format!("plugin-toggle-{id}")
-                                    })
-                                    .label(text(if enabled { "disable" } else { "enable" }))
-                                    .disabled(disabled)
-                                    .on_click(move |_, _, cx| {
-                                        toggle_view.update(cx, |app, cx| {
-                                            app.set_plugin_enabled(&toggle_id, !enabled, cx)
+                                        .label(text(if active { "active" } else { "use_icons" }))
+                                        .selected(active)
+                                        .disabled(disabled || !enabled || active)
+                                        .on_click(move |_, _, cx| {
+                                            select_view.update(cx, |app, cx| {
+                                                app.select_file_icon_theme(
+                                                    Some(select_id.clone()),
+                                                    cx,
+                                                )
+                                            })
+                                        }),
+                                )
+                                .child(
+                                    resource_button("plugin-toggle")
+                                        .debug_selector({
+                                            let id = toggle_id.clone();
+                                            move || format!("plugin-toggle-{id}")
                                         })
-                                    }),
-                            )
-                            .child(
-                                Button::new("plugin-uninstall")
-                                    .debug_selector({
-                                        let id = uninstall_id.clone();
-                                        move || format!("plugin-uninstall-{id}")
-                                    })
-                                    .label(text("uninstall"))
-                                    .ghost()
-                                    .disabled(disabled)
-                                    .on_click(move |_, window, cx| {
-                                        let view = uninstall_view.clone();
-                                        let id = uninstall_id.clone();
-                                        let name = name.clone();
-                                        window.open_dialog(cx, move |dialog, _, _| {
-                                            let view = view.clone();
-                                            let id = id.clone();
-                                            dialog
-                                                .title(text("confirm_title"))
-                                                .child(caption(conduit::i18n::format(
-                                                    "settings.plugins.confirm_body",
-                                                    &[("name", name.clone())],
-                                                )))
-                                                .footer(
-                                                    h_flex()
-                                                        .justify_end()
-                                                        .gap_2()
-                                                        .child(
-                                                            Button::new("plugin-uninstall-cancel")
+                                        .label(text(if enabled { "disable" } else { "enable" }))
+                                        .disabled(disabled)
+                                        .on_click(move |_, _, cx| {
+                                            toggle_view.update(cx, |app, cx| {
+                                                app.set_plugin_enabled(&toggle_id, !enabled, cx)
+                                            })
+                                        }),
+                                )
+                                .child(
+                                    resource_button("plugin-uninstall")
+                                        .debug_selector({
+                                            let id = uninstall_id.clone();
+                                            move || format!("plugin-uninstall-{id}")
+                                        })
+                                        .label(text("uninstall"))
+                                        .ghost()
+                                        .disabled(disabled)
+                                        .on_click(move |_, window, cx| {
+                                            let view = uninstall_view.clone();
+                                            let id = uninstall_id.clone();
+                                            let name = name.clone();
+                                            window.open_dialog(cx, move |dialog, _, _| {
+                                                let view = view.clone();
+                                                let id = id.clone();
+                                                dialog
+                                                    .title(text("confirm_title"))
+                                                    .child(caption(conduit::i18n::format(
+                                                        "settings.plugins.confirm_body",
+                                                        &[("name", name.clone())],
+                                                    )))
+                                                    .footer(
+                                                        h_flex()
+                                                            .justify_end()
+                                                            .gap_2()
+                                                            .child(
+                                                                resource_button(
+                                                                    "plugin-uninstall-cancel",
+                                                                )
                                                                 .label(text("cancel"))
                                                                 .on_click(|_, window, cx| {
                                                                     window.close_dialog(cx)
                                                                 }),
-                                                        )
-                                                        .child(
-                                                            Button::new("plugin-uninstall-confirm")
+                                                            )
+                                                            .child(
+                                                                resource_button(
+                                                                    "plugin-uninstall-confirm",
+                                                                )
                                                                 .debug_selector(|| {
                                                                     "plugin-uninstall-confirm"
                                                                         .into()
@@ -290,14 +331,35 @@ impl ConduitApp {
                                                                     });
                                                                     window.close_dialog(cx);
                                                                 }),
-                                                        ),
-                                                )
-                                        });
-                                    }),
-                            ),
-                    ),
+                                                            ),
+                                                    )
+                                            });
+                                        }),
+                                ),
+                        ),
+                )
+                .child(resource_meta(
+                    SharedString::from(format!("plugin-source-{}", manifest.id)),
+                    conduit::i18n::format("settings.extensions.source", &[("arg0", source)]),
+                ))
+                .into_any_element();
+            resources = resources.child(
+                div()
+                    .id(SharedString::from(format!("plugin-{id}")))
+                    .debug_selector(move || format!("plugin-{id}"))
+                    .w_full()
+                    .min_w_0()
+                    .flex_shrink_0()
+                    .child(ResourceDetails {
+                        id: format!("plugin-details-{}", manifest.id).into(),
+                        name: manifest.name.clone(),
+                        view: view.clone(),
+                        summary,
+                        details,
+                    }),
             );
         }
+        content = content.child(resources);
         if state.entries.is_empty() && !state.busy {
             content = content.child(
                 v_flex()
@@ -318,7 +380,9 @@ impl ConduitApp {
                     .children(state.errors.iter().map(|error| caption(error.clone()))),
             );
         }
-        content.into_any_element()
+        content
+            .child(self.settings_encourager_content(view))
+            .into_any_element()
     }
 
     fn settings_encourager_content(&self, view: Entity<Self>) -> AnyElement {
@@ -368,12 +432,9 @@ impl ConduitApp {
             .unwrap_or_else(|| conduit::i18n::text("encourager.no_model"));
         let model_view = view.clone();
         let current_model = settings.model.clone();
-        let model_picker = Button::new("encourager-model")
+        let model_picker = settings_dropdown("encourager-model")
             .debug_selector(|| "encourager-model".into())
-            .outline()
-            .h(px(32.))
             .w_full()
-            .dropdown_caret(true)
             .accessibility_label(conduit::i18n::text_static("encourager.setting.model"))
             .label(model_label)
             .disabled(disabled || model_choices.is_empty())
@@ -402,12 +463,9 @@ impl ConduitApp {
 
         let persona_label = conduit::i18n::text_static(settings.persona.label());
         let persona_view = view.clone();
-        let persona_picker = Button::new("encourager-persona-setting")
+        let persona_picker = settings_dropdown("encourager-persona-setting")
             .debug_selector(|| "encourager-persona-setting".into())
-            .outline()
-            .h(px(32.))
             .w_full()
-            .dropdown_caret(true)
             .accessibility_label(conduit::i18n::text_static("encourager.setting.persona"))
             .label(persona_label)
             .disabled(disabled)
@@ -435,12 +493,9 @@ impl ConduitApp {
 
         let verbosity_label = conduit::i18n::text_static(settings.verbosity.label());
         let verbosity_view = view.clone();
-        let verbosity_picker = Button::new("encourager-verbosity")
+        let verbosity_picker = settings_dropdown("encourager-verbosity")
             .debug_selector(|| "encourager-verbosity".into())
-            .outline()
-            .h(px(32.))
             .w_full()
-            .dropdown_caret(true)
             .accessibility_label(conduit::i18n::text_static("encourager.setting.verbosity"))
             .label(verbosity_label)
             .disabled(disabled)

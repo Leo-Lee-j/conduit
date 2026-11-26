@@ -229,8 +229,8 @@ impl RenderOnce for ProviderPicker {
             .child(
                 Select::new(&select)
                     .id("encourager-provider-select")
+                    .settings_control()
                     .w_full()
-                    .h(px(32.))
                     .disabled(self.disabled || empty)
                     .accessibility_label(conduit::i18n::text_static("encourager.setting.service"))
                     .placeholder(conduit::i18n::text_static(if empty {

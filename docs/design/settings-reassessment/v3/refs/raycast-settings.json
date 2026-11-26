@@ -1,0 +1,213 @@
+{
+  "url": "https://manual.raycast.com/settings",
+  "title": [
+    "Settings | Raycast Manual"
+  ],
+  "images": [
+    {
+      "src": "https://manual.raycast.com/wordmark-light.svg",
+      "alt": "Raycast",
+      "width": "130",
+      "height": "50",
+      "class": "EKN27G_logoWordmark EKN27G_logoWordmarkLight"
+    },
+    {
+      "src": "https://manual.raycast.com/wordmark-dark.svg",
+      "alt": "Raycast",
+      "width": "130",
+      "height": "50",
+      "class": "EKN27G_logoWordmark EKN27G_logoWordmarkDark"
+    },
+    {
+      "src": "https://manual.raycast.com/wordmark-light.svg",
+      "alt": "Raycast",
+      "class": "lUN8Fa_logoWordmark lUN8Fa_logoWordmarkLight"
+    },
+    {
+      "src": "https://manual.raycast.com/wordmark-dark.svg",
+      "alt": "Raycast",
+      "class": "lUN8Fa_logoWordmark lUN8Fa_logoWordmarkDark"
+    },
+    {
+      "alt": "Account settings",
+      "loading": "lazy",
+      "width": "2100",
+      "height": "1580",
+      "decoding": "async",
+      "data-nimg": "1",
+      "style": "color:transparent;width:100%;height:auto;background-size:cover;background-position:50% 50%;background-repeat:no-repeat;background-image:url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2100 1580'%3E%3Cfilter id='b' color-interpolation-filters='sRGB'%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3CfeColorMatrix values='1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 100 -1' result='s'/%3E%3CfeFlood x='0' y='0' width='100%25' height='100%25'/%3E%3CfeComposite operator='out' in='s'/%3E%3CfeComposite in2='SourceGraphic'/%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3C/filter%3E%3Cimage width='100%25' height='100%25' x='0' y='0' preserveAspectRatio='none' style='filter: url(%23b);' href='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAICAYAAADA+m62AAAACXBIWXMAAAsSAAALEgHS3X78AAABD0lEQVQYlT2Oz0vCYACGP8htFoJj7Ydt+8zpEDRXMAhKCEQ2aNAhDx06R2C1TkaHoP9A8J7M9GT/5ROO6PDAwwvvyyuWyy9WqxVFUbDZbFgsFszeZrx/fDK5u8eTLbTqAWL9veZl+sBkckuWZVxcDhkNz7lJruifDHAcB03TENufLVmaEHY6WKbJnqoRtyWjs17prntEHMeI+XxOkqYEQYDv+0jfx3QcTNvBsixczyUMQ0StVqPX7RK0Wkgpy3Dnu5LTaGBaFqqqIKJBRL/boymb+J5HU0ps2y6/7TAMAyEEIs9zxklCdBqVoV6vU/9D13Wq1X0M4xDxNH3kOX9lnF6jqCqVSuUfRVHKteOgzS958X0hmyEnaQAAAABJRU5ErkJggg=='/%3E%3C/svg%3E\")",
+      "sizes": "(max-width: 768px) 100vw, (max-width: 1200px) 80vw, 800px",
+      "srcset": "/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-account.png&w=640&q=75 640w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-account.png&w=750&q=75 750w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-account.png&w=828&q=75 828w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-account.png&w=1080&q=75 1080w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-account.png&w=1200&q=75 1200w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-account.png&w=1920&q=75 1920w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-account.png&w=2048&q=75 2048w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-account.png&w=3840&q=75 3840w",
+      "src": "https://manual.raycast.com/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-account.png&w=3840&q=75"
+    },
+    {
+      "alt": "Screenshot of System Settings showing the Spotlight keyboard shortcut being turned off",
+      "loading": "lazy",
+      "width": "1864",
+      "height": "1846",
+      "decoding": "async",
+      "data-nimg": "1",
+      "style": "color:transparent;width:100%;height:auto;background-size:cover;background-position:50% 50%;background-repeat:no-repeat;background-image:url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1864 1846'%3E%3Cfilter id='b' color-interpolation-filters='sRGB'%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3CfeColorMatrix values='1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 100 -1' result='s'/%3E%3CfeFlood x='0' y='0' width='100%25' height='100%25'/%3E%3CfeComposite operator='out' in='s'/%3E%3CfeComposite in2='SourceGraphic'/%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3C/filter%3E%3Cimage width='100%25' height='100%25' x='0' y='0' preserveAspectRatio='none' style='filter: url(%23b);' href='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAACXBIWXMAABYlAAAWJQFJUiTwAAABK0lEQVQYlV2OTWvCQBiEF5uCniQGa+NuPjZpE23TRA0VLFhoz0KPnnqtFwuC/owGpIK5+Vef4pZeehjewzzvzIjT6cTh8M1+v6eqKna7HZ/rNdvtls1mw2KxIM9zRF3XFOOMOI6Jo5goitBaG/m+j23btFotxLE+cpsMUMrD8zwD/klrbe58PkdU1RdFOeXuoTDGbDajLEsGgwFZljGZTFgul4jRaEQ5zimLe5R0DRyGIUEQGJ0nnWEhhCCfvjB8fqcXZnjSxfN8s8/3FLLv4rouwrHbDB9fGT69IcOESAf4fmCgIE7pyYBWs4noOA5xpLmJfFOdpqlJM8npmI5KzrWIfr+P4zh0u1f0etcopZBSIqUyjx27/QuuPlYkSUKj0cCyrH+65OLCMt4PQXiWi4KqLz0AAAAASUVORK5CYII='/%3E%3C/svg%3E\")",
+      "sizes": "(max-width: 768px) 100vw, (max-width: 1200px) 80vw, 800px",
+      "srcset": "/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-raycasthotkey.png&w=640&q=75 640w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-raycasthotkey.png&w=750&q=75 750w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-raycasthotkey.png&w=828&q=75 828w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-raycasthotkey.png&w=1080&q=75 1080w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-raycasthotkey.png&w=1200&q=75 1200w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-raycasthotkey.png&w=1920&q=75 1920w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-raycasthotkey.png&w=2048&q=75 2048w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-raycasthotkey.png&w=3840&q=75 3840w",
+      "src": "https://manual.raycast.com/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-raycasthotkey.png&w=3840&q=75"
+    },
+    {
+      "alt": "Screenshot of System Settings showing the Input Sources keyboard shortcut being changed",
+      "loading": "lazy",
+      "width": "1788",
+      "height": "1824",
+      "decoding": "async",
+      "data-nimg": "1",
+      "style": "color:transparent;width:100%;height:auto;background-size:cover;background-position:50% 50%;background-repeat:no-repeat;background-image:url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1788 1824'%3E%3Cfilter id='b' color-interpolation-filters='sRGB'%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3CfeColorMatrix values='1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 100 -1' result='s'/%3E%3CfeFlood x='0' y='0' width='100%25' height='100%25'/%3E%3CfeComposite operator='out' in='s'/%3E%3CfeComposite in2='SourceGraphic'/%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3C/filter%3E%3Cimage width='100%25' height='100%25' x='0' y='0' preserveAspectRatio='none' style='filter: url(%23b);' href='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAACXBIWXMAABYlAAAWJQFJUiTwAAABLklEQVQYlV2QsU7CUBhGb0kAiQxigJbee3tLS0urFlIaJSYOLEwOTLIzUCffgEBk5hHwWY+hJsY4nO07+b7/F1/nM8fjJ/v9nt1uR1mWbDYb3suS7XbLcrkkTVPE6XQiHBlcKXFdFyllheM42LZNt9ul1Wr9BONxiu/7+L4hSVLG4zFRFDEajQiCgMVigTgc9kxmc+4nOZ5nmE6nFEVBlmUkSVJJq9UKEUch+csr6fIDOyww2q0Ez/N+yfMcIYRg9jhnkj8hlcbT+k9Io6RbbRe3nRseimeyyRQlJcNhgDGmEowfIE1Iu32N6PV6RHFCHMfVtZdNl2rlDlDhHU48p2YJRKfTqV5g9/sMBgO01iil0JdqrXCdPlathnhbr1FKU6/XaTab/7ii0WhiWRbf4kGURu/+XkMAAAAASUVORK5CYII='/%3E%3C/svg%3E\")",
+      "sizes": "(max-width: 768px) 100vw, (max-width: 1200px) 80vw, 800px",
+      "srcset": "/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-raycasthotkey-inputsources.png&w=640&q=75 640w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-raycasthotkey-inputsources.png&w=750&q=75 750w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-raycasthotkey-inputsources.png&w=828&q=75 828w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-raycasthotkey-inputsources.png&w=1080&q=75 1080w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-raycasthotkey-inputsources.png&w=1200&q=75 1200w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-raycasthotkey-inputsources.png&w=1920&q=75 1920w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-raycasthotkey-inputsources.png&w=2048&q=75 2048w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-raycasthotkey-inputsources.png&w=3840&q=75 3840w",
+      "src": "https://manual.raycast.com/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-raycasthotkey-inputsources.png&w=3840&q=75"
+    },
+    {
+      "alt": "Screenshot of System Settings showing the Apple Intelligence & Siri keyboard shortcut setting",
+      "loading": "lazy",
+      "width": "1816",
+      "height": "1816",
+      "decoding": "async",
+      "data-nimg": "1",
+      "style": "color:transparent;width:100%;height:auto;background-size:cover;background-position:50% 50%;background-repeat:no-repeat;background-image:url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1816 1816'%3E%3Cfilter id='b' color-interpolation-filters='sRGB'%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3CfeColorMatrix values='1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 100 -1' result='s'/%3E%3CfeFlood x='0' y='0' width='100%25' height='100%25'/%3E%3CfeComposite operator='out' in='s'/%3E%3CfeComposite in2='SourceGraphic'/%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3C/filter%3E%3Cimage width='100%25' height='100%25' x='0' y='0' preserveAspectRatio='none' style='filter: url(%23b);' href='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAACXBIWXMAABYlAAAWJQFJUiTwAAABR0lEQVQYlSWPuW7bQABEV414qMzlyKJocpfk8lp6DVKyKBUpghSBusCIyyC9hFg/EUhILDi9/avPAFMMphm8hxEvz8/8ezpzPp85nk48PPxit9txOBzY7/dst1uapkE8/v3Dul9iGsOq7ej7nuVySVmWZJnmcjbDdR3E6fGJ9tNXlJRoralqQxTHxFGEVAlZUbNZrxG/j0cWfUcUXJAkilxroigaEquE5mbB/f13RNt2NJ9/Em1+kFQd9tqg85w0TamqejC0bYtwXB+7/kKYGlSqB6KUiro2dF2H1hnT6RTx/uIjdnFLMP1AlmVc25uhrbXcrlYkSYLv+4jwcs7GrpgFM6RKqewCXdYUeY4xhjAMEUIg3rx9hy4t0VU4HFBKMZ/PkVJSFAVBEPwffru74yqW+J43KCaTCZ7n4boujuMwHo8ZjUa8AnwgnHeWtbPoAAAAAElFTkSuQmCC'/%3E%3C/svg%3E\")",
+      "sizes": "(max-width: 768px) 100vw, (max-width: 1200px) 80vw, 800px",
+      "srcset": "/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-raycasthotkey-siri.png&w=640&q=75 640w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-raycasthotkey-siri.png&w=750&q=75 750w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-raycasthotkey-siri.png&w=828&q=75 828w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-raycasthotkey-siri.png&w=1080&q=75 1080w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-raycasthotkey-siri.png&w=1200&q=75 1200w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-raycasthotkey-siri.png&w=1920&q=75 1920w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-raycasthotkey-siri.png&w=2048&q=75 2048w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-raycasthotkey-siri.png&w=3840&q=75 3840w",
+      "src": "https://manual.raycast.com/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-raycasthotkey-siri.png&w=3840&q=75"
+    },
+    {
+      "alt": "Launcher settings",
+      "loading": "lazy",
+      "width": "2100",
+      "height": "1580",
+      "decoding": "async",
+      "data-nimg": "1",
+      "style": "color:transparent;width:100%;height:auto;background-size:cover;background-position:50% 50%;background-repeat:no-repeat;background-image:url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2100 1580'%3E%3Cfilter id='b' color-interpolation-filters='sRGB'%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3CfeColorMatrix values='1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 100 -1' result='s'/%3E%3CfeFlood x='0' y='0' width='100%25' height='100%25'/%3E%3CfeComposite operator='out' in='s'/%3E%3CfeComposite in2='SourceGraphic'/%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3C/filter%3E%3Cimage width='100%25' height='100%25' x='0' y='0' preserveAspectRatio='none' style='filter: url(%23b);' href='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAICAYAAADA+m62AAAACXBIWXMAAAsSAAALEgHS3X78AAABBUlEQVQYlT2Nu0rDYACFf2iSKg2UNiWaOwmpqKRDW5dMhdJqL4OLg6uDaCVu0qXoE6Q+gIXYTPYtP8kvOBwOnKvY7b4oikKiLEu220/W6zc27x/c3t3jeAH1o2PE/nvP6umB5XLBfL5gNBoxGAxI05Sr4RDLstC0OuJw+GE+nRCGIbbj4LoupmlKOI4j9X6/j8jznOubGXEc4/v+P3ueJ4NVsdKEruucd7sEQSBvqoWKOx2DU8vGDSJUVUH0kh6XZxf4no9t20RRJIPV9V+hgxACkWUZ48mUJEkwzRNptlotms0mhmHQaDRotw3E6vmRl+yV8XSGpmnUlBqKokioqirXgjDiF8rsfcbcFcozAAAAAElFTkSuQmCC'/%3E%3C/svg%3E\")",
+      "sizes": "(max-width: 768px) 100vw, (max-width: 1200px) 80vw, 800px",
+      "srcset": "/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-launcher.png&w=640&q=75 640w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-launcher.png&w=750&q=75 750w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-launcher.png&w=828&q=75 828w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-launcher.png&w=1080&q=75 1080w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-launcher.png&w=1200&q=75 1200w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-launcher.png&w=1920&q=75 1920w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-launcher.png&w=2048&q=75 2048w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-launcher.png&w=3840&q=75 3840w",
+      "src": "https://manual.raycast.com/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-launcher.png&w=3840&q=75"
+    },
+    {
+      "alt": "Launcher settings with Fallback Commands",
+      "loading": "lazy",
+      "width": "2100",
+      "height": "1580",
+      "decoding": "async",
+      "data-nimg": "1",
+      "style": "color:transparent;width:100%;height:auto;background-size:cover;background-position:50% 50%;background-repeat:no-repeat;background-image:url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2100 1580'%3E%3Cfilter id='b' color-interpolation-filters='sRGB'%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3CfeColorMatrix values='1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 100 -1' result='s'/%3E%3CfeFlood x='0' y='0' width='100%25' height='100%25'/%3E%3CfeComposite operator='out' in='s'/%3E%3CfeComposite in2='SourceGraphic'/%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3C/filter%3E%3Cimage width='100%25' height='100%25' x='0' y='0' preserveAspectRatio='none' style='filter: url(%23b);' href='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAICAYAAADA+m62AAAACXBIWXMAAAsSAAALEgHS3X78AAABDElEQVQYlTWOO0/CUABG74CggYU29JnbNi0lSCWIgYHNWLGNOrg4ODoYX42Tumj8BQR3iRUm+ZfHcBOns3w53xGLxRdlWVKW36xWK+bzT15fnnl7/+Di8gpX+tS2dxDLnyUPt9ecnZ+S5zlpmjIej5lMJuwPBliWRbVWQ6zXv2THKZ7n4TiOomEYtFotRel5DIdDxGw2Y5plRFGElJJ2u43rumpo2Q5xNyGKQkSj0aAbxwS+j23bBEGg7v6Nuq5TrW4h+nt9ep1dZZPSV8ZNgmmaKmNDIQSiKAqOplOSpIcbhByMRnQ6MYZhomka9XodTdMR93c3PBZPHKYnaM0mURiqxk1SpVJRNj8I+QPhsX8nKOAIgQAAAABJRU5ErkJggg=='/%3E%3C/svg%3E\")",
+      "sizes": "(max-width: 768px) 100vw, (max-width: 1200px) 80vw, 800px",
+      "srcset": "/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-launcher-fallback.png&w=640&q=75 640w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-launcher-fallback.png&w=750&q=75 750w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-launcher-fallback.png&w=828&q=75 828w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-launcher-fallback.png&w=1080&q=75 1080w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-launcher-fallback.png&w=1200&q=75 1200w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-launcher-fallback.png&w=1920&q=75 1920w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-launcher-fallback.png&w=2048&q=75 2048w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-launcher-fallback.png&w=3840&q=75 3840w",
+      "src": "https://manual.raycast.com/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-launcher-fallback.png&w=3840&q=75"
+    },
+    {
+      "alt": "Shortcuts settings",
+      "loading": "lazy",
+      "width": "2100",
+      "height": "1580",
+      "decoding": "async",
+      "data-nimg": "1",
+      "style": "color:transparent;width:100%;height:auto;background-size:cover;background-position:50% 50%;background-repeat:no-repeat;background-image:url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2100 1580'%3E%3Cfilter id='b' color-interpolation-filters='sRGB'%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3CfeColorMatrix values='1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 100 -1' result='s'/%3E%3CfeFlood x='0' y='0' width='100%25' height='100%25'/%3E%3CfeComposite operator='out' in='s'/%3E%3CfeComposite in2='SourceGraphic'/%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3C/filter%3E%3Cimage width='100%25' height='100%25' x='0' y='0' preserveAspectRatio='none' style='filter: url(%23b);' href='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAICAYAAADA+m62AAAACXBIWXMAAAsSAAALEgHS3X78AAABA0lEQVQYlT2NvU7CUACF70BbjYUa/nqNtFdMa9RYkg4d2BpEQWRwcHF0MCopm7pofILiA0iCsPUtP9Ob6PDlJCfnRyyX36xWK81ms2ax+OLt9YX3j09ubu/Y9xTW1jZi/bNm9njPdHrN5GpCmqYkSUK/3yeOY6SUmKaFKIqC0fkAz/PYkxIpXRqNBvV6XWvplwWR5zmXozFhGNJVXXzfx3VdvVRqp9MhCAKEbdschyEHSmlTKUW73daUwWaziWmaiOgs4vToBOUrWq2WvvujDDmOgxACkWUZg+GQqNfDcXax7R2q1aqmVqthWZYuieenB2bZnMHFWF9UKpV/DMPQa6p7yC8DdHxBrvx0igAAAABJRU5ErkJggg=='/%3E%3C/svg%3E\")",
+      "sizes": "(max-width: 768px) 100vw, (max-width: 1200px) 80vw, 800px",
+      "srcset": "/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-shortcuts.png&w=640&q=75 640w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-shortcuts.png&w=750&q=75 750w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-shortcuts.png&w=828&q=75 828w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-shortcuts.png&w=1080&q=75 1080w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-shortcuts.png&w=1200&q=75 1200w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-shortcuts.png&w=1920&q=75 1920w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-shortcuts.png&w=2048&q=75 2048w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-shortcuts.png&w=3840&q=75 3840w",
+      "src": "https://manual.raycast.com/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-shortcuts.png&w=3840&q=75"
+    },
+    {
+      "alt": "Keyboard settings",
+      "loading": "lazy",
+      "width": "2100",
+      "height": "1580",
+      "decoding": "async",
+      "data-nimg": "1",
+      "style": "color:transparent;width:100%;height:auto;background-size:cover;background-position:50% 50%;background-repeat:no-repeat;background-image:url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2100 1580'%3E%3Cfilter id='b' color-interpolation-filters='sRGB'%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3CfeColorMatrix values='1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 100 -1' result='s'/%3E%3CfeFlood x='0' y='0' width='100%25' height='100%25'/%3E%3CfeComposite operator='out' in='s'/%3E%3CfeComposite in2='SourceGraphic'/%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3C/filter%3E%3Cimage width='100%25' height='100%25' x='0' y='0' preserveAspectRatio='none' style='filter: url(%23b);' href='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAICAYAAADA+m62AAAACXBIWXMAAAsSAAALEgHS3X78AAABDklEQVQYlT3MvU7CUBiH8RNLizGEED5MpS2cftCkxiZoRxwIiiAyODi4OhiVlE0djPEKKhcgscIkd/kYzuDwzy958+YRy+UXeZ6T59+s12s+FwteX555e//g+uYWy5EUd/cQq58Vs4c7ptMrJpcT+v0+SZJw2uuRJCeYpolhFBGbzS+jswG2ZdFsNnFdF8dx1INpHuAHIcfdLiLLMi5GYzqdDlJKoijC8zykbOO0WkjXJQh8RKlUIgpDVbJtmyAIlNtty/uNBrqhI+KjmMMwUsftfN9XWpb1rxACkaYpg/MhcRxTq9Wo1+vKSqWiLJfLVKtVxNPjPbN0zmA4RjcMNG0HTdMoFArouq5qbdfjD0cZfo6iX5HzAAAAAElFTkSuQmCC'/%3E%3C/svg%3E\")",
+      "sizes": "(max-width: 768px) 100vw, (max-width: 1200px) 80vw, 800px",
+      "srcset": "/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-keyboard.png&w=640&q=75 640w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-keyboard.png&w=750&q=75 750w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-keyboard.png&w=828&q=75 828w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-keyboard.png&w=1080&q=75 1080w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-keyboard.png&w=1200&q=75 1200w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-keyboard.png&w=1920&q=75 1920w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-keyboard.png&w=2048&q=75 2048w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-keyboard.png&w=3840&q=75 3840w",
+      "src": "https://manual.raycast.com/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-keyboard.png&w=3840&q=75"
+    },
+    {
+      "alt": "Advanced settings",
+      "loading": "lazy",
+      "width": "2100",
+      "height": "1580",
+      "decoding": "async",
+      "data-nimg": "1",
+      "style": "color:transparent;width:100%;height:auto;background-size:cover;background-position:50% 50%;background-repeat:no-repeat;background-image:url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2100 1580'%3E%3Cfilter id='b' color-interpolation-filters='sRGB'%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3CfeColorMatrix values='1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 100 -1' result='s'/%3E%3CfeFlood x='0' y='0' width='100%25' height='100%25'/%3E%3CfeComposite operator='out' in='s'/%3E%3CfeComposite in2='SourceGraphic'/%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3C/filter%3E%3Cimage width='100%25' height='100%25' x='0' y='0' preserveAspectRatio='none' style='filter: url(%23b);' href='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAICAYAAADA+m62AAAACXBIWXMAAAsSAAALEgHS3X78AAABBElEQVQYlT2NP0vDUBTFH7S+KsSlkP8JERNbKs2QQsGObW1JteDi4Oogaombuih+AVs/gMXYTPZb/uQ90OFwueec+7tivf6kLEvK8ouqqlitPnh+euTl9Y2Lyyv8MKKxu4fYfG9Y3F4zn58zm50xHA7p9/sMBif0ej0c10XKBmK7/WE6HuF7Pq7rEkURvu/jOI6W2rMsQyyX70zznFarpc0wDLFtW5eCINB7kiQIwzA4breJ41ibaiqikvpgWRZS7iDSNKVz1CEMQh3+FRVVHSqyEAJRFAXj0wndtItpWjpURdM08TwPw9in2Wwi7u9uWBQPjCY5UkpqtRr1ev1fihYdHPIL3+J+L7T4X4QAAAAASUVORK5CYII='/%3E%3C/svg%3E\")",
+      "sizes": "(max-width: 768px) 100vw, (max-width: 1200px) 80vw, 800px",
+      "srcset": "/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-advanced.png&w=640&q=75 640w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-advanced.png&w=750&q=75 750w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-advanced.png&w=828&q=75 828w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-advanced.png&w=1080&q=75 1080w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-advanced.png&w=1200&q=75 1200w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-advanced.png&w=1920&q=75 1920w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-advanced.png&w=2048&q=75 2048w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-advanced.png&w=3840&q=75 3840w",
+      "src": "https://manual.raycast.com/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-basics-settings-advanced.png&w=3840&q=75"
+    },
+    {
+      "alt": "Agents, AI Commands & AI Extensions",
+      "loading": "lazy",
+      "width": "2100",
+      "height": "1580",
+      "decoding": "async",
+      "data-nimg": "1",
+      "style": "color:transparent;width:100%;height:auto;background-size:cover;background-position:50% 50%;background-repeat:no-repeat;background-image:url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2100 1580'%3E%3Cfilter id='b' color-interpolation-filters='sRGB'%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3CfeColorMatrix values='1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 100 -1' result='s'/%3E%3CfeFlood x='0' y='0' width='100%25' height='100%25'/%3E%3CfeComposite operator='out' in='s'/%3E%3CfeComposite in2='SourceGraphic'/%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3C/filter%3E%3Cimage width='100%25' height='100%25' x='0' y='0' preserveAspectRatio='none' style='filter: url(%23b);' href='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAICAYAAADA+m62AAAACXBIWXMAAAsSAAALEgHS3X78AAABEElEQVQYlT3MPU/CUBiG4TPQ8hESoR/nVLAtlE5qiYKJyqIIAaIuDg6uJhIV4iSJi/4CIrtEiizyL29DB4d7eq/nFfP5F/FiQRx/s1r9MPucMZm88vb+wc3tHTtehXQmi1jGS4bDe66uLxn0+7RaLU6bTTonx+zX63iVKul0BvG7XnPR6eB5HsVCAT2bJTRNjhyFlsux7Tg0Gg3EdDqld9YmrNUol8tIKbGUwnIcLMuiVCoRhiEin8+zuxcRBEECXddNsJISx3FQSqHrGiKKIg4O6/i+n0DPc5PjBm0yTBMhBGI0HnPe7bEZ2LZMkG3bSVIqtoomhmEgnh4feB690O4O0HWdVCr1n6ZpyTe/GvAH/KJ85WXT71IAAAAASUVORK5CYII='/%3E%3C/svg%3E\")",
+      "sizes": "(max-width: 768px) 100vw, (max-width: 1200px) 80vw, 800px",
+      "srcset": "/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-ai-agents-aicommands-aiextensions.png&w=640&q=75 640w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-ai-agents-aicommands-aiextensions.png&w=750&q=75 750w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-ai-agents-aicommands-aiextensions.png&w=828&q=75 828w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-ai-agents-aicommands-aiextensions.png&w=1080&q=75 1080w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-ai-agents-aicommands-aiextensions.png&w=1200&q=75 1200w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-ai-agents-aicommands-aiextensions.png&w=1920&q=75 1920w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-ai-agents-aicommands-aiextensions.png&w=2048&q=75 2048w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-ai-agents-aicommands-aiextensions.png&w=3840&q=75 3840w",
+      "src": "https://manual.raycast.com/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-ai-agents-aicommands-aiextensions.png&w=3840&q=75"
+    },
+    {
+      "alt": "Personalization settings",
+      "loading": "lazy",
+      "width": "2100",
+      "height": "1580",
+      "decoding": "async",
+      "data-nimg": "1",
+      "style": "color:transparent;width:100%;height:auto;background-size:cover;background-position:50% 50%;background-repeat:no-repeat;background-image:url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2100 1580'%3E%3Cfilter id='b' color-interpolation-filters='sRGB'%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3CfeColorMatrix values='1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 100 -1' result='s'/%3E%3CfeFlood x='0' y='0' width='100%25' height='100%25'/%3E%3CfeComposite operator='out' in='s'/%3E%3CfeComposite in2='SourceGraphic'/%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3C/filter%3E%3Cimage width='100%25' height='100%25' x='0' y='0' preserveAspectRatio='none' style='filter: url(%23b);' href='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAICAYAAADA+m62AAAACXBIWXMAAAsSAAALEgHS3X78AAABDklEQVQYlT2OO08CURCFb8LyMFAsBLi7m31xodKssKGhQhFCXGlsLGxNJCrESm00/gLUXiILlfzLz9wtLL6cycyZMyPW62/SzYY0/WG32/Hx+cXL8xOvb+9cXl3j+iHF0gFim26Zz2+YzS5IzhOGwyH9fp/BYEC328MP2xSLJcTvfs/ZeIznulhS0mg0ME0zo1qt4vsecRwjVqsV05MRbaUIwzDDtm0cx8GyLDw/oNPpICqVCodHEUqpbKiNruviODYtpfCCFvm8gYiiiF58TBAEmUGrlBIprazWrwghEIvlktPJFL2gm/qc1nq9TrPZpFwuU6vVEPd3tzwsHhlNEvKFArlcDsMw/tFpQUvxB4HofavSJFzpAAAAAElFTkSuQmCC'/%3E%3C/svg%3E\")",
+      "sizes": "(max-width: 768px) 100vw, (max-width: 1200px) 80vw, 800px",
+      "srcset": "/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-ai-personalization.png&w=640&q=75 640w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-ai-personalization.png&w=750&q=75 750w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-ai-personalization.png&w=828&q=75 828w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-ai-personalization.png&w=1080&q=75 1080w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-ai-personalization.png&w=1200&q=75 1200w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-ai-personalization.png&w=1920&q=75 1920w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-ai-personalization.png&w=2048&q=75 2048w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-ai-personalization.png&w=3840&q=75 3840w",
+      "src": "https://manual.raycast.com/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-ai-personalization.png&w=3840&q=75"
+    },
+    {
+      "alt": "Chat settings",
+      "loading": "lazy",
+      "width": "2100",
+      "height": "1580",
+      "decoding": "async",
+      "data-nimg": "1",
+      "style": "color:transparent;width:100%;height:auto;background-size:cover;background-position:50% 50%;background-repeat:no-repeat;background-image:url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2100 1580'%3E%3Cfilter id='b' color-interpolation-filters='sRGB'%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3CfeColorMatrix values='1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 100 -1' result='s'/%3E%3CfeFlood x='0' y='0' width='100%25' height='100%25'/%3E%3CfeComposite operator='out' in='s'/%3E%3CfeComposite in2='SourceGraphic'/%3E%3CfeGaussianBlur stdDeviation='20'/%3E%3C/filter%3E%3Cimage width='100%25' height='100%25' x='0' y='0' preserveAspectRatio='none' style='filter: url(%23b);' href='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAICAYAAADA+m62AAAACXBIWXMAAAsSAAALEgHS3X78AAABCUlEQVQYlT2NsU7CUBSG71CoQUKgBUmgtPW2YdCU0KQDm0UIAVkcXFxNJCrESVk0PgHyABIpuMhbfubeweHLf3LynfOLzeaLbLsly7752e/5XK9Zvr7w9v7B9c0tjutjHhUQu2zHbHbHdHrFZDwhTVOSJKHX69GNYzwZYpom4vdw4HIwoNVqcVKrYVerVCoVTb1ex/d94jhGrFYrRhd9AimRUtJut3FdVx8qSREEAaJYLHJ2Hmmp2WwShiGO49BoNLSsvuZyOUQURXTjDp7naVGlktSs0rZthBCI+WJBOhzRiTp6WS6XKZVKGsuyKBSOsSwb8fhwz9P8mf5wTD6fxzCMf3SlEHinkj+9Un26bdwSZQAAAABJRU5ErkJggg=='/%3E%3C/svg%3E\")",
+      "sizes": "(max-width: 768px) 100vw, (max-width: 1200px) 80vw, 800px",
+      "srcset": "/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-ai-general.png&w=640&q=75 640w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-ai-general.png&w=750&q=75 750w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-ai-general.png&w=828&q=75 828w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-ai-general.png&w=1080&q=75 1080w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-ai-general.png&w=1200&q=75 1200w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-ai-general.png&w=1920&q=75 1920w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-ai-general.png&w=2048&q=75 2048w, /_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-ai-general.png&w=3840&q=75 3840w",
+      "src": "https://manual.raycast.com/_next/image?url=https%3A%2F%2Ffz1sd71lwhbqy6sh.public.blob.vercel-storage.com%2Fraycast%2Fimages%2Fapp%2Fbasics%2Fmac-settings-ai-general.png&w=3840&q=75"
+    },
+    {
+      "src": "https://manual.raycast.com/logo-light.svg",
+      "alt": "Raycast",
+      "class": "CgEBhW_logoMark CgEBhW_logoMarkLight"
+    },
+    {
+      "src": "https://manual.raycast.com/logo-dark.svg",
+      "alt": "Raycast",
+      "class": "CgEBhW_logoMark CgEBhW_logoMarkDark"
+    }
+  ],
+  "links": [
+    "https://manual.raycast.com/settings",
+    "https://manual.raycast.com/extensions",
+    "https://manual.raycast.com/browser-extension",
+    "https://manual.raycast.com/ai/ai-extensions",
+    "https://manual.raycast.com/ai/extension-models",
+    "https://manual.raycast.com/ios/share-extension",
+    "https://manual.raycast.com/enterprise/private-extension-publishing",
+    "https://manual.raycast.com/enterprise/extensions-allow-list",
+    "https://manual.raycast.com/extensions-guidelines",
+    "https://manual.raycast.com/notes#settings",
+    "https://manual.raycast.com/ai/ai-extensions",
+    "https://manual.raycast.com/ai/screen-awareness#settings",
+    "https://manual.raycast.com/ai/ai-extensions",
+    "https://manual.raycast.com/ai/ai-extensions#permissions",
+    "https://manual.raycast.com/applications#settings",
+    "https://manual.raycast.com/settings#uninstalling-extensions",
+    "raycast://extensions/raycast/ai/ai-chat?fallbackText=Read%20https%3A%2F%2Fmanual.raycast.com%2Fsettings.md.%20I%20want%20to%20ask%20you%20questions%20about%20Settings%20in%20the%20Raycast%20Manual.",
+    "https://manual.raycast.com/settings#opening-settings",
+    "https://manual.raycast.com/settings#search-settings",
+    "https://manual.raycast.com/settings#export-and-import-settings",
+    "https://manual.raycast.com/settings#agents-ai-commands-and-ai-extensions",
+    "https://manual.raycast.com/settings#extensions",
+    "https://manual.raycast.com/settings#browsing-extensions",
+    "https://manual.raycast.com/settings#extension-specific-settings",
+    "https://manual.raycast.com/settings#extension-actions"
+  ]
+}

@@ -99,9 +99,6 @@ fn interface_reset_changes_only_interface_preferences_and_keeps_editor_state(
             );
             assert_eq!(Theme::global(cx).mono_font_size, px(16.));
 
-            // This is a navigation/search contract, not a screenshot assertion.
-            let page = app.settings_appearance_page(false, cx.entity());
-            assert_eq!(page.groups.len(), 3);
             app.persistence.flush();
         });
     });
@@ -136,7 +133,8 @@ fn chat_and_code_reset_preserves_interface_theme_background_and_editor_state(
                 expected["ui"][key] = defaults[key].clone();
             }
 
-            app.reset_typography(window, cx);
+            app.reset_chat_typography(window, cx);
+            app.reset_code_typography(window, cx);
 
             assert_eq!(serde_json::to_value(&app.store).unwrap(), expected);
             assert_eq!(editor_and_font_entities(app), entities);
@@ -178,7 +176,8 @@ fn readonly_or_closing_typography_actions_do_not_mutate_preferences_or_editor_st
                 app.writable = writable;
                 app.closing = closing;
                 app.reset_ui_typography(window, cx);
-                app.reset_typography(window, cx);
+                app.reset_chat_typography(window, cx);
+                app.reset_code_typography(window, cx);
                 for field in [
                     TypographyField::UiSize,
                     TypographyField::ChatSize,

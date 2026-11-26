@@ -1,0 +1,158 @@
+{
+  "pages": [
+    {
+      "page": "general",
+      "scroll": 1440,
+      "client": 1440,
+      "text": 159,
+      "brokenImages": 0,
+      "name": "general"
+    },
+    {
+      "page": "appearance",
+      "scroll": 1440,
+      "client": 1440,
+      "text": 248,
+      "brokenImages": 0,
+      "name": "appearance"
+    },
+    {
+      "page": "shortcuts",
+      "scroll": 1440,
+      "client": 1440,
+      "text": 289,
+      "brokenImages": 0,
+      "name": "shortcuts"
+    },
+    {
+      "page": "engines",
+      "scroll": 1440,
+      "client": 1440,
+      "text": 284,
+      "brokenImages": 0,
+      "name": "engines"
+    },
+    {
+      "page": "services",
+      "scroll": 1440,
+      "client": 1440,
+      "text": 466,
+      "brokenImages": 0,
+      "name": "services"
+    },
+    {
+      "page": "sessions",
+      "scroll": 1440,
+      "client": 1440,
+      "text": 226,
+      "brokenImages": 0,
+      "name": "sessions"
+    },
+    {
+      "page": "git",
+      "scroll": 1440,
+      "client": 1440,
+      "text": 201,
+      "brokenImages": 0,
+      "name": "git"
+    },
+    {
+      "page": "skills",
+      "scroll": 1440,
+      "client": 1440,
+      "text": 379,
+      "brokenImages": 0,
+      "name": "skills"
+    },
+    {
+      "page": "mcp",
+      "scroll": 1440,
+      "client": 1440,
+      "text": 376,
+      "brokenImages": 0,
+      "name": "mcp"
+    },
+    {
+      "page": "plugins",
+      "scroll": 1440,
+      "client": 1440,
+      "text": 240,
+      "brokenImages": 0,
+      "name": "plugins"
+    },
+    {
+      "page": "maintenance",
+      "scroll": 1440,
+      "client": 1440,
+      "text": 186,
+      "brokenImages": 0,
+      "name": "maintenance"
+    }
+  ],
+  "layouts": [
+    {
+      "width": 1100,
+      "name": "services",
+      "scroll": 1100,
+      "client": 1100,
+      "overflow": []
+    },
+    {
+      "width": 1100,
+      "name": "appearance",
+      "scroll": 1100,
+      "client": 1100,
+      "overflow": []
+    },
+    {
+      "width": 1100,
+      "name": "skills",
+      "scroll": 1100,
+      "client": 1100,
+      "overflow": []
+    },
+    {
+      "width": 800,
+      "name": "services",
+      "scroll": 800,
+      "client": 800,
+      "overflow": []
+    },
+    {
+      "width": 800,
+      "name": "appearance",
+      "scroll": 800,
+      "client": 800,
+      "overflow": []
+    },
+    {
+      "width": 800,
+      "name": "skills",
+      "scroll": 800,
+      "client": 800,
+      "overflow": []
+    },
+    {
+      "width": 375,
+      "name": "services",
+      "scroll": 375,
+      "client": 375,
+      "overflow": []
+    },
+    {
+      "width": 375,
+      "name": "appearance",
+      "scroll": 375,
+      "client": 375,
+      "overflow": []
+    },
+    {
+      "width": 375,
+      "name": "skills",
+      "scroll": 375,
+      "client": 375,
+      "overflow": []
+    }
+  ],
+  "errors": []
+}

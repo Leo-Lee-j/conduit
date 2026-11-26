@@ -177,6 +177,7 @@ fn run(
             timeout: Duration::from_secs(120),
             stop_when_full: false,
             background: false,
+            input: None,
         },
     )
     .map(|output| output.text)

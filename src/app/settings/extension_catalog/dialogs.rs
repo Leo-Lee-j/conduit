@@ -306,7 +306,8 @@ impl Render for InstallDialog {
             && !matches!(self.engine, Provider::Qoder | Provider::Gemini)
             && !self.app.read(cx).closing;
         let mut content = v_flex()
-            .gap_3()
+            .text_size(ui_text_size(14.))
+            .gap_2()
             .id("extension-install-content")
             .max_h((window.viewport_size().height - px(230.)).max(px(100.)))
             .overflow_y_scroll()
@@ -333,7 +334,7 @@ impl Render for InstallDialog {
                     .child(note(text("skill_notice")))
                     .child(
                         div()
-                            .text_size(ui_text_size(12.))
+                            .text_size(ui_text_size(14.))
                             .child(skill.markdown.chars().take(32_000).collect::<String>()),
                     )
                     .when(skill.markdown.chars().count() > 32_000, |body| {
@@ -361,7 +362,7 @@ impl Render for InstallDialog {
                     let mut options = h_flex().gap_2().flex_wrap();
                     for (index, option) in self.options.iter().enumerate() {
                         options = options.child(
-                            Button::new(("catalog-mcp-option", index))
+                            resource_button(("catalog-mcp-option", index))
                                 .small()
                                 .outline()
                                 .label(option.label.clone())
@@ -378,7 +379,7 @@ impl Render for InstallDialog {
                         );
                     }
                     content = content.child(options).child(
-                        Input::new(&self.name)
+                        settings_input(&self.name)
                             .disabled(self.saving)
                             .aria_label(text("service_name")),
                     );
@@ -394,7 +395,7 @@ impl Render for InstallDialog {
                                     if field.required { " *" } else { "" }
                                 )))
                                 .child(
-                                    Input::new(input)
+                                    settings_input(input)
                                         .disabled(self.saving)
                                         .aria_label(field.label.clone()),
                                 )
@@ -429,7 +430,7 @@ impl Render for InstallDialog {
                     .flex_wrap()
                     .when(self.preview.is_some(), |row| {
                         row.child(
-                            Button::new("catalog-back")
+                            resource_button("catalog-back")
                                 .label(text("back"))
                                 .disabled(self.saving)
                                 .on_click(cx.listener(|dialog, _, _, cx| {
@@ -440,7 +441,7 @@ impl Render for InstallDialog {
                         )
                     })
                     .child(
-                        Button::new("catalog-install-cancel")
+                        resource_button("catalog-install-cancel")
                             .label(text(if self.discard { "discard" } else { "cancel" }))
                             .disabled(self.saving && matches!(self.prepared, Prepared::Mcp(..)))
                             .on_click(cx.listener(|dialog, _, window, cx| {
@@ -452,7 +453,7 @@ impl Render for InstallDialog {
                             })),
                     )
                     .child(
-                        Button::new("catalog-install-confirm")
+                        resource_button("catalog-install-confirm")
                             .debug_selector(|| "catalog-install-confirm".into())
                             .primary()
                             .label(text(if self.saving {

@@ -1,0 +1,149 @@
+{
+  "dir-1": {
+    "errors": [],
+    "layouts": [
+      {
+        "width": 1440,
+        "height": 900,
+        "client": 1440,
+        "scroll": 1440,
+        "body": 1440,
+        "brokenImages": 0
+      },
+      {
+        "width": 1100,
+        "height": 800,
+        "client": 1100,
+        "scroll": 1100,
+        "body": 1100,
+        "brokenImages": 0
+      },
+      {
+        "width": 800,
+        "height": 800,
+        "client": 800,
+        "scroll": 800,
+        "body": 800,
+        "brokenImages": 0
+      },
+      {
+        "width": 375,
+        "height": 812,
+        "client": 375,
+        "scroll": 375,
+        "body": 375,
+        "brokenImages": 0
+      }
+    ],
+    "interactions": [
+      "chat size live preview",
+      "line height choice",
+      "scoped reset",
+      "search to code",
+      "line numbers toggle",
+      "dark mode",
+      "model defaults search",
+      "Ctrl K",
+      "no results",
+      "Esc"
+    ]
+  },
+  "dir-2": {
+    "errors": [],
+    "layouts": [
+      {
+        "width": 1440,
+        "height": 900,
+        "client": 1440,
+        "scroll": 1440,
+        "body": 1440,
+        "brokenImages": 0
+      },
+      {
+        "width": 1100,
+        "height": 800,
+        "client": 1100,
+        "scroll": 1100,
+        "body": 1100,
+        "brokenImages": 0
+      },
+      {
+        "width": 800,
+        "height": 800,
+        "client": 800,
+        "scroll": 800,
+        "body": 800,
+        "brokenImages": 0
+      },
+      {
+        "width": 375,
+        "height": 812,
+        "client": 375,
+        "scroll": 375,
+        "body": 375,
+        "brokenImages": 0
+      }
+    ],
+    "interactions": [
+      "chat size live preview",
+      "line height live preview",
+      "scoped reset",
+      "search to code",
+      "line numbers toggle",
+      "light mode",
+      "model defaults search",
+      "Ctrl K",
+      "no results",
+      "Esc"
+    ]
+  },
+  "dir-3": {
+    "errors": [],
+    "layouts": [
+      {
+        "width": 1440,
+        "height": 900,
+        "client": 1440,
+        "scroll": 1440,
+        "body": 1440,
+        "brokenImages": 0
+      },
+      {
+        "width": 1100,
+        "height": 800,
+        "client": 1100,
+        "scroll": 1100,
+        "body": 1100,
+        "brokenImages": 0
+      },
+      {
+        "width": 800,
+        "height": 800,
+        "client": 800,
+        "scroll": 800,
+        "body": 800,
+        "brokenImages": 0
+      },
+      {
+        "width": 375,
+        "height": 812,
+        "client": 375,
+        "scroll": 375,
+        "body": 375,
+        "brokenImages": 0
+      }
+    ],
+    "interactions": [
+      "chat size live preview",
+      "line height live preview",
+      "scoped reset",
+      "search to code field",
+      "line numbers toggle",
+      "dark mode",
+      "cross-category search",
+      "Ctrl F",
+      "no results",
+      "Esc"
+    ]
+  }
+}

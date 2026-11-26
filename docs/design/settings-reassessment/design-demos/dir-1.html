@@ -1,0 +1,573 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Conduit 设置设计预览 A</title>
+<style>
+:root {
+  --bg:#fff; --surface:#f5f7f6; --subtle:#eef1ef; --line:#e4e8e6;
+  --ink:#202d29; --muted:#64716b; --accent:#087666; --selected:#e2f2ec;
+  --hover:#edf2ef; --code:#f3f5f4; --shadow:0 12px 32px #1d39231a;
+  --ui-font:'Segoe UI','Microsoft YaHei UI',sans-serif; --ui-size:14px;
+  --chat-font:'Segoe UI','Microsoft YaHei UI',sans-serif; --chat-size:16px; --chat-leading:1.6;
+  --code-font:'Cascadia Code',Consolas,monospace; --code-size:14px; --preview-bg:#fff;
+}
+* { box-sizing:border-box; }
+html,body { margin:0; height:100%; }
+body { font:var(--ui-size)/1.5 var(--ui-font); color:var(--ink); background:var(--bg); }
+button,input,select { font:inherit; }
+button,input,select,a { -webkit-tap-highlight-color:transparent; }
+button { color:inherit; cursor:pointer; }
+button { min-height:44px; border:0; background:none; padding:0 14px; border-radius:6px; }
+button:hover { background:var(--hover); }
+button:disabled { cursor:default; opacity:.4; }
+button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+input,select { color:var(--ink); background:var(--bg); accent-color:var(--accent); }
+input[type=search],input[type=text],input[type=url],select { min-height:44px; border:1px solid var(--line); border-radius:6px; padding:0 12px; }
+input[type=range] { width:158px; min-height:44px; }
+input[type=number] { width:49px; padding:0; border:0; text-align:center; appearance:textfield; }
+input::-webkit-inner-spin-button { appearance:none; }
+select { min-width:260px; }
+svg { width:19px; height:19px; stroke:currentColor; fill:none; stroke-width:1.65; stroke-linecap:round; stroke-linejoin:round; flex-shrink:0; }
+h1,h2,h3,p { margin:0; }
+h1 { font-size:26px; font-weight:650; letter-spacing:-.6px; line-height:1.4; }
+h2 { font-size:16px; font-weight:600; }
+h3 { font-size:14px; font-weight:600; }
+small,.secondary { color:var(--muted); font-size:12px; }
+[hidden] { display:none!important; }
+.app { height:100dvh; display:grid; grid-template-columns:216px minmax(0,1fr); grid-template-rows:64px minmax(0,1fr); }
+.brand { display:flex; align-items:center; gap:11px; padding:0 24px; border-bottom:1px solid var(--line); background:var(--surface); font-size:18px; font-weight:600; }
+.brand img { width:29px; height:29px; border-radius:8px; }
+.topbar { display:flex; align-items:center; justify-content:space-between; gap:20px; padding:0 32px; border-bottom:1px solid var(--line); }
+.location { display:flex; gap:12px; align-items:center; font-size:14px; }
+.location span { color:var(--muted); }
+.top-actions { display:flex; align-items:center; gap:14px; }
+.search-wrap { position:relative; width:292px; }
+.search-wrap>svg { position:absolute; left:12px; top:13px; color:var(--muted); pointer-events:none; }
+#search { width:100%; padding-left:39px; padding-right:61px; border-color:transparent; background:var(--surface); }
+#search::placeholder { color:var(--muted); opacity:1; }
+.shortcut { position:absolute; right:11px; top:13px; color:var(--muted); font:12px/18px var(--ui-font); pointer-events:none; }
+.search-results { position:absolute; z-index:20; top:51px; right:0; width:420px; max-height:400px; overflow:auto; background:var(--bg); box-shadow:var(--shadow); border:1px solid var(--line); border-radius:8px; padding:6px; }
+.search-results button { width:100%; text-align:left; display:flex; flex-direction:column; align-items:flex-start; justify-content:center; padding:9px 12px; }
+.search-results button[aria-selected=true] { background:var(--selected); color:var(--accent); }
+.search-empty { padding:20px 12px; color:var(--muted); }
+.icon-button { width:44px; padding:0; display:grid; place-items:center; }
+.mobile-menu { display:none; }
+.sidebar { grid-column:1; grid-row:2; background:var(--surface); padding:18px 12px 12px; overflow:auto; display:flex; flex-direction:column; }
+.nav-group { margin:0 0 14px; }
+.nav-heading { font-size:12px; color:var(--muted); padding:0 14px; margin:0 0 5px; }
+.nav-item { width:100%; text-align:left; display:flex; align-items:center; gap:10px; padding:0 14px; border-radius:5px; font-size:14px; }
+.nav-item[aria-current=page] { color:var(--accent); background:var(--selected); font-weight:600; }
+.nav-item[aria-current=page]::after { content:''; width:5px; height:5px; border-radius:50%; background:var(--accent); margin-left:auto; }
+.sidebar-foot { margin-top:auto; padding:12px 14px 0; color:var(--muted); font-size:12px; }
+.workspace { display:flex; flex-direction:column; overflow:hidden; min-width:0; }
+.main-scroll { overflow:auto; flex:1; scrollbar-gutter:stable; }
+.content { max-width:1120px; padding:24px 40px 18px; margin:0 auto; }
+.page-heading { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; }
+.page-heading p { color:var(--muted); font-size:14px; margin-top:5px; }
+.page-marker { color:var(--muted); font-size:12px; padding-top:4px; }
+.tabs { display:flex; gap:27px; min-height:47px; border-bottom:1px solid var(--line); }
+.tabs button { border-radius:0; padding:0 3px; position:relative; color:var(--muted); }
+.tabs button[aria-selected=true] { color:var(--accent); font-weight:600; }
+.tabs button[aria-selected=true]::after { content:''; height:2px; position:absolute; left:0; right:0; bottom:-1px; background:var(--accent); }
+.scope-bar { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:16px 0 10px; }
+.segments { display:inline-flex; padding:3px; background:var(--surface); border-radius:7px; gap:2px; }
+.segments button { min-height:44px; min-width:76px; padding:0 16px; color:var(--muted); font-size:14px; }
+.segments button[aria-selected=true],.segments button[aria-pressed=true] { background:var(--bg); color:var(--accent); box-shadow:0 1px 3px #17332612; font-weight:600; }
+.scope-bar .segments button { min-height:44px; min-width:96px; }
+.row { display:flex; align-items:center; justify-content:space-between; min-height:66px; gap:20px; border-bottom:1px solid var(--line); padding:9px 0; scroll-margin:20px; }
+.row:last-child { border-bottom:0; }
+.row-label { display:block; font-weight:500; }
+.row-description { margin-top:2px; color:var(--muted); font-size:12px; }
+.row-control { display:flex; align-items:center; gap:12px; flex-shrink:0; }
+.row-control small { min-width:18px; }
+.stepper { border:1px solid var(--line); border-radius:6px; display:flex; align-items:center; background:var(--bg); }
+.stepper button { width:44px; padding:0; min-height:44px; font-size:19px; }
+.unit { font-size:12px; color:var(--muted); }
+.toggle { width:44px; height:44px; position:relative; padding:0; }
+.toggle::before { content:''; width:36px; height:22px; position:absolute; top:11px; left:4px; border-radius:12px; background:#a5b0aa; }
+.toggle::after { content:''; width:16px; height:16px; position:absolute; top:14px; left:7px; border-radius:50%; background:#fff; transition:transform .15s ease; }
+.toggle[aria-checked=true]::before { background:var(--accent); }
+.toggle[aria-checked=true]::after { transform:translateX(14px); }
+.preview { margin-top:20px; border:1px solid var(--line); border-radius:8px; overflow:hidden; background:var(--preview-bg); }
+.preview-heading { display:flex; align-items:center; justify-content:space-between; min-height:45px; padding:0 18px; gap:12px; border-bottom:1px solid var(--line); background:var(--surface); }
+.preview-heading h2 { font-size:13px; font-weight:600; display:flex; align-items:center; gap:8px; }
+.preview-heading svg { width:15px; height:15px; }
+.preview-meta { font-size:12px; color:var(--muted); white-space:nowrap; }
+.conversation { padding:16px 22px 18px; max-height:262px; overflow:auto; font:var(--chat-size)/var(--chat-leading) var(--chat-font); }
+.user-message { background:var(--surface); border-radius:7px 7px 2px 7px; padding:8px 12px; width:fit-content; max-width:90%; margin:0 0 14px auto; font-size:var(--chat-size); }
+.assistant-message { display:flex; align-items:flex-start; gap:11px; }
+.mini-logo { width:23px; height:23px; border-radius:6px; margin-top:3px; }
+.message-content { min-width:0; flex:1; }
+.message-content p { margin-bottom:9px; }
+.code-block { border-radius:5px; background:var(--code); overflow:auto; padding:9px 12px; font:var(--code-size)/1.55 var(--code-font); tab-size:2; }
+.code-block code { font:inherit; }
+.code-line { display:flex; white-space:pre; min-width:max-content; }
+.line-number { color:var(--muted); min-width:25px; margin-right:13px; text-align:right; user-select:none; font-size:inherit; }
+.code-block.no-lines .line-number { display:none; }
+.code-block.highlight .syntax-keyword { color:#7f4296; }
+.code-block.highlight .syntax-string { color:#087461; }
+.code-block.highlight .syntax-value { color:#2866a3; }
+.preview-caption { font-size:12px; color:var(--muted); margin-top:9px; }
+.footer { min-height:57px; padding:6px 32px; border-top:1px solid var(--line); display:flex; justify-content:space-between; align-items:center; gap:18px; background:var(--bg); }
+.footer-status { font-size:12px; color:var(--muted); white-space:nowrap; }
+.footer-actions { display:flex; flex-shrink:0; }
+.primary { color:#fff; background:var(--accent); padding:0 19px; }
+.primary:hover { filter:brightness(.94); background:var(--accent); }
+.quiet { color:var(--muted); }
+.theme-panel,.background-panel { padding-top:10px; }
+.theme-panel .row { min-height:88px; }
+.theme-options { display:flex; gap:8px; }
+.theme-choice { border:1px solid var(--line); min-width:96px; min-height:64px; padding:7px 13px; display:flex; align-items:center; justify-content:center; gap:8px; font-size:14px; }
+.theme-choice[aria-pressed=true] { border-color:var(--accent); background:var(--selected); color:var(--accent); }
+.theme-dot { width:18px; height:18px; border-radius:50%; border:1px solid #a4b0aa; background:#f8faf9; }
+.theme-dot.dark { background:#23312b; border-color:#23312b; }
+.theme-dot.system { background:var(--bg); border-left:9px solid #51635a; }
+.swatches { display:flex; gap:10px; }
+.swatch { min-width:82px; border:1px solid var(--line); display:flex; align-items:center; justify-content:center; gap:8px; padding:0 11px; }
+.swatch[aria-pressed=true] { border-color:var(--accent); color:var(--accent); background:var(--selected); }
+.swatch i { width:17px; height:17px; border:1px solid #aab4ae; border-radius:3px; background:var(--swatch); }
+.section-intro { padding:22px 0 13px; color:var(--muted); font-size:14px; }
+.text-link { color:var(--accent); padding:0 8px; white-space:nowrap; }
+.structure-note { margin-top:24px; border-top:1px solid var(--line); padding-top:17px; color:var(--muted); font-size:12px; }
+.section-head { display:flex; justify-content:space-between; align-items:center; margin:16px 0 3px; gap:12px; }
+.service-info { display:flex; align-items:center; gap:12px; }
+.service-icon { width:36px; height:36px; display:grid; place-items:center; color:var(--muted); background:var(--surface); border-radius:6px; }
+.service-radio { display:flex; align-items:center; gap:12px; min-height:44px; cursor:pointer; }
+.service-radio input { width:17px; height:17px; }
+.empty-page { padding-top:35px; max-width:600px; }
+.empty-page p { margin:12px 0 22px; font-size:14px; color:var(--muted); }
+.toast { position:fixed; z-index:100; bottom:83px; left:calc(50% + 108px); transform:translateX(-50%); color:var(--bg); background:var(--ink); padding:11px 18px; border-radius:7px; font-size:14px; box-shadow:var(--shadow); max-width:calc(100vw - 36px); }
+.located { outline:2px solid var(--accent); outline-offset:5px; border-radius:3px; }
+dialog { color:var(--ink); background:var(--bg); border:1px solid var(--line); border-radius:12px; width:440px; max-width:calc(100vw - 32px); padding:26px; box-shadow:var(--shadow); }
+dialog::backdrop { background:#15282065; }
+dialog h2 { font-size:20px; }
+dialog p { color:var(--muted); font-size:14px; margin:11px 0 20px; }
+.dialog-field { display:block; margin:16px 0; }
+.dialog-field input { display:block; width:100%; margin-top:8px; }
+.dialog-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:23px; }
+.workbench { height:100dvh; display:grid; place-items:center; padding:24px; background:var(--surface); }
+.workbench-inner { max-width:620px; width:100%; }
+.workbench-inner>img { width:38px; height:38px; border-radius:9px; margin-bottom:18px; }
+.workbench-inner h1 { font-size:24px; }
+.workbench-inner p { margin:12px 0 24px; color:var(--muted); }
+.mobile-scrim { display:none; }
+body[data-theme=dark] { --bg:#1b2420; --surface:#222d27; --subtle:#2b3830; --line:#35433b; --ink:#e7eee9; --muted:#acbcb1; --accent:#77d8bb; --selected:#263e34; --hover:#2a3830; --code:#25322a; --shadow:0 12px 32px #0004; }
+body[data-theme=dark] .primary { color:#173328; }
+body[data-theme=dark] .code-block.highlight .syntax-keyword { color:#d7a1e8; }
+body[data-theme=dark] .code-block.highlight .syntax-string { color:#80d6b5; }
+body[data-theme=dark] .code-block.highlight .syntax-value { color:#a5c7fb; }
+@media(min-width:1600px) { .content { padding-top:38px; } }
+@media(max-width:1150px) {
+  .content { padding:24px 28px 20px; } .topbar,.footer { padding-left:24px; padding-right:24px; }
+  .search-wrap { width:256px; }
+  .conversation { max-height:228px; } .preview { margin-top:17px; }
+}
+@media(max-width:900px) {
+  .app { grid-template-columns:190px minmax(0,1fr); } .brand { padding-left:20px; }
+  .content { padding:23px 23px 20px; } .topbar { padding:0 18px; } .location { display:none; }
+  .top-actions { width:100%; justify-content:space-between; gap:8px; } .search-wrap { flex:1; max-width:360px; }
+  .scope-bar .secondary { display:none; } .row { gap:12px; }
+  .row-control { gap:7px; } input[type=range] { width:100px; } select { min-width:220px; max-width:240px; }
+  .segments button { padding:0 11px; min-width:64px; } .preview-meta { font-size:12px; }
+  .row-description { max-width:180px; } .footer { padding:6px 18px; } .toast { left:calc(50% + 95px); }
+  .preview-heading { padding:0 13px; } .conversation { padding:13px; } .line-number { min-width:14px; margin-right:9px; }
+}
+@media(max-width:680px) {
+  .app { grid-template-columns:minmax(0,1fr); grid-template-rows:58px minmax(0,1fr); } .brand { display:none; }
+  .topbar { grid-column:1; gap:8px; padding:0 12px; min-width:0; } .mobile-menu { display:grid; flex-shrink:0; }
+  .top-actions { flex:1; width:auto; min-width:0; gap:8px; } .search-wrap { min-width:0; flex:1; width:auto; } .shortcut { display:none; }
+  #search { padding-right:10px; font-size:14px; } .search-results { position:fixed; top:64px; left:12px; right:12px; width:auto; }
+  .sidebar { display:none; position:fixed; top:58px; bottom:0; left:0; width:232px; z-index:41; border-right:1px solid var(--line); }
+  .sidebar.is-open { display:flex; } .mobile-scrim.is-open { display:block; position:fixed; inset:58px 0 0; background:#172d2866; z-index:40; border-radius:0; }
+  .content { padding:20px 19px; } .page-heading { margin-bottom:13px; } h1 { font-size:24px; }
+  .page-marker { display:none; } .page-heading p { font-size:14px; } .tabs { gap:30px; }
+  .scope-bar { padding-top:17px; } .scope-bar .segments { width:100%; } .scope-bar .segments button { flex:1; min-width:0; }
+  .row { flex-wrap:wrap; min-height:74px; padding:13px 0; gap:8px; } .row-control { margin-left:auto; }
+  .font-row { display:block; } .font-row .row-control { margin-top:10px; } .font-row select { width:100%; max-width:none; }
+  .row-description { max-width:none; } input[type=range] { width:82px; } .stepper button { width:34px; }
+  .line-spacing-row { display:block; } .line-spacing-row .row-control { margin-top:9px; } .line-spacing-row .segments { width:100%; }
+  .line-spacing-row .segments button { flex:1; min-width:0; padding:0 9px; }
+  .preview { margin-top:18px; } .preview-heading { min-height:43px; flex-wrap:wrap; padding:8px 12px; gap:4px; }
+  .preview-meta { font-size:12px; } .conversation { max-height:254px; padding:13px 12px; }
+  .assistant-message { gap:8px; } .mini-logo { width:20px; height:20px; } .user-message { max-width:100%; }
+  .footer { min-height:53px; padding:4px 12px; gap:8px; }
+  .footer-actions button { min-height:44px; padding:0 8px; font-size:14px; }
+  .toast { bottom:68px; left:50%; width:max-content; font-size:13px; }
+  .theme-panel .row { display:block; } .theme-panel .row-control { margin-top:12px; }
+  .theme-options { width:100%; } .theme-choice { flex:1; min-width:0; padding:7px 9px; }
+}
+@media(prefers-reduced-motion:reduce) { *,*::before,*::after { transition:none!important; scroll-behavior:auto!important; } }
+</style>
+</head>
+<body data-theme="light">
+<div class="app" id="settings-app">
+  <div class="brand"><img id="brand-logo" src="data:image/png;base64,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rwKWJMk5evSwI8kpKa9FNmpUn0sRERH5vchGjZCckvLa6NHDjkiS5KzPtep1C/osWZbjb+zSY2Fubm53i8XijUsSERH5Fb1ej8TExC3fb980UpKk/Ppez1ubOpf17dtjSmRkIw93yCIiIqVRq9WIjGzk6du3xxQAZd64plcmbiVJssuyvHfXrp9fctgdzxWXlHjjskRERH4hKjISzZqlvPTsk0/ulSTJK8/eeuUW9FmyLMd36trj49zcvF7mihqdR0xEROTXIgwGJCYmfL1z26Y7vXHr+SxvnytYOnbUqGejG0eXhoSEePnSREREvhUSEoLoxtGlY0eNehZAqTev7dVnKNhjdQAACrpJREFUhyRJcsiyfGjz1q1P2+32GadO1fnxKCIiIuGioiLxj8sue3rChHGHJElyePPaXn94V5IkkyzLy3r2ue0qp9M1qazMK3PVREREPhUVFYXEhLhZixZ+vEySpFodNVgTXp0DPkuWZRWA+Bs6d/8iP7+gSwXng4mIKIAYDAbEx8dt/2HHluEA8uty2MKleHsOGKg6MQlAydiRIx+PiWlcoAsNbYiXISIi8jpdaChiYhoXjB058nEAJQ1RvmiIW9BnVT2adGD3z3se/cnhXHCqsBBud63OKiYiIvIptVqN6OhotE+98tHJk+8+4K1Hji6kQTdwliTJLMvy+gFpQ5+qdFdOKSwsasiXIyIiqpfGjaPRolWLp+bNmblekqQGPWWowU9QkCSpVJbluT379E9yV7onl5R6dRU3ERGRVzSOjkZSYsLMVZmL50qS1OBl1SCLsP6qalFW067de7+fm5ebVl5e5+MTiYiIvC4yshESExIzt2356gEApxpq3vdcPilgnClhLYCmN3a5ZUFBQUE3k4nnBxMRkXhGYwTi4uK2fr9986iq8nX54nUbZBX0hVT9gopfn/L85CZNmvxsMBh89dJEREQXZDAY0KRJk59fn/L8ZADFvipf+LKAUbUyumvXricmjh8/KbZJzO96vd6XL09ERPQnvV6P2CYxv08cP35S165dTzTkiucLafBFWH8lSZJVluUDxeVlE5YsXfoJTsnNLVarr2MQEVEQ04eHo0lszPEh6UMmjB8/5oAkST4vIp8XMM6UsEWW5b0um238l6vXzC8sLEphCRMRkS/ow8MRG9ske2D//uP//a+H9kqSZBGRQ0gB40wJ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" alt="Conduit"><span>Conduit</span></div>
+  <header class="topbar">
+    <button class="icon-button mobile-menu" id="menu-button" aria-label="打开设置分类" aria-controls="sidebar" aria-expanded="false"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+    <div class="location"><span>Conduit</span><svg viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></svg><strong>设置</strong></div>
+    <div class="top-actions">
+      <div class="search-wrap">
+        <svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg>
+        <input id="search" type="search" placeholder="搜索设置" autocomplete="off" aria-label="搜索具体设置项" aria-controls="search-results" aria-expanded="false" role="combobox" aria-autocomplete="list">
+        <span class="shortcut" aria-hidden="true">Ctrl K</span>
+        <div id="search-results" class="search-results" role="listbox" aria-label="设置搜索结果" hidden></div>
+      </div>
+      <button class="icon-button" id="close-settings" aria-label="关闭设置，返回工作台预览" title="返回工作台预览"><svg viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+    </div>
+  </header>
+  <button class="mobile-scrim" id="mobile-scrim" tabindex="-1" aria-label="收起设置分类"></button>
+  <aside class="sidebar" id="sidebar" aria-label="设置分类">
+    <nav aria-label="全部设置">
+      <div class="nav-group"><p class="nav-heading">工作台</p>
+        <button class="nav-item" data-page="general">通用</button>
+        <button class="nav-item" data-page="appearance" aria-current="page">外观与字体</button>
+        <button class="nav-item" data-page="shortcuts">快捷键</button>
+      </div>
+      <div class="nav-group"><p class="nav-heading">AI与工作流</p>
+        <button class="nav-item" data-page="engines">AI 引擎</button>
+        <button class="nav-item" data-page="models">模型与服务</button>
+        <button class="nav-item" data-page="sessions">会话设置</button>
+        <button class="nav-item" data-page="git">Git 工作流</button>
+      </div>
+      <div class="nav-group"><p class="nav-heading">扩展能力</p>
+        <button class="nav-item" data-page="skills">Skills</button>
+        <button class="nav-item" data-page="mcp">MCP 服务</button>
+        <button class="nav-item" data-page="plugins">插件</button>
+      </div>
+      <div class="nav-group"><p class="nav-heading">应用维护</p><button class="nav-item" data-page="data">数据与更新</button></div>
+    </nav>
+    <p class="sidebar-foot">设置仅用于本次设计预览</p>
+  </aside>
+  <main class="workspace">
+    <div class="main-scroll" id="main-scroll">
+      <div class="content">
+        <div class="page-heading"><div><h1 id="page-title">外观与字体</h1><p id="page-description">让每一处文字，都适合你的阅读习惯。</p></div><span class="page-marker" id="page-marker">即时预览</span></div>
+        <section id="page-appearance" aria-labelledby="page-title">
+          <div class="tabs" role="tablist" aria-label="外观设置">
+            <button id="tab-theme" role="tab" aria-selected="false" aria-controls="panel-theme" data-tab="theme" tabindex="-1">主题</button>
+            <button id="tab-text" role="tab" aria-selected="true" aria-controls="panel-text" data-tab="text">文字</button>
+            <button id="tab-background" role="tab" aria-selected="false" aria-controls="panel-background" data-tab="background" tabindex="-1">背景</button>
+          </div>
+          <div id="panel-text" role="tabpanel" aria-labelledby="tab-text">
+            <div class="scope-bar">
+              <div class="segments" role="tablist" aria-label="独立文字设置">
+                <button id="scope-ui" role="tab" data-scope="ui" aria-selected="false" aria-controls="font-settings" tabindex="-1">界面</button>
+                <button id="scope-chat" role="tab" data-scope="chat" aria-selected="true" aria-controls="font-settings">聊天</button>
+                <button id="scope-code" role="tab" data-scope="code" aria-selected="false" aria-controls="font-settings" tabindex="-1">代码</button>
+              </div><span class="secondary">界面、聊天与代码可独立调整</span>
+            </div>
+            <div id="font-settings" role="tabpanel" aria-labelledby="scope-chat">
+              <div class="row font-row" id="row-font-family"><div><label class="row-label" for="font-family" id="font-family-label">聊天字体</label><p class="row-description" id="font-description">用于会话中的正文与输入文字</p></div><div class="row-control"><select id="font-family" aria-describedby="font-description"></select></div></div>
+              <div class="row" id="row-font-size"><div><label class="row-label" for="font-size">字号</label><p class="row-description" id="size-description">默认 16 px</p></div><div class="row-control"><input id="font-size-range" type="range" min="14" max="22" value="16" aria-label="调整字号"><div class="stepper"><button id="size-minus" aria-label="减小字号">−</button><input id="font-size" type="number" min="14" max="22" value="16" aria-label="字号数值"><button id="size-plus" aria-label="增大字号">+</button></div><span class="unit">px</span></div></div>
+              <div class="row line-spacing-row" id="row-line-height"><div><span class="row-label" id="line-height-label">行距</span><p class="row-description">调整正文行与行之间的距离</p></div><div class="row-control"><div class="segments" role="group" aria-labelledby="line-height-label"><button data-line="1.4" aria-pressed="false">紧凑 1.4</button><button data-line="1.6" aria-pressed="true">标准 1.6</button><button data-line="1.8" aria-pressed="false">舒展 1.8</button></div></div></div>
+              <div class="row" id="row-line-numbers" hidden><div><span class="row-label" id="line-numbers-label">显示行号</span></div><button class="toggle" id="line-numbers" role="switch" aria-checked="true" aria-labelledby="line-numbers-label"></button></div>
+              <div class="row" id="row-syntax" hidden><div><span class="row-label" id="syntax-label">语法高亮</span></div><button class="toggle" id="syntax" role="switch" aria-checked="true" aria-labelledby="syntax-label"></button></div>
+            </div>
+          </div>
+          <div id="panel-theme" class="theme-panel" role="tabpanel" aria-labelledby="tab-theme" hidden>
+            <div class="row" id="row-theme-mode"><div><span class="row-label">主题模式</span><p class="row-description">跟随系统，或选择固定模式</p></div><div class="row-control theme-options" role="group" aria-label="主题模式"><button class="theme-choice" data-theme-mode="system" aria-pressed="true"><i class="theme-dot system"></i>跟随系统</button><button class="theme-choice" data-theme-mode="light" aria-pressed="false"><i class="theme-dot"></i>浅色</button><button class="theme-choice" data-theme-mode="dark" aria-pressed="false"><i class="theme-dot dark"></i>深色</button></div></div>
+            <div class="row"><div><label class="row-label" for="light-theme">浅色主题</label><p class="row-description">在浅色模式下使用</p></div><div class="row-control"><select id="light-theme"><option value="default">默认浅色</option><option value="soft">柔和浅色（示例）</option></select></div></div>
+            <div class="row"><div><label class="row-label" for="dark-theme">深色主题</label><p class="row-description">在深色模式下使用</p></div><div class="row-control"><select id="dark-theme"><option value="default">默认深色</option><option value="soft">柔和深色（示例）</option></select></div></div>
+          </div>
+          <div id="panel-background" class="background-panel" role="tabpanel" aria-labelledby="tab-background" hidden>
+            <div class="row" id="row-background"><div><span class="row-label">聊天背景</span><p class="row-description">纯色背景，保持阅读清晰</p></div><div class="row-control swatches" role="group" aria-label="聊天背景"><button class="swatch" data-bg="default" aria-pressed="true"><i style="--swatch:#fff"></i>默认</button><button class="swatch" data-bg="gray" aria-pressed="false"><i style="--swatch:#f0f3f1"></i>浅灰</button><button class="swatch" data-bg="green" aria-pressed="false"><i style="--swatch:#eaf3ed"></i>浅绿</button></div></div>
+            <p class="section-intro">背景颜色随当前主题调整。下方预览显示实际阅读效果。</p>
+          </div>
+          <section class="preview" aria-label="聊天与代码即时预览">
+            <header class="preview-heading"><h2><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg>阅读预览</h2><span class="preview-meta">示例对话</span></header>
+            <div class="conversation" tabindex="0" aria-label="可滚动的聊天预览">
+              <p class="user-message">帮我整理一下设置项。</p>
+              <div class="assistant-message"><img class="mini-logo" data-logo alt="Conduit"><div class="message-content"><p>把主题、文字和背景放在一起，常用设置就更容易找到。</p><div class="code-block highlight" id="code-preview" role="region" aria-label="代码字体预览"><div class="code-line"><span class="line-number">1</span><code><span class="syntax-keyword">const</span> settings = {</code></div><div class="code-line"><span class="line-number">2</span><code>  theme: <span class="syntax-string" id="preview-theme">'system'</span>,</code></div><div class="code-line"><span class="line-number">3</span><code>  fontSize: <span class="syntax-value" id="preview-size">16</span></code></div><div class="code-line"><span class="line-number">4</span><code>};</code></div></div></div></div>
+            </div>
+          </section>
+          <p class="preview-caption" id="preview-caption">系统默认 16 px</p>
+        </section>
+        <section id="page-sessions" hidden>
+          <div class="tabs" role="tablist" aria-label="会话设置范围"><button role="tab" id="session-new" aria-selected="true" aria-controls="session-new-panel" data-session="new">新会话</button><button role="tab" id="session-existing" aria-selected="false" aria-controls="session-existing-panel" data-session="existing" tabindex="-1">已有会话</button></div>
+          <div id="session-new-panel" role="tabpanel" aria-labelledby="session-new">
+            <p class="section-intro">新会话使用当前默认模型，文字样式沿用全局外观设置。</p>
+            <div class="row"><div><span class="row-label">默认模型</span><p class="row-description" id="session-model-summary">本地 CLI，使用服务默认模型</p></div><button class="text-link" data-jump="default-model">前往设置</button></div>
+            <div class="row"><div><span class="row-label">聊天文字</span><p class="row-description" id="session-font-summary">16 px，行距 1.6</p></div><button class="text-link" data-jump="chat-font">调整外观</button></div>
+          </div>
+          <div id="session-existing-panel" role="tabpanel" aria-labelledby="session-existing" hidden>
+            <p class="section-intro">切换默认模型只影响新会话。</p>
+            <div class="row"><div><span class="row-label">既有会话的模型</span><p class="row-description">保留该会话当前选择</p></div><span class="secondary">范围说明</span></div>
+            <div class="row"><div><span class="row-label">共享服务</span><p class="row-description">编辑同一服务 ID 可能影响已有会话的后续使用</p></div><button class="text-link" data-jump="services">查看服务</button></div>
+          </div>
+          <p class="structure-note">结构示例：用于评估设置范围与跳转关系，不读取真实会话。</p>
+        </section>
+        <section id="page-models" hidden>
+          <div class="tabs" role="tablist" aria-label="模型与服务"><button role="tab" id="models-services" data-model-tab="services" aria-selected="true" aria-controls="models-services-panel">服务</button><button role="tab" id="models-defaults" data-model-tab="defaults" aria-selected="false" aria-controls="models-defaults-panel" tabindex="-1">新会话默认</button></div>
+          <div id="models-services-panel" role="tabpanel" aria-labelledby="models-services">
+            <div class="section-head"><h2>服务列表</h2><button class="text-link" id="add-service">添加服务</button></div><div id="service-list"></div>
+            <p class="structure-note">结构示例，不检测连接。共享服务编辑可能影响引用同一 ID 的既有会话后续使用。</p>
+          </div>
+          <div id="models-defaults-panel" role="tabpanel" aria-labelledby="models-defaults" hidden><p class="section-intro">选择新会话使用的服务。模型由该服务的默认配置决定。</p><div id="default-service-list"></div><p class="structure-note">这里的修改仅影响新会话默认值，已有会话保留当前选择。</p></div>
+        </section>
+        <section id="page-other" class="empty-page" hidden><h2>分类结构示例</h2><p>此分类保留在固定导航中。本次初稿重点展示外观与字体、会话设置、模型与服务，其他设置在方向选定后细化。</p><button class="primary" data-jump="chat-font">查看外观与字体</button></section>
+      </div>
+    </div>
+    <footer class="footer"><p class="footer-status" id="change-status" role="status">设计预览自动更新，不写入应用。</p><div class="footer-actions"><button class="quiet" id="reset-page">重置当前组</button></div></footer>
+  </main>
+</div>
+<div id="workbench" class="workbench" hidden><div class="workbench-inner"><img data-logo alt="Conduit"><h1>回到工作台</h1><p>工作台结构预览。外观调整仍保留在本次页面中，可重新打开设置继续比较。</p><button class="primary" id="reopen-settings">打开设置</button><p class="secondary">设计预览不写入应用。</p></div></div>
+<dialog id="service-dialog" aria-labelledby="service-dialog-title"><form id="service-form"><h2 id="service-dialog-title">编辑服务</h2><p>仅修改本次预览中的服务示例。</p><label class="dialog-field">服务名称<input type="text" id="service-name" required maxlength="40" autocomplete="off"></label><div class="row"><span>来源</span><span class="secondary">本地 CLI</span></div><div class="row"><span>模型</span><span class="secondary">服务默认模型</span></div><p class="secondary">共享服务编辑可能影响引用同一 ID 的既有会话后续使用。</p><div class="dialog-actions"><button type="button" id="cancel-service">取消</button><button type="submit" class="primary">保留示例</button></div></form></dialog>
+<div class="toast" id="toast" role="status" hidden></div>
+<script>
+'use strict';
+const $ = (selector, root = document) => root.querySelector(selector);
+const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+const initial = {
+  theme:'light', lightTheme:'default', darkTheme:'default', background:'default',
+  ui:{font:'system',size:14}, chat:{font:'system',size:16,line:1.6},
+  code:{font:'cascadia',size:14,numbers:true,syntax:true},
+  services:[{id:'local',name:'本地 CLI'}], defaultService:'local'
+};
+let state = structuredClone(initial), currentPage = 'appearance', activeTab = 'text', scope = 'chat';
+let modelTab = 'services', sessionTab = 'new', editServiceId = null, nextServiceId = 1, toastTimer;
+const pageTitles = {general:'通用',appearance:'外观与字体',shortcuts:'快捷键',engines:'AI 引擎',models:'模型与服务',sessions:'会话设置',git:'Git 工作流',skills:'Skills',mcp:'MCP 服务',plugins:'插件',data:'数据与更新'};
+const fonts = {
+  system:{label:'系统默认',css:"'Segoe UI','Microsoft YaHei UI',sans-serif"},
+  yahei:{label:'Microsoft YaHei UI',css:"'Microsoft YaHei UI','Segoe UI',sans-serif"},
+  segoe:{label:'Segoe UI',css:"'Segoe UI','Microsoft YaHei UI',sans-serif"},
+  song:{label:'宋体',css:"SimSun,'Songti SC',serif"},
+  cascadia:{label:'Cascadia Code',css:"'Cascadia Code',Consolas,monospace"},
+  consolas:{label:'Consolas',css:'Consolas,monospace'},
+  courier:{label:'Courier New',css:"'Courier New',monospace"}
+};
+const scopeLabels = {ui:'界面',chat:'聊天',code:'代码'};
+const systemTheme = matchMedia('(prefers-color-scheme:dark)');
+$$('[data-logo]').forEach(img => { img.src = $('#brand-logo').src; });
+function notify(message) {
+  clearTimeout(toastTimer); $('#toast').textContent = message; $('#toast').hidden = false;
+  toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 2700);
+}
+function setPressed(selector, key, value) {
+  $$(selector).forEach(button => button.setAttribute('aria-pressed', String(button.dataset[key] === String(value))));
+}
+function setTabs(selector, key, value) {
+  $$(selector).forEach(button => {
+    const selected = button.dataset[key] === value;
+    button.setAttribute('aria-selected', String(selected)); button.tabIndex = selected ? 0 : -1;
+  });
+}
+function diffCount(a = state, b = initial) {
+  return Object.keys(a).reduce((count, key) => count + (Array.isArray(a[key]) ? Number(JSON.stringify(a[key]) !== JSON.stringify(b[key])) : typeof a[key] === 'object' ? diffCount(a[key],b[key]) : Number(a[key] !== b[key])), 0);
+}
+function applyState() {
+  const dark = state.theme === 'dark' || (state.theme === 'system' && systemTheme.matches);
+  document.body.dataset.theme = dark ? 'dark' : 'light';
+  const style = document.documentElement.style;
+  ['ui','chat','code'].forEach(part => { style.setProperty(`--${part}-font`,fonts[state[part].font].css); style.setProperty(`--${part}-size`,`${state[part].size}px`); });
+  style.setProperty('--chat-leading',state.chat.line);
+  const pageBackground = dark ? (state.darkTheme === 'soft' ? '#232b27' : '#1b2420') : (state.lightTheme === 'soft' ? '#fafbf9' : '#fff');
+  style.setProperty('--bg',pageBackground); document.body.style.setProperty('--bg',pageBackground);
+  const backgrounds = dark ? {default:pageBackground,gray:'#222c26',green:'#1e3027'} : {default:pageBackground,gray:'#f0f3f1',green:'#eaf3ed'};
+  style.setProperty('--preview-bg',backgrounds[state.background]);
+  $('#code-preview').classList.toggle('no-lines',!state.code.numbers);
+  $('#code-preview').classList.toggle('highlight',state.code.syntax);
+  $('#preview-theme').textContent = `'${state.theme}'`; $('#preview-size').textContent = state.chat.size;
+  $('#preview-caption').textContent = `${fonts[state[scope].font].label} ${state[scope].size} px`;
+  $('#session-font-summary').textContent = `${state.chat.size} px，行距 ${state.chat.line}`;
+  $('#session-model-summary').textContent = `${state.services.find(service => service.id === state.defaultService).name}，使用服务默认模型`;
+  $('#change-status').textContent = diffCount() ? '预览已更新，不写入应用。' : '设计预览自动更新，不写入应用。';
+  setPressed('[data-theme-mode]','themeMode',state.theme); setPressed('[data-bg]','bg',state.background);
+  $('#light-theme').value = state.lightTheme; $('#dark-theme').value = state.darkTheme;
+  $('#line-numbers').setAttribute('aria-checked',String(state.code.numbers)); $('#syntax').setAttribute('aria-checked',String(state.code.syntax));
+}
+function renderFontControls() {
+  setTabs('[data-scope]','scope',scope); $('#font-settings').setAttribute('aria-labelledby',`scope-${scope}`);
+  $('#font-family-label').textContent = `${scopeLabels[scope]}字体`;
+  $('#font-description').textContent = {ui:'用于导航、标签与操作控件',chat:'用于会话中的正文与输入文字',code:'用于聊天中的代码块'}[scope];
+  const choices = scope === 'code' ? ['cascadia','consolas','courier'] : ['system','yahei','segoe','song'];
+  $('#font-family').replaceChildren(...choices.map(key => { const o = document.createElement('option'); o.value = key; o.textContent = fonts[key].label; return o; }));
+  $('#font-family').value = state[scope].font;
+  const max = scope === 'ui' ? 18 : 22;
+  ['#font-size','#font-size-range'].forEach(id => { $(id).max = max; $(id).value = state[scope].size; });
+  $('#size-description').textContent = `默认 ${initial[scope].size} px`;
+  $('#size-minus').disabled = state[scope].size <= 14; $('#size-plus').disabled = state[scope].size >= max;
+  $('#row-line-height').hidden = scope !== 'chat'; $('#row-line-numbers').hidden = scope !== 'code'; $('#row-syntax').hidden = scope !== 'code';
+  setPressed('[data-line]','line',state.chat.line); applyState();
+}
+function selectAppearanceTab(tab) {
+  activeTab = tab; setTabs('[data-tab]','tab',tab);
+  ['theme','text','background'].forEach(name => { $(`#panel-${name}`).hidden = name !== tab; });
+}
+function selectModelTab(tab) {
+  modelTab = tab; setTabs('[data-model-tab]','modelTab',tab);
+  ['services','defaults'].forEach(name => { $(`#models-${name}-panel`).hidden = name !== tab; });
+}
+function selectSessionTab(tab) {
+  sessionTab = tab; setTabs('[data-session]','session',tab);
+  ['new','existing'].forEach(name => { $(`#session-${name}-panel`).hidden = name !== tab; });
+}
+function toggleMenu(open) {
+  $('#sidebar').classList.toggle('is-open',open); $('#mobile-scrim').classList.toggle('is-open',open);
+  $('#menu-button').setAttribute('aria-expanded',String(open));
+  if (open) $('.nav-item[aria-current=page]').focus();
+}
+function showPage(page) {
+  currentPage = page;
+  $$('.nav-item').forEach(button => { if (button.dataset.page === page) button.setAttribute('aria-current','page'); else button.removeAttribute('aria-current'); });
+  $('#page-title').textContent = pageTitles[page];
+  $('#page-description').textContent = {appearance:'让每一处文字，都适合你的阅读习惯。',sessions:'区分新会话默认值与已有会话的设置。',models:'管理服务，并选择新会话的默认模型。'}[page] || '在清晰的分类中找到需要的设置。';
+  $('#page-marker').textContent = page === 'appearance' ? '即时预览' : '结构示例';
+  ['appearance','sessions','models','other'].forEach(name => { $(`#page-${name}`).hidden = name !== (['appearance','sessions','models'].includes(page) ? page : 'other'); });
+  $('#reset-page').hidden = !['appearance','models'].includes(page); $('#main-scroll').scrollTop = 0;
+  toggleMenu(false);
+  if (matchMedia('(max-width:680px)').matches) { $('#page-title').tabIndex = -1; $('#page-title').focus({preventScroll:true}); }
+}
+function renderServices() {
+  $('#service-list').replaceChildren(); $('#default-service-list').replaceChildren();
+  state.services.forEach(service => {
+    const row = document.createElement('div'); row.className = 'row';
+    const info = document.createElement('div'); info.className = 'service-info';
+    const icon = document.createElement('span'); icon.className = 'service-icon'; icon.textContent = '>_'; icon.setAttribute('aria-hidden','true');
+    const label = document.createElement('div'); const name = document.createElement('span'); name.className = 'row-label'; name.textContent = service.name;
+    const description = document.createElement('p'); description.className = 'row-description'; description.textContent = '本地 CLI，使用服务默认模型';
+    label.append(name,description); info.append(icon,label);
+    const edit = document.createElement('button'); edit.className = 'text-link'; edit.textContent = '编辑'; edit.dataset.serviceId = service.id; edit.setAttribute('aria-label',`编辑${service.name}`); edit.onclick = () => openService(service.id);
+    row.append(info,edit); $('#service-list').append(row);
+    const defaultRow = document.createElement('div'); defaultRow.className = 'row';
+    const radioLabel = document.createElement('label'); radioLabel.className = 'service-radio';
+    const radio = document.createElement('input'); radio.type = 'radio'; radio.name = 'default-service'; radio.value = service.id; radio.checked = state.defaultService === service.id;
+    radio.onchange = () => { state.defaultService = service.id; applyState(); };
+    radioLabel.append(radio,document.createTextNode(`${service.name}，使用服务默认模型`)); defaultRow.append(radioLabel); $('#default-service-list').append(defaultRow);
+  });
+}
+function openService(id = null) {
+  editServiceId = id; $('#service-dialog-title').textContent = id ? '编辑服务示例' : '添加服务示例';
+  $('#service-name').value = id ? state.services.find(service => service.id === id).name : '';
+  $('#service-name').placeholder = '例如：本地 CLI'; $('#service-dialog').showModal(); $('#service-name').focus();
+}
+const searchItems = [
+  {id:'theme',label:'主题模式',keywords:'主题 浅色 深色 跟随系统',tab:'theme',target:'[data-theme-mode="system"]'},
+  {id:'light-theme',label:'浅色主题',tab:'theme',target:'#light-theme'},
+  {id:'dark-theme',label:'深色主题',tab:'theme',target:'#dark-theme'},
+  {id:'ui-font',label:'界面字体',scope:'ui',target:'#font-family'},
+  {id:'ui-size',label:'界面字号',scope:'ui',target:'#font-size'},
+  {id:'chat-font',label:'聊天字体',scope:'chat',target:'#font-family'},
+  {id:'chat-size',label:'聊天字号',scope:'chat',target:'#font-size'},
+  {id:'line-height',label:'聊天行距',keywords:'行高 行距',scope:'chat',target:'[data-line="1.6"]'},
+  {id:'code-font',label:'代码字体',scope:'code',target:'#font-family'},
+  {id:'code-size',label:'代码字号',scope:'code',target:'#font-size'},
+  {id:'numbers',label:'代码行号',scope:'code',target:'#line-numbers'},
+  {id:'syntax',label:'语法高亮',scope:'code',target:'#syntax'},
+  {id:'background',label:'聊天背景',tab:'background',target:'[data-bg="default"]'},
+  {id:'services',label:'服务列表',page:'models',modelTab:'services',target:'#add-service'},
+  {id:'default-model',label:'新会话默认模型',page:'models',modelTab:'defaults',target:'input[name="default-service"]'},
+  {id:'sessions',label:'已有会话的设置范围',page:'sessions',sessionTab:'existing',target:'#session-existing'}
+];
+Object.entries(pageTitles).forEach(([page,label]) => searchItems.push({id:`category-${page}`,label,keywords:'分类',page,target:'#page-title'}));
+function breadcrumb(item) {
+  return `${pageTitles[item.page || 'appearance']}${item.scope ? ` / 文字 / ${scopeLabels[item.scope]}` : item.tab ? ` / ${{theme:'主题',background:'背景'}[item.tab]}` : ''}`;
+}
+function closeSearch() { $('#search-results').hidden = true; $('#search').setAttribute('aria-expanded','false'); $('#search').removeAttribute('aria-activedescendant'); }
+function jump(id) {
+  const item = searchItems.find(entry => entry.id === id); if (!item) return;
+  showPage(item.page || 'appearance');
+  if (!item.page || item.page === 'appearance') { selectAppearanceTab(item.tab || 'text'); scope = item.scope || 'chat'; renderFontControls(); }
+  if (item.page === 'models') selectModelTab(item.modelTab || 'services');
+  if (item.page === 'sessions') selectSessionTab(item.sessionTab || 'new');
+  closeSearch(); $('#search').value = '';
+  requestAnimationFrame(() => {
+    const target = $(item.target); if (!target) return;
+    if (target.tagName === 'H1') target.tabIndex = -1;
+    target.focus({preventScroll:true}); target.scrollIntoView({block:'nearest'});
+    const highlight = target.closest('.row') || target; highlight.classList.add('located');
+    setTimeout(() => highlight.classList.remove('located'),1400);
+  });
+}
+let searchMatches = [], searchIndex = 0;
+function renderSearch() {
+  const query = $('#search').value.trim().toLowerCase();
+  if (!query) return closeSearch();
+  searchMatches = searchItems.filter(item => `${item.label} ${item.keywords || ''} ${breadcrumb(item)}`.toLowerCase().includes(query));
+  searchIndex = 0; const results = $('#search-results'); results.replaceChildren();
+  if (!searchMatches.length) { const empty = document.createElement('p'); empty.className = 'search-empty'; empty.textContent = '没有匹配项，试试“字号”或“模型”。'; results.append(empty); }
+  searchMatches.forEach((item,index) => {
+    const button = document.createElement('button'); button.id = `search-option-${index}`; button.role = 'option'; button.setAttribute('aria-selected',String(index === 0));
+    const label = document.createElement('span'); label.textContent = item.label; const path = document.createElement('small'); path.textContent = breadcrumb(item);
+    button.append(label,path); button.onclick = () => jump(item.id); results.append(button);
+  });
+  results.hidden = false; $('#search').setAttribute('aria-expanded','true');
+  if (searchMatches.length) $('#search').setAttribute('aria-activedescendant','search-option-0'); else $('#search').removeAttribute('aria-activedescendant');
+}
+$$('[data-page]').forEach(button => button.onclick = () => showPage(button.dataset.page));
+$$('[data-tab]').forEach(button => button.onclick = () => selectAppearanceTab(button.dataset.tab));
+$$('[data-scope]').forEach(button => button.onclick = () => { scope = button.dataset.scope; renderFontControls(); });
+$$('[data-model-tab]').forEach(button => button.onclick = () => selectModelTab(button.dataset.modelTab));
+$$('[data-session]').forEach(button => button.onclick = () => selectSessionTab(button.dataset.session));
+$$('[data-jump]').forEach(button => button.onclick = () => jump(button.dataset.jump));
+$$('[role=tablist]').forEach(list => list.addEventListener('keydown',event => {
+  const buttons = $$('[role=tab]',list), index = buttons.indexOf(document.activeElement);
+  if (index < 0 || !['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return;
+  event.preventDefault(); const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
+  buttons[next].click(); buttons[next].focus();
+}));
+$('#font-family').onchange = event => { state[scope].font = event.target.value; applyState(); };
+function updateSize(value) {
+  if (!Number.isFinite(Number(value)) || value === '') return;
+  state[scope].size = Math.max(14,Math.min(scope === 'ui' ? 18 : 22,Math.round(Number(value))));
+  renderFontControls();
+}
+$('#font-size-range').oninput = event => updateSize(event.target.value);
+$('#font-size').oninput = event => { const n = Number(event.target.value); if (n >= 14 && n <= (scope === 'ui' ? 18 : 22)) updateSize(n); };
+$('#font-size').onblur = event => updateSize(event.target.value || initial[scope].size);
+$('#size-minus').onclick = () => updateSize(state[scope].size - 1); $('#size-plus').onclick = () => updateSize(state[scope].size + 1);
+$$('[data-line]').forEach(button => button.onclick = () => { state.chat.line = Number(button.dataset.line); renderFontControls(); });
+$('#line-numbers').onclick = () => { state.code.numbers = !state.code.numbers; applyState(); }; $('#syntax').onclick = () => { state.code.syntax = !state.code.syntax; applyState(); };
+$$('[data-theme-mode]').forEach(button => button.onclick = () => { state.theme = button.dataset.themeMode; applyState(); });
+$('#light-theme').onchange = event => { state.lightTheme = event.target.value; applyState(); };
+$('#dark-theme').onchange = event => { state.darkTheme = event.target.value; applyState(); };
+$$('[data-bg]').forEach(button => button.onclick = () => { state.background = button.dataset.bg; applyState(); });
+systemTheme.addEventListener('change',applyState);
+$('#reset-page').onclick = () => {
+  const group = currentPage === 'models'
+    ? (modelTab === 'defaults' ? {keys:['defaultService'],label:'新会话默认模型'} : {keys:['services'],label:'服务列表'})
+    : activeTab === 'text' ? {keys:[scope],label:`${scopeLabels[scope]}文字`}
+    : activeTab === 'theme' ? {keys:['theme','lightTheme','darkTheme'],label:'主题'}
+    : {keys:['background'],label:'背景'};
+  group.keys.forEach(key => { state[key] = structuredClone(initial[key]); });
+  if (!state.services.some(service => service.id === state.defaultService)) state.defaultService = initial.defaultService;
+  renderFontControls(); renderServices(); notify(`已重置${group.label}，预览自动更新。`);
+};
+$('#add-service').onclick = () => openService(); $('#cancel-service').onclick = () => $('#service-dialog').close();
+$('#service-form').onsubmit = event => {
+  event.preventDefault(); const name = $('#service-name').value.trim(); if (!name) { $('#service-name').setCustomValidity('请输入服务名称'); $('#service-name').reportValidity(); return; }
+  if (editServiceId) state.services.find(service => service.id === editServiceId).name = name; else state.services.push({id:`demo-${nextServiceId++}`,name});
+  $('#service-dialog').close(); renderServices(); applyState(); (editServiceId ? $(`[data-service-id="${editServiceId}"]`) : $('#add-service')).focus(); notify('服务示例已保留，未连接或写入应用');
+};
+$('#service-name').oninput = event => event.target.setCustomValidity('');
+$('#search').oninput = renderSearch; $('#search').onfocus = () => { if ($('#search').value.trim()) renderSearch(); };
+$('#search').onkeydown = event => {
+  if (event.key === 'Escape') { closeSearch(); return; }
+  if ($('#search-results').hidden || !searchMatches.length) return;
+  if (event.key === 'Enter') { event.preventDefault(); jump(searchMatches[searchIndex].id); }
+  if (['ArrowDown','ArrowUp'].includes(event.key)) {
+    event.preventDefault(); searchIndex = (searchIndex + (event.key === 'ArrowDown' ? 1 : -1) + searchMatches.length) % searchMatches.length;
+    $$('#search-results button').forEach((button,index) => button.setAttribute('aria-selected',String(index === searchIndex)));
+    $('#search').setAttribute('aria-activedescendant',`search-option-${searchIndex}`); $(`#search-option-${searchIndex}`).scrollIntoView({block:'nearest'});
+  }
+};
+document.addEventListener('click',event => { if (!event.target.closest('.search-wrap')) closeSearch(); });
+document.addEventListener('keydown',event => {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k' && !$('#service-dialog').open && !$('#settings-app').hidden) { event.preventDefault(); $('#search').focus(); }
+  if (event.key === 'Escape' && $('#sidebar').classList.contains('is-open')) { toggleMenu(false); $('#menu-button').focus(); }
+  if (event.key === 'Tab' && $('#sidebar').classList.contains('is-open') && matchMedia('(max-width:680px)').matches) {
+    const buttons = $$('.nav-item'), first = buttons[0], last = buttons[buttons.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  }
+});
+$('#menu-button').onclick = () => toggleMenu(!$('#sidebar').classList.contains('is-open'));
+$('#mobile-scrim').onclick = () => { toggleMenu(false); $('#menu-button').focus(); };
+$('#close-settings').onclick = () => { closeSearch(); $('#settings-app').hidden = true; $('#workbench').hidden = false; $('#reopen-settings').focus(); };
+$('#reopen-settings').onclick = () => { $('#workbench').hidden = true; $('#settings-app').hidden = false; $('#close-settings').focus(); };
+renderServices(); renderFontControls();
+</script>
+</body>
+</html>

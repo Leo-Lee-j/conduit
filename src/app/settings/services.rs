@@ -140,15 +140,10 @@ impl ConduitApp {
             width - inset * 2. >= 720. * (self.store.ui.ui_font_size / DEFAULT_UI_FONT_SIZE);
         let selected = self.selected_service_channel(engine);
         let detail_only = !split && self.connection_settings.service_detail_open;
-        let count = self
-            .store
-            .providers
-            .iter()
-            .filter(|p| p.engine == engine)
-            .count();
         let body = settings_scroll_area("model-services-scroll")
             .pt_2()
-            .gap_2()
+            .gap_3()
+            .text_size(ui_text_size(14.))
             .test_support()
             .track_scroll(if detail_only {
                 &self.connection_settings.service_detail_scroll
@@ -157,33 +152,6 @@ impl ConduitApp {
             })
             .when(!detail_only, |body| {
                 body.child(self.service_default_summary(engine, view.clone()))
-                    .child(
-                        h_flex()
-                            .debug_selector(|| "model-services-heading".into())
-                            .w_full()
-                            .mt_2()
-                            .gap_2()
-                            .justify_between()
-                            .flex_wrap()
-                            .child(
-                                h_flex()
-                                    .gap_2()
-                                    .child(
-                                        div().font_semibold().text_size(ui_text_size(14.)).child(
-                                            service_text("settings.defaults.model_services"),
-                                        ),
-                                    )
-                                    .when(supports_services, |title| {
-                                        title.child(
-                                            div()
-                                                .text_color(rgb(palette().muted))
-                                                .text_size(ui_text_size(12.))
-                                                .child(service_count(count)),
-                                        )
-                                    }),
-                            )
-                            .child(actions),
-                    )
             })
             .when(supports_services, |body| {
                 body.child(
@@ -191,17 +159,20 @@ impl ConduitApp {
                         .id("service-workbench")
                         .debug_selector(|| "service-workbench".into())
                         .w_full()
+                        .min_w_0()
                         .items_start()
-                        .gap_3()
+                        .gap_4()
                         .when(!detail_only, |row| {
                             row.child(
                                 div()
                                     .min_w_0()
                                     .when(split, |list| {
-                                        list.w(px(280.
-                                            * (self.store.ui.ui_font_size / DEFAULT_UI_FONT_SIZE)))
+                                        list.w(ui_text_size(248.))
+                                            .pr_3()
+                                            .border_r_1()
+                                            .border_color(settings_group_border())
                                     })
-                                    .when(!split, |list| list.w_full())
+                                    .when(!split, |list| list.w_full().max_w(ui_text_size(440.)))
                                     .flex_shrink_0()
                                     .child(self.service_list(engine, &selected, view.clone())),
                             )
@@ -212,6 +183,8 @@ impl ConduitApp {
                                 v_flex()
                                     .flex_1()
                                     .min_w_0()
+                                    .max_w(ui_text_size(680.))
+                                    .items_start()
                                     .gap_3()
                                     .when(detail_only, |detail| {
                                         detail.child(
@@ -219,6 +192,8 @@ impl ConduitApp {
                                                 .debug_selector(|| "service-detail-back".into())
                                                 .ghost()
                                                 .small()
+                                                .h(ui_text_size(32.))
+                                                .text_size(ui_text_size(14.))
                                                 .icon(FullIconName::ArrowLeft)
                                                 .label(service_text(
                                                     "settings.services.back_to_list",
@@ -243,23 +218,29 @@ impl ConduitApp {
                 )
             })
             .when(!supports_services, |body| {
-                body.child(self.service_details(
-                    engine,
-                    &ModelChannel::Cli,
-                    DetailTab::Models,
-                    view.clone(),
-                ))
+                body.child(
+                    div()
+                        .w_full()
+                        .max_w(ui_text_size(680.))
+                        .child(self.service_details(
+                            engine,
+                            &ModelChannel::Cli,
+                            DetailTab::Models,
+                            view.clone(),
+                        )),
+                )
             })
             .when(supports_services && !detail_only, |body| {
                 body.child(
                     h_flex()
                         .w_full()
-                        .justify_end()
                         .flex_wrap()
                         .gap_2()
                         .child(
                             Button::new("services-native-catalog")
                                 .small()
+                                .h(ui_text_size(32.))
+                                .text_size(ui_text_size(14.))
                                 .ghost()
                                 .label(service_text("settings.services.native_catalog"))
                                 .on_click(move |_, window, cx| {
@@ -277,6 +258,8 @@ impl ConduitApp {
                         .child(
                             Button::new("services-config-sources")
                                 .small()
+                                .h(ui_text_size(32.))
+                                .text_size(ui_text_size(14.))
                                 .ghost()
                                 .label(service_text("settings.models.view_configuration_sources"))
                                 .on_click(move |_, window, cx| {
@@ -315,7 +298,13 @@ impl ConduitApp {
                     )
                 },
             );
-        SettingsContent::new(body).with_toolbar(management_toolbar(engine, false, None, None, view))
+        SettingsContent::new(body).with_toolbar(management_toolbar(
+            engine,
+            false,
+            None,
+            Some(actions),
+            view,
+        ))
     }
 
     fn service_default_summary(&self, engine: Provider, view: Entity<Self>) -> AnyElement {
@@ -335,19 +324,19 @@ impl ConduitApp {
                     .flatten()
             })
             .unwrap_or_else(|| service_text("settings.defaults.use_service_default_model").into());
-        v_flex()
+        h_flex()
             .debug_selector(|| "service-default-summary".into())
             .w_full()
+            .min_w_0()
             .flex_shrink_0()
-            .p_3()
-            .rounded_lg()
-            .bg(rgb(palette().surface_strong))
+            .flex_wrap()
+            .py_2()
+            .border_b_1()
+            .border_color(settings_group_border())
             .gap_2()
             .child(
                 h_flex()
-                    .w_full()
                     .gap_2()
-                    .justify_between()
                     .flex_wrap()
                     .child(div().text_size(ui_text_size(14.)).font_semibold().child(
                         conduit::i18n::format(
@@ -359,6 +348,8 @@ impl ConduitApp {
                         Button::new("services-default-catalog")
                             .debug_selector(|| "services-default-catalog".into())
                             .small()
+                            .h(ui_text_size(32.))
+                            .text_size(ui_text_size(14.))
                             .ghost()
                             .label(service_text("settings.services.change_default"))
                             .icon(FullIconName::ChevronRight)
@@ -374,7 +365,7 @@ impl ConduitApp {
             )
             .child(
                 h_flex()
-                    .w_full()
+                    .min_w_0()
                     .gap_2()
                     .flex_wrap()
                     .child(
@@ -383,7 +374,7 @@ impl ConduitApp {
                             .min_w_0()
                             .max_w_full()
                             .truncate()
-                            .text_size(ui_text_size(13.))
+                            .text_size(ui_text_size(14.))
                             .font_medium()
                             .child(label),
                     )
@@ -419,7 +410,7 @@ impl ConduitApp {
                 let width = f32::from(window.viewport_size().width) - 260.;
                 let app = view.read(cx);
                 v_flex()
-                    .gap_4()
+                    .gap_3()
                     .w_full()
                     .child(app.service_default_summary(engine, view.clone()))
                     .child(app.service_table(engine, width, view.clone()))
@@ -441,16 +432,13 @@ impl ConduitApp {
         let mut table = v_flex()
             .w_full()
             .flex_shrink_0()
-            .rounded_lg()
-            .border_1()
-            .border_color(rgb(palette().border))
-            .bg(rgb(palette().surface));
+            .refine_style(&settings_group_style().p_0().border_0());
         if providers.is_empty() {
             return table
                 .child(
                     div()
-                        .p_6()
-                        .text_size(ui_text_size(13.))
+                        .py_3()
+                        .text_size(ui_text_size(14.))
                         .text_color(rgb(palette().muted))
                         .child(service_text(
                             "settings.models.no_model_services_yet_add_endpoints_and",
@@ -467,7 +455,7 @@ impl ConduitApp {
                     .gap_3()
                     .border_b_1()
                     .border_color(rgb(palette().border))
-                    .text_size(ui_text_size(11.))
+                    .text_size(ui_text_size(12.))
                     .text_color(rgb(palette().muted))
                     .child(
                         div()
@@ -513,6 +501,8 @@ impl ConduitApp {
             let model_button = Button::new(("service-models", index))
                 .debug_selector(move || format!("service-models-{index}"))
                 .small()
+                .h(ui_text_size(32.))
+                .text_size(ui_text_size(14.))
                 .ghost()
                 .label(if compact {
                     conduit::i18n::format(
@@ -542,6 +532,8 @@ impl ConduitApp {
             let session_button = Button::new(("service-sessions", index))
                 .debug_selector(move || format!("service-sessions-{index}"))
                 .small()
+                .h(ui_text_size(32.))
+                .text_size(ui_text_size(14.))
                 .ghost()
                 .label(if compact {
                     conduit::i18n::format(
@@ -575,7 +567,7 @@ impl ConduitApp {
                 .debug_selector(move || format!("service-description-{index}"))
                 .child(
                     div()
-                        .text_size(ui_text_size(13.))
+                        .text_size(ui_text_size(14.))
                         .font_semibold()
                         .child(provider.name.clone()),
                 )
@@ -583,7 +575,7 @@ impl ConduitApp {
                     div()
                         .id(("service-endpoint", index))
                         .truncate()
-                        .text_size(ui_text_size(11.))
+                        .text_size(ui_text_size(12.))
                         .text_color(rgb(palette().muted))
                         .tooltip({
                             let endpoint = provider.base_url.clone();
@@ -609,6 +601,8 @@ impl ConduitApp {
                     Button::new(("provider-use-default", index))
                         .debug_selector(move || format!("service-default-{index}"))
                         .small()
+                        .h(ui_text_size(32.))
+                        .text_size(ui_text_size(14.))
                         .outline()
                         .label(service_text(if current {
                             "settings.services.current_default"
@@ -632,6 +626,8 @@ impl ConduitApp {
                 .child(
                     Button::new(("service-details", index))
                         .small()
+                        .h(ui_text_size(32.))
+                        .text_size(ui_text_size(14.))
                         .ghost()
                         .icon(FullIconName::Ellipsis)
                         .accessibility_label(service_text("settings.services.details"))
@@ -657,7 +653,7 @@ impl ConduitApp {
                     .child(
                         h_flex().w_full().gap_2().child(description).child(
                             div()
-                                .text_size(ui_text_size(11.))
+                                .text_size(ui_text_size(12.))
                                 .text_color(rgb(palette().muted))
                                 .child(source),
                         ),

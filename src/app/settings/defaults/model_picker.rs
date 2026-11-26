@@ -129,7 +129,7 @@ impl RenderOnce for DefaultModelPicker {
             .child(
                 Select::new(&select)
                     .id(("default-model", engine))
-                    .small()
+                    .settings_control()
                     .w_full()
                     .disabled(self.disabled)
                     .accessibility_label(conduit::i18n::text_static(

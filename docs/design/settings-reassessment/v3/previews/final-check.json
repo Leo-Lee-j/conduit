@@ -1,0 +1,55 @@
+{
+  "scripts": {
+    "1": {
+      "exit": 0,
+      "error": ""
+    },
+    "2": {
+      "exit": 0,
+      "error": ""
+    },
+    "3": {
+      "exit": 0,
+      "error": ""
+    }
+  },
+  "comparison": [
+    [
+      1,
+      "general"
+    ],
+    [
+      1,
+      "services"
+    ],
+    [
+      1,
+      "mcp"
+    ],
+    [
+      2,
+      "general"
+    ],
+    [
+      2,
+      "services"
+    ],
+    [
+      2,
+      "mcp"
+    ],
+    [
+      3,
+      "general"
+    ],
+    [
+      3,
+      "services"
+    ],
+    [
+      3,
+      "mcp"
+    ]
+  ],
+  "errors": []
+}

@@ -10,13 +10,16 @@ impl ConduitApp {
         let installed_view = view.clone();
         let discovery_view = view.clone();
         let toolbar = h_flex()
-            .px_4()
-            .pt_3()
-            .pb_2()
-            .gap_2()
+            .px(px(settings_content_inset()))
+            .py_2()
+            .w_full()
+            .flex_wrap()
+            .gap_1()
             .child(
-                Button::new("plugins-installed-tab")
+                resource_button("plugins-installed-tab")
                     .debug_selector(|| "plugins-installed-tab".into())
+                    .small()
+                    .ghost()
                     .label(text("installed_tab"))
                     .selected(!discover)
                     .on_click(move |_, _, cx| {
@@ -27,14 +30,17 @@ impl ConduitApp {
                     }),
             )
             .child(
-                Button::new("plugins-discover-tab")
+                resource_button("plugins-discover-tab")
                     .debug_selector(|| "plugins-discover-tab".into())
+                    .small()
+                    .ghost()
                     .label(text("discover_tab"))
                     .selected(discover)
                     .on_click(move |_, window, cx| {
                         discovery_view.update(cx, |app, cx| app.show_plugin_discovery(window, cx));
                     }),
-            );
+            )
+            .child(caption(text("application_scope")));
         SettingsContent::new(if discover {
             self.settings_plugin_catalog(view)
         } else {
@@ -54,7 +60,7 @@ impl ConduitApp {
         ] {
             let filter_view = view.clone();
             filters = filters.child(
-                Button::new(SharedString::from(format!("plugins-filter-{key}")))
+                resource_button(SharedString::from(format!("plugins-filter-{key}")))
                     .label(text(key))
                     .small()
                     .ghost()
@@ -69,16 +75,21 @@ impl ConduitApp {
         }
         let mut list = settings_scroll_area("plugin-catalog-list")
             .child(
-                v_flex()
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .flex_wrap()
                     .gap_2()
                     .when_some(state.input.as_ref(), |row, input| {
                         row.child(
-                            Input::new(input)
-                                .aria_label(conduit::i18n::text_static(
-                                    "settings.plugins.catalog_search",
-                                ))
-                                .prefix(FullIconName::Search)
-                                .cleanable(true),
+                            div().flex_1().min_w(px(160.)).max_w(px(480.)).child(
+                                settings_input(input)
+                                    .aria_label(conduit::i18n::text_static(
+                                        "settings.plugins.catalog_search",
+                                    ))
+                                    .prefix(FullIconName::Search)
+                                    .cleanable(true),
+                            ),
                         )
                     })
                     .child(
@@ -86,7 +97,7 @@ impl ConduitApp {
                             .flex_wrap()
                             .gap_2()
                             .child(
-                                Button::new("plugin-catalog-search")
+                                resource_button("plugin-catalog-search")
                                     .debug_selector(|| "plugin-catalog-search".into())
                                     .label(text("search"))
                                     .disabled(state.loading || self.closing)
@@ -97,7 +108,7 @@ impl ConduitApp {
                                     }),
                             )
                             .child(
-                                Button::new("plugin-catalog-refresh")
+                                resource_button("plugin-catalog-refresh")
                                     .label(text("refresh"))
                                     .ghost()
                                     .disabled(state.loading || self.closing)
@@ -150,6 +161,7 @@ impl ConduitApp {
         }
         let query = state.query.to_lowercase();
         let mut shown = 0;
+        let mut resources = resource_list();
         for entry in &state.entries {
             if (state.filter == CatalogFilter::Official && !entry.official())
                 || (state.filter == CatalogFilter::Community && entry.official())
@@ -186,85 +198,126 @@ impl ConduitApp {
             let source_url = entry.repository_url();
             let key = entry.key();
             let debug_key = entry.plugin.id.clone();
-            list = list.child(
-                v_flex()
-                    .id(SharedString::from(format!("catalog-{key}")))
-                    .refine_style(&settings_group_style())
-                    .gap_2()
-                    .child(
-                        h_flex()
-                            .flex_wrap()
-                            .gap_2()
-                            .child(
-                                div()
+            let details = v_flex()
+                .w_full()
+                .min_w_0()
+                .gap_2()
+                .child(caption(entry.plugin.description.clone()))
+                .child(caption(format!(
+                    "{} · {}",
+                    entry.repository, entry.plugin.id
+                )))
+                .child(caption(format!(
+                    "{} · {}",
+                    if entry.plugin.kind == "file-icons" {
+                        text("file_icons")
+                    } else {
+                        entry.plugin.kind.clone()
+                    },
+                    entry
+                        .plugin
+                        .license
+                        .clone()
+                        .unwrap_or_else(|| text("license_unspecified"))
+                )))
+                .when(!compatible, |card| {
+                    card.child(caption(text("incompatible")))
+                })
+                .when(entry.bundled, |card| {
+                    card.child(caption(text("bundled_available")))
+                })
+                .when_some(installed, |card, installed| {
+                    card.child(caption(conduit::i18n::format(
+                        "settings.plugins.installed_version",
+                        &[("version", installed.package.manifest.version.clone())],
+                    )))
+                })
+                .into_any_element();
+            let summary = v_flex()
+                .w_full()
+                .min_w_0()
+                .gap_1()
+                .child(
+                    h_flex()
+                        .w_full()
+                        .gap_2()
+                        .flex_wrap()
+                        .justify_between()
+                        .child(
+                            h_flex()
+                                .min_w_0()
+                                .gap_2()
+                                .flex_wrap()
+                                .child(
+                                    resource_meta(
+                                        SharedString::from(format!("resource-title-{}", key)),
+                                        entry.plugin.name.clone(),
+                                    )
                                     .text_size(ui_text_size(14.))
-                                    .font_medium()
-                                    .child(entry.plugin.name.clone()),
-                            )
-                            .child(caption(entry.plugin.version.clone()))
-                            .child(caption(text(if entry.official() {
-                                "official"
-                            } else {
-                                "community"
-                            }))),
-                    )
-                    .child(caption(entry.plugin.description.clone()))
-                    .child(caption(format!(
-                        "{} · {}",
-                        entry.repository, entry.plugin.id
-                    )))
-                    .child(caption(format!(
-                        "{} · {}",
-                        if entry.plugin.kind == "file-icons" {
-                            text("file_icons")
-                        } else {
-                            entry.plugin.kind.clone()
-                        },
-                        entry
-                            .plugin
-                            .license
-                            .clone()
-                            .unwrap_or_else(|| text("license_unspecified"))
-                    )))
-                    .when(!compatible, |card| {
-                        card.child(caption(text("incompatible")))
-                    })
-                    .when(entry.bundled, |card| {
-                        card.child(caption(text("bundled_available")))
-                    })
-                    .when_some(installed, |card, installed| {
-                        card.child(caption(conduit::i18n::format(
-                            "settings.plugins.installed_version",
-                            &[("version", installed.package.manifest.version.clone())],
-                        )))
-                    })
-                    .child(
-                        h_flex()
-                            .flex_wrap()
-                            .gap_2()
-                            .child(
-                                Button::new("catalog-install")
-                                    .debug_selector(move || format!("catalog-install-{debug_key}"))
-                                    .label(text(if installed.is_some() {
-                                        "already_installed"
+                                    .text_color(rgb(palette().text))
+                                    .font_medium(),
+                                )
+                                .child(caption(entry.plugin.version.clone()))
+                                .child(resource_badge(
+                                    text(if entry.official() {
+                                        "official"
                                     } else {
-                                        "install_online"
-                                    }))
-                                    .disabled(disabled)
-                                    .on_click(move |_, _, cx| {
-                                        install_view.update(cx, |app, cx| {
-                                            app.install_catalog_plugin(install_entry.clone(), cx)
-                                        });
+                                        "community"
                                     }),
-                            )
-                            .child(
-                                Button::new("catalog-source")
-                                    .label(text("view_repository"))
-                                    .ghost()
-                                    .on_click(move |_, _, cx| cx.open_url(&source_url)),
-                            ),
+                                    false,
+                                )),
+                        )
+                        .child(
+                            h_flex()
+                                .flex_wrap()
+                                .gap_2()
+                                .child(
+                                    resource_button("catalog-install")
+                                        .debug_selector(move || {
+                                            format!("catalog-install-{debug_key}")
+                                        })
+                                        .label(text(if installed.is_some() {
+                                            "already_installed"
+                                        } else {
+                                            "install_online"
+                                        }))
+                                        .disabled(disabled)
+                                        .on_click(move |_, _, cx| {
+                                            install_view.update(cx, |app, cx| {
+                                                app.install_catalog_plugin(
+                                                    install_entry.clone(),
+                                                    cx,
+                                                )
+                                            });
+                                        }),
+                                )
+                                .child(
+                                    resource_button("catalog-source")
+                                        .label(text("view_repository"))
+                                        .ghost()
+                                        .on_click(move |_, _, cx| cx.open_url(&source_url)),
+                                ),
+                        ),
+                )
+                .child(resource_meta(
+                    SharedString::from(format!("plugin-catalog-source-{key}")),
+                    conduit::i18n::format(
+                        "settings.extensions.source",
+                        &[("arg0", entry.repository.clone())],
                     ),
-            );
+                ))
+                .when(!compatible, |row| row.child(caption(text("incompatible"))))
+                .into_any_element();
+            resources = resources.child(ResourceDetails {
+                id: format!("plugin-catalog-details-{key}").into(),
+                name: entry.plugin.name.clone(),
+                view: view.clone(),
+                summary,
+                details,
+            });
+        }
+        if shown > 0 {
+            list = list.child(resources);
         }
         if shown == 0 && !state.loading {
             list = list.child(caption(text("catalog_empty")));
@@ -272,7 +325,7 @@ impl ConduitApp {
         if state.has_more {
             let more_view = view;
             list = list.child(
-                Button::new("plugin-catalog-more")
+                resource_button("plugin-catalog-more")
                     .debug_selector(|| "plugin-catalog-more".into())
                     .label(text("load_more"))
                     .disabled(state.loading || self.closing)
