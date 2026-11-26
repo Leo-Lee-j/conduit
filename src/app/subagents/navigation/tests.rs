@@ -45,6 +45,112 @@ fn install(app: &mut ConduitApp, key: &TaskKey, text: &str) -> u64 {
 }
 
 #[gpui_kit::test]
+fn child_history_loading_keeps_the_editor_draft_and_keyboard_target(cx: &mut TestAppContext) {
+    use gpui_kit::{Focusable as _, px};
+
+    let (app, cx, _) = crate::app::queue::tests::fixture(cx, "child-history-loading");
+    let (key, input) = cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.startup = None;
+            app.input.update(cx, |input, cx| {
+                input.set_value("root draft", window, cx);
+                input.set_selected_range(1..4, cx);
+            });
+            let key = prepare(app, window, cx);
+            app.session_mut(1).unwrap().subagents[0].task = "Known task summary".into();
+            let input = app.session_control.agent_navigation.editors
+                [&editor::EditorKey::from(&key)]
+                .input
+                .clone();
+            input.update(cx, |input, cx| {
+                input.set_value("child draft", window, cx);
+                input.set_selected_range(11..11, cx);
+            });
+            input.read(cx).focus_handle(cx).focus(window, cx);
+            cx.notify();
+            (key, input)
+        })
+    });
+    for _ in 0..2 {
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let loading = cx
+            .debug_bounds("subagent-history-skeleton")
+            .expect("child history loading is rendered from the first frame");
+        let label = cx
+            .debug_bounds("subagent-history-loading-label")
+            .expect("loading has an explicit text label");
+        assert!(loading.size.width > px(0.) && loading.size.height > px(0.));
+        assert!(label.size.width > px(0.) && label.size.height > px(0.));
+        assert!(
+            label.origin.x >= loading.origin.x
+                && label.origin.y >= loading.origin.y
+                && label.origin.x + label.size.width <= loading.origin.x + loading.size.width
+                && label.origin.y + label.size.height <= loading.origin.y + loading.size.height,
+            "loading label must stay within the visible history area: {label:?}, {loading:?}"
+        );
+        for selector in [
+            "subagent-history-skeleton-message-0",
+            "subagent-history-skeleton-message-1",
+            "subagent-history-skeleton-message-2",
+        ] {
+            let message = cx
+                .debug_bounds(selector)
+                .expect("loading message is rendered");
+            assert!(
+                message.size.width > px(0.) && message.size.height >= px(36.),
+                "loading message must occupy visible space: {message:?}"
+            );
+        }
+        assert!(cx.debug_bounds("subagent-summary").is_none());
+    }
+
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            let id = install(app, &key, "Loaded child reply");
+            assert_eq!(app.session(id).unwrap().messages.len(), 2);
+            let editor =
+                &app.session_control.agent_navigation.editors[&editor::EditorKey::from(&key)];
+            assert_eq!(editor.input.entity_id(), input.entity_id());
+            assert_eq!(input.read(cx).value(), "child draft");
+            assert_eq!(input.read(cx).selected_range(), 11..11);
+            cx.notify();
+        });
+    });
+    for _ in 0..2 {
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+    assert!(cx.debug_bounds("subagent-message-list").is_some());
+    assert!(cx.debug_bounds("subagent-history-skeleton").is_none());
+    assert!(cx.debug_bounds("subagent-history-loading-label").is_none());
+    assert!(cx.debug_bounds("subagent-summary").is_none());
+    cx.simulate_keystrokes("shift-enter");
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            assert_eq!(input.read(cx).value(), "child draft\n");
+            app.writable = false;
+            cx.notify();
+        });
+    });
+    for _ in 0..2 {
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+    }
+    cx.simulate_keystrokes("shift-enter");
+    cx.update(|window, cx| {
+        let app = app.read(cx);
+        assert_eq!(input.read(cx).value(), "child draft\n");
+        assert_eq!(app.input.read(cx).value(), "root draft");
+        assert_eq!(app.input.read(cx).selected_range(), 1..4);
+        assert!(app.session(1).unwrap().messages.is_empty());
+        assert!(app.store.child_commands.is_empty());
+        window.remove_window();
+    });
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
 fn child_reasoning_summary_paragraphs_and_published_bodies_render(cx: &mut TestAppContext) {
     let (app, cx, _) = crate::app::queue::tests::fixture(cx, "child-reasoning-visibility");
     cx.simulate_resize(gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(900.)));

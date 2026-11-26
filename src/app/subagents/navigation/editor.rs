@@ -1,4 +1,7 @@
 use super::*;
+use crate::app::composer::{
+    composer_actions, composer_input_state, composer_shell, composer_textarea,
+};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(super) struct EditorKey {
@@ -69,9 +72,8 @@ impl ConduitApp {
             .find(|entry| entry.key == key)
             .cloned();
         let input = cx.new(|cx| {
-            let mut input = TextareaState::new(window, cx)
-                .placeholder(conduit::i18n::text_static("subagents.draft_placeholder"))
-                .auto_grow(2, 6);
+            let mut input = composer_input_state(String::new(), window, cx)
+                .placeholder(conduit::i18n::text_static("subagents.draft_placeholder"));
             if let Some(saved) = &saved {
                 input.set_value(saved.text.clone(), window, cx);
                 let start = saved.selection.start.min(saved.text.len());
@@ -84,17 +86,17 @@ impl ConduitApp {
         });
         let owner = key.clone();
         let subscription = cx.subscribe(&input, move |this, _, event: &InputEvent, cx| {
-            if matches!(event, InputEvent::Change) {
-                if let Some(editor) = this
+            if matches!(event, InputEvent::Change)
+                && let Some(editor) = this
                     .session_control
                     .agent_navigation
                     .editors
                     .get_mut(&owner)
-                {
-                    editor.revision = editor.revision.wrapping_add(1);
-                }
-                cx.notify();
+            {
+                editor.revision = editor.revision.wrapping_add(1);
             }
+            // Focus and blur also repaint the shared composer border.
+            cx.notify();
         });
         let root_native = saved
             .as_ref()
@@ -510,6 +512,7 @@ impl ConduitApp {
     pub(super) fn render_child_editor(
         &mut self,
         key: &TaskKey,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let owner = EditorKey::from(key);
@@ -524,9 +527,15 @@ impl ConduitApp {
         let can_edit = self.writable && !self.closing;
         let error = editor.error.clone();
         let input = editor.input.clone();
+        let input_focused = input.read(cx).focus_handle(cx).is_focused(window);
+        let typography = self.chat_typography();
         let has_files = !editor.references.is_empty();
         let files = editor.references.iter().enumerate().fold(
-            h_flex().flex_wrap().gap_2(),
+            h_flex()
+                .flex_wrap()
+                .gap_2()
+                .px(px(crate::app::chat::CHAT_CARD_INSET_X))
+                .pt(px(crate::app::chat::CHAT_CARD_INSET_Y)),
             |view, (index, reference)| {
                 let owner = owner.clone();
                 let path = reference.path.clone();
@@ -574,9 +583,12 @@ impl ConduitApp {
             || child.is_some_and(|id| self.session_control.runs.contains_key(&id));
         v_flex()
             .id("child-composer")
+            .debug_selector(|| "child-composer".into())
+            .w_full()
+            .min_w_0()
             .flex_shrink_0()
-            .p_3()
-            .key_context("ConduitComposer")
+            .px(px(crate::app::chat::CHAT_CONTENT_GUTTER))
+            .py(px(crate::app::chat::CHAT_BLOCK_GAP))
             .on_action(cx.listener(|this, _: &SendPrompt, window, cx| {
                 cx.stop_propagation();
                 this.send_child(window, cx);
@@ -585,16 +597,32 @@ impl ConduitApp {
                 cx.stop_propagation();
                 this.stop_child(&expected, cx);
             }))
+            .on_action(cx.listener(|this, _: &Newline, window, cx| {
+                cx.stop_propagation();
+                if !this.writable || this.closing {
+                    return;
+                }
+                if let Some(key) = this.subagent_route()
+                    && let Some(editor) = this
+                        .session_control
+                        .agent_navigation
+                        .editors
+                        .get(&EditorKey::from(key))
+                {
+                    editor
+                        .input
+                        .clone()
+                        .update(cx, |input, cx| input.insert("\n", window, cx));
+                }
+            }))
             .child(
-                v_flex()
-                    .id("child-composer-shell")
+                composer_shell("child-composer-shell", input_focused)
                     .debug_selector(|| "child-composer-shell".into())
-                    .w_full()
-                    .gap_2()
-                    .rounded(px(11.))
-                    .bg(rgb(palette().surface))
-                    .border_1()
-                    .border_color(rgb(palette().border))
+                    .when(!self.store.ui.full_width_content, |shell| {
+                        shell
+                            .max_w(px(crate::app::chat::CHAT_CONTENT_MAX_WIDTH))
+                            .mx_auto()
+                    })
                     .on_click(cx.listener(|this, _, window, cx| {
                         if let Some(key) = this.subagent_route()
                             && let Some(editor) = this
@@ -608,12 +636,17 @@ impl ConduitApp {
                     }))
                     .when(has_files, |view| view.child(files))
                     .child(
-                        div().px(px(9.)).pt(px(9.)).child(
-                            Textarea::new(&input)
-                                .appearance(false)
-                                .bordered(false)
-                                .text_size(ui_text_size(13.))
-                                .disabled(!can_edit)
+                        div()
+                            .key_context("ConduitComposer")
+                            .px(px(crate::app::chat::CHAT_CARD_INSET_X) - Size::Medium.input_px())
+                            .pt(px(if has_files { 0. } else { 4. }))
+                            .child(
+                                composer_textarea(
+                                    &input,
+                                    &typography,
+                                    can_edit,
+                                    input.read(cx).value().is_empty(),
+                                )
                                 .on_paste(move |item, _, cx| {
                                     paste_app
                                         .update(cx, |this, cx| {
@@ -621,7 +654,7 @@ impl ConduitApp {
                                         })
                                         .unwrap_or(true)
                                 }),
-                        ),
+                            ),
                     )
                     .when(unresolved, |view| {
                         view.child(
@@ -644,29 +677,23 @@ impl ConduitApp {
                         view.child(div().px_2().text_color(rgb(palette().muted)).child(error))
                     })
                     .child(
-                        h_flex()
-                            .px(px(6.))
-                            .py(px(6.))
-                            .gap_2()
-                            .items_center()
-                            .child(
-                                Button::new("child-attach")
-                                    .ghost()
-                                    .small()
-                                    .compact()
-                                    .w(px(30.))
-                                    .h(px(30.))
-                                    .icon(Icon::new(FullIconName::Paperclip))
-                                    .tooltip(conduit::i18n::text_static("subagents.attach"))
-                                    .accessibility_label(conduit::i18n::text_static(
-                                        "subagents.attach",
-                                    ))
-                                    .disabled(!can_edit)
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.pick_child_files(owner.clone(), window, cx)
-                                    })),
-                            )
+                        composer_actions()
+                            .id("child-composer-actions")
+                            .debug_selector(|| "child-composer-actions".into())
                             .child(div().flex_1())
+                            .child(
+                                message_action_button(
+                                    "child-attach".into(),
+                                    Icon::new(FullIconName::Paperclip),
+                                    conduit::i18n::text_static("subagents.attach"),
+                                )
+                                .disabled(!can_edit)
+                                .on_click(cx.listener(
+                                    move |this, _, window, cx| {
+                                        this.pick_child_files(owner.clone(), window, cx)
+                                    },
+                                )),
+                            )
                             .when(busy, |view| {
                                 view.child(
                                     Button::new("child-stop")
@@ -674,7 +701,10 @@ impl ConduitApp {
                                         .compact()
                                         .w(px(30.))
                                         .h(px(30.))
+                                        .flex_shrink_0()
                                         .rounded_full()
+                                        .primary()
+                                        .disabled(!can_edit)
                                         .icon(Icon::new(FullIconName::Square).size(px(12.)))
                                         .tooltip(conduit::i18n::text_static("subagents.stop"))
                                         .accessibility_label(conduit::i18n::text_static(

@@ -265,10 +265,8 @@ fn child_navigation_preserves_running_root_and_rejects_desktop_writes(cx: &mut T
     focus_button(cx, "subagent-open-run:a");
     press(cx, "enter");
     assert!(cx.debug_bounds("subagent-page").is_some());
-    let summary_bounds = cx
-        .debug_bounds("subagent-summary")
-        .expect("child task summary is rendered");
-    assert!(summary_bounds.size.height > px(0.));
+    assert!(cx.debug_bounds("subagent-history-skeleton").is_some());
+    assert!(cx.debug_bounds("subagent-summary").is_none());
     assert!(button(cx, "subagent-back").visible());
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {

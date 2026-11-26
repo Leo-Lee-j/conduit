@@ -3367,7 +3367,7 @@
   "subagents.task_unavailable": "Task record unavailable",
   "subagents.read_only": "Read-only view. Sending to and stopping this child conversation are not available yet.",
   "subagents.history_unavailable": "The full child conversation is unavailable. Saved task summaries are shown below.",
-  "subagents.loading": "Loading the saved child conversation…",
+  "subagents.loading": "Loading child conversation…",
   "subagents.retry_history": "Retry loading history",
   "subagents.saved_history": "Saved child conversation; recent messages or earlier history may be missing.",
   "subagents.activity": "Recent activity",

@@ -3367,7 +3367,7 @@
   "subagents.task_unavailable": "任务记录已不可用",
   "subagents.read_only": "当前为只读查看。子会话发送与停止尚未开放。",
   "subagents.history_unavailable": "暂无法读取完整子会话。以下为已保存的任务摘要。",
-  "subagents.loading": "正在读取已保存的子会话…",
+  "subagents.loading": "正在加载子会话…",
   "subagents.retry_history": "重试读取记录",
   "subagents.saved_history": "已保存的子会话记录；可能不包含最新消息或完整历史。",
   "subagents.activity": "最近活动",

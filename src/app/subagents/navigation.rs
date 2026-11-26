@@ -491,7 +491,7 @@ impl ConduitApp {
             .history_errors
             .get(&key)
             .cloned();
-        let editor = self.render_child_editor(&key, cx);
+        let editor = self.render_child_editor(&key, window, cx);
         let approvals = self.child_approvals(&key, window, cx);
         let body = if self.session(root).is_none() {
             div()
@@ -502,6 +502,22 @@ impl ConduitApp {
                 .into_any_element()
         } else if let Some(id) = saved {
             self.subagent_saved_body(&key, id, cx)
+        } else if self
+            .session_control
+            .agent_navigation
+            .reads
+            .contains_key(&key)
+            || (self.history_binding(&key).is_some()
+                && !self
+                    .session_control
+                    .agent_navigation
+                    .refreshed
+                    .contains_key(&key)
+                && history_error.is_none())
+        {
+            // The summary is a fallback, not the first frame of a native chat.
+            // Keep one loading presentation while either native or saved history loads.
+            self.subagent_history_skeleton()
         } else {
             self.subagent_summary_body(&key, agent.as_ref(), cx)
         };
@@ -533,19 +549,26 @@ impl ConduitApp {
             .child(
                 v_flex()
                     .w_full()
-                    .max_w(px(840.))
-                    .mx_auto()
+                    .min_w_0()
+                    .px(px(super::super::chat::CHAT_CONTENT_GUTTER))
                     .min_h_0()
                     .flex_1()
-                    .child(body),
+                    .child(
+                        v_flex()
+                            .w_full()
+                            .min_w_0()
+                            .min_h_0()
+                            .flex_1()
+                            .when(!self.store.ui.full_width_content, |column| {
+                                column
+                                    .max_w(px(super::super::chat::CHAT_CONTENT_MAX_WIDTH))
+                                    .mx_auto()
+                            })
+                            .child(body),
+                    ),
             )
             .child(approvals)
-            .child(
-                div()
-                    .w_full()
-                    .flex_shrink_0()
-                    .child(div().w_full().max_w(px(840.)).mx_auto().child(editor)),
-            )
+            .child(editor)
             .into_any_element()
     }
 
@@ -596,6 +619,67 @@ impl ConduitApp {
         content.into_any_element()
     }
 
+    fn subagent_history_skeleton(&self) -> AnyElement {
+        v_flex()
+            .id("subagent-history-skeleton")
+            .debug_selector(|| "subagent-history-skeleton".into())
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .w_full()
+            .justify_center()
+            .items_center()
+            .gap_4()
+            .child(
+                h_flex()
+                    .id("subagent-history-loading")
+                    .debug_selector(|| "subagent-history-loading".into())
+                    .w_full()
+                    .min_w_0()
+                    .flex_shrink_0()
+                    .justify_center()
+                    .items_center()
+                    .gap_2()
+                    .px_4()
+                    .child(Spinner::new().small().color(rgb(palette().loading).into()))
+                    .child(
+                        div()
+                            .debug_selector(|| "subagent-history-loading-label".into())
+                            .min_w_0()
+                            .text_size(ui_text_size(13.))
+                            .text_color(rgb(palette().muted))
+                            .child(conduit::i18n::text_static("subagents.loading")),
+                    ),
+            )
+            .child(
+                v_flex().w_full().max_w(px(560.)).gap_5().px_4().children(
+                    [0.74, 0.88, 0.62]
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, width)| {
+                            let mut message = v_flex()
+                                .debug_selector(move || {
+                                    format!("subagent-history-skeleton-message-{index}")
+                                })
+                                .flex_shrink_0()
+                                .gap_2()
+                                .w(relative(width));
+                            for line in [0.94, 0.78, 0.58] {
+                                message = message.child(
+                                    Skeleton::new()
+                                        .flex_shrink_0()
+                                        .h(px(12.))
+                                        .w(relative(line))
+                                        .rounded(px(4.)),
+                                );
+                            }
+                            message
+                        }),
+                ),
+            )
+            .into_any_element()
+    }
+
     fn subagent_saved_body(
         &mut self,
         key: &TaskKey,
@@ -608,39 +692,7 @@ impl ConduitApp {
             .is_some_and(|session| session.transcript.loaded);
         if !loaded || error.is_some() {
             if error.is_none() {
-                return v_flex()
-                    .id("subagent-history-skeleton")
-                    .debug_selector(|| "subagent-history-skeleton".into())
-                    .flex_1()
-                    .min_h_0()
-                    .w_full()
-                    .justify_center()
-                    .items_center()
-                    .child(
-                        v_flex().w_full().max_w(px(560.)).gap_5().px_4().children(
-                            [0.74, 0.88, 0.62]
-                                .into_iter()
-                                .enumerate()
-                                .map(|(index, width)| {
-                                    let mut message = v_flex()
-                                        .debug_selector(move || {
-                                            format!("subagent-history-skeleton-message-{index}")
-                                        })
-                                        .gap_2()
-                                        .w(relative(width));
-                                    for line in [0.94, 0.78, 0.58] {
-                                        message = message.child(
-                                            Skeleton::new()
-                                                .h(px(12.))
-                                                .w(relative(line))
-                                                .rounded(px(4.)),
-                                        );
-                                    }
-                                    message
-                                }),
-                        ),
-                    )
-                    .into_any_element();
+                return self.subagent_history_skeleton();
             }
             let mut body = v_flex()
                 .flex_1()
@@ -744,7 +796,6 @@ impl ConduitApp {
             return v_flex()
                 .w_full()
                 .min_w_0()
-                .px_4()
                 .py_2()
                 .child(self.render_reasoning_item(id, index, &item, provider, Some(&state), cx))
                 .into_any_element();
@@ -754,7 +805,6 @@ impl ConduitApp {
             let mut body = v_flex()
                 .w_full()
                 .min_w_0()
-                .px_4()
                 .py_2()
                 .child(self.activity_row(id, index, &item, cx));
             if expanded {
@@ -798,7 +848,6 @@ impl ConduitApp {
                 .w_full()
                 .min_w_0()
                 .items_end()
-                .px_4()
                 .py_2()
                 .child(
                     v_flex()
@@ -814,14 +863,12 @@ impl ConduitApp {
             ItemKind::Assistant => v_flex()
                 .w_full()
                 .min_w_0()
-                .px_4()
                 .py_2()
                 .child(message)
                 .into_any_element(),
             ItemKind::Notice | ItemKind::Error => v_flex()
                 .w_full()
                 .min_w_0()
-                .px_4()
                 .py_3()
                 .gap_2()
                 .child(

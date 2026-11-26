@@ -21,6 +21,49 @@ pub(in crate::app) fn composer_input_state(
         .default_value(draft)
 }
 
+pub(in crate::app) fn composer_shell(id: impl Into<ElementId>, focused: bool) -> Stateful<Div> {
+    v_flex()
+        .id(id)
+        .w_full()
+        .min_w_0()
+        .gap_1()
+        .rounded(px(11.))
+        .bg(rgb(palette().surface))
+        .border_1()
+        .border_color(rgb(if focused {
+            palette().focus
+        } else {
+            palette().border
+        }))
+}
+
+pub(in crate::app) fn composer_textarea(
+    input: &Entity<TextareaState>,
+    typography: &super::typography::ChatTypography,
+    enabled: bool,
+    empty: bool,
+) -> Textarea {
+    Textarea::new(input)
+        .with_size(Size::Medium)
+        .appearance(false)
+        .bordered(false)
+        .text_size(px(typography.body_size))
+        .line_height(relative(typography.line_height))
+        .when(empty, |input| input.opacity(0.65))
+        .disabled(!enabled)
+        .when_some(typography.body_font.clone(), |input, family| {
+            input.font_family(family)
+        })
+}
+
+pub(in crate::app) fn composer_actions() -> Div {
+    h_flex()
+        .px(px(chat::CHAT_CARD_INSET_Y))
+        .pb(px(chat::CHAT_CARD_INSET_Y))
+        .gap_2()
+        .items_center()
+}
+
 /// Show actionable file names, bounding the message for large multi-selections.
 pub(super) fn rejection_summary(rejected: &[RejectedFile]) -> String {
     let mut details = rejected
@@ -645,8 +688,7 @@ impl ConduitApp {
             .and_then(|id| self.subagent_panel(id, cx));
         let composer_files = self.render_composer_files(composer_enabled, cx);
         let has_files = composer_files.is_some();
-        let mut composer = v_flex()
-            .id(("composer", input.entity_id()))
+        let mut composer = composer_shell(("composer", input.entity_id()), input_focused)
             .debug_selector(move || {
                 if main {
                     "composer"
@@ -747,17 +789,6 @@ impl ConduitApp {
                     .update(cx, |input, cx| input.insert("\n", window, cx));
                 cx.notify();
             }))
-            .w_full()
-            .min_w_0()
-            .gap_1()
-            .rounded(px(11.))
-            .bg(rgb(palette().surface))
-            .border_1()
-            .border_color(if input_focused {
-                rgb(palette().focus)
-            } else {
-                rgb(palette().border)
-            })
             .on_click(self.composer_listener(cx, |this, _, window, cx| {
                 if this.composer_workspace().is_some() {
                     this.composer_input()
@@ -808,21 +839,12 @@ impl ConduitApp {
                     .px(px(chat::CHAT_CARD_INSET_X) - Size::Medium.input_px())
                     .pt(px(if has_files { 0. } else { 4. }))
                     .child({
-                        let mut composer_input = Textarea::new(&input)
-                            .with_size(Size::Medium)
-                            .appearance(false)
-                            .bordered(false)
-                            .text_size(px(typography.body_size))
-                            .line_height(relative(typography.line_height))
-                            // The shared input uses its muted theme color for placeholders.
-                            // Fade only the empty field so typed text keeps full contrast.
-                            .when(self.composer_input().read(cx).value().is_empty(), |input| {
-                                input.opacity(0.65)
-                            })
-                            .disabled(self.closing || !composer_enabled);
-                        if let Some(family) = typography.body_font.clone() {
-                            composer_input = composer_input.font_family(family);
-                        }
+                        let composer_input = composer_textarea(
+                            &input,
+                            &typography,
+                            !self.closing && composer_enabled,
+                            input.read(cx).value().is_empty(),
+                        );
                         let paste_app = app_entity.clone();
                         let paste_binding = self.composer_binding();
                         composer_input.on_paste(move |item, window, cx| {
@@ -836,7 +858,7 @@ impl ConduitApp {
                     }),
             )
             .child(
-                h_flex()
+                composer_actions()
                     .id("composer-actions")
                     .debug_selector(move || {
                         if main {
@@ -846,10 +868,6 @@ impl ConduitApp {
                         }
                         .into()
                     })
-                    .px(px(chat::CHAT_CARD_INSET_Y))
-                    .pb(px(chat::CHAT_CARD_INSET_Y))
-                    .gap_2()
-                    .items_center()
                     .child(
                         Button::new("chat-new-session")
                             .ghost()
