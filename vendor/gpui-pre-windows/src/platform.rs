@@ -1488,43 +1488,41 @@ fn open_target(target: impl AsRef<OsStr>) -> Result<()> {
 }
 
 fn open_target_in_explorer(target: &Path) -> Result<()> {
-    let dir = target.parent().context("No parent folder found")?;
-    let desktop = unsafe { SHGetDesktopFolder()? };
-
-    let mut dir_item = std::ptr::null_mut();
-    unsafe {
-        desktop.ParseDisplayName(
-            HWND::default(),
-            None,
-            &HSTRING::from(dir),
-            None,
-            &mut dir_item,
-            std::ptr::null_mut(),
-        )?;
+    // COM apartments belong to threads, not tasks. The background executor may
+    // run each click on a different thread, including one with no apartment.
+    let initialized = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+    if initialized != RPC_E_CHANGED_MODE {
+        initialized.ok()?;
     }
-
-    let mut file_item = std::ptr::null_mut();
-    unsafe {
-        desktop.ParseDisplayName(
-            HWND::default(),
-            None,
-            &HSTRING::from(target),
-            None,
-            &mut file_item,
-            std::ptr::null_mut(),
-        )?;
-    }
-
-    let highlight = [file_item as *const _];
-    unsafe { SHOpenFolderAndSelectItems(dir_item as _, Some(&highlight), 0) }.or_else(|err| {
-        if err.code().0 == ERROR_FILE_NOT_FOUND.0 as i32 {
-            // On some systems, the above call mysteriously fails with "file not
-            // found" even though the file is there.  In these cases, ShellExecute()
-            // seems to work as a fallback (although it won't select the file).
-            open_target(dir).context("Opening target parent folder")
-        } else {
-            Err(anyhow::anyhow!("Can not open target path: {}", err))
+    let _apartment = gpui_util::defer(|| {
+        if initialized.is_ok() {
+            unsafe { CoUninitialize() };
         }
+    });
+
+    let target = std::path::absolute(target).context("Resolving Explorer target")?;
+    let target = dunce::simplified(&target);
+    let select = || -> Result<()> {
+        let mut item = std::ptr::null_mut();
+        unsafe { SHParseDisplayName(&HSTRING::from(target), None, &mut item, 0, None)? };
+        let _item = gpui_util::defer(|| unsafe { CoTaskMemFree(Some(item.cast())) });
+        // With no child array, the shell accepts an absolute PIDL and opens its
+        // parent with that item selected. A child array requires relative PIDLs.
+        unsafe { SHOpenFolderAndSelectItems(item, None, 0)? };
+        Ok(())
+    };
+    select().or_else(|error| {
+        // Parsing can fail too, e.g. when a preview's file has been removed.
+        // Fall back for any shell failure, not a raw Win32 code compared to an
+        // HRESULT (ERROR_FILE_NOT_FOUND is actually HRESULT 0x80070002).
+        let dir = target.parent().unwrap_or(target);
+        open_target(dir).with_context(|| {
+            format!(
+                "Selecting {} in Explorer failed: {error:#}; opening {} instead",
+                target.display(),
+                dir.display()
+            )
+        })
     })
 }
 
@@ -1879,6 +1877,68 @@ mod tests {
     use windows::core::{PCWSTR, PWSTR};
 
     use super::{encode_restart_arguments, username_and_password};
+
+    #[test]
+    #[ignore = "opens native File Explorer windows; run explicitly on a Windows desktop"]
+    fn test_reveal_path_from_background_thread() {
+        use windows::Win32::{Foundation::CO_E_NOTINITIALIZED, System::Com::*};
+
+        let root = std::env::temp_dir().join(format!(
+            "conduit-explorer-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let folder = root.join("中文 spaced,folder");
+        std::fs::create_dir_all(&folder).unwrap();
+        let file = folder.join("预览 😀, file.txt");
+        std::fs::write(&file, "Explorer reveal regression").unwrap();
+        let verbatim = std::fs::canonicalize(&file).unwrap();
+        let forward = std::path::PathBuf::from(file.to_string_lossy().replace('\\', "/"));
+
+        // Test fresh pool threads and both possible pre-existing apartments.
+        for mode in [
+            None,
+            Some(COINIT_APARTMENTTHREADED),
+            Some(COINIT_MULTITHREADED),
+        ] {
+            let paths = [file.clone(), verbatim.clone(), forward.clone()];
+            let missing = folder.join("removed.txt");
+            std::thread::spawn(move || {
+                let mut apartment = APTTYPE::default();
+                let mut qualifier = APTTYPEQUALIFIER::default();
+                if let Some(mode) = mode {
+                    unsafe { CoInitializeEx(None, mode).ok().unwrap() };
+                    unsafe { CoGetApartmentType(&mut apartment, &mut qualifier).unwrap() };
+                }
+                let original_apartment = apartment;
+                let _apartment = gpui_util::defer(|| {
+                    if mode.is_some() {
+                        unsafe { CoUninitialize() };
+                    }
+                });
+                for path in paths {
+                    super::open_target_in_explorer(&path).unwrap();
+                    // Reveal must neither leak a new apartment nor tear down
+                    // the caller's apartment (including the MTA mismatch case).
+                    let result = unsafe { CoGetApartmentType(&mut apartment, &mut qualifier) };
+                    if mode.is_some() {
+                        result.unwrap();
+                        assert_eq!(apartment, original_apartment);
+                    } else {
+                        assert_eq!(result.unwrap_err().code(), CO_E_NOTINITIALIZED);
+                    }
+                }
+                // The parent remains openable after a preview's file disappears.
+                super::open_target_in_explorer(&missing).unwrap();
+            })
+            .join()
+            .unwrap();
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn test_read_credential_with_username() {

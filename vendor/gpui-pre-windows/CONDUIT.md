@@ -13,9 +13,21 @@ replaces the registry package through `[patch.crates-io]`.
   and a resize drops them so the next path batch creates them at the new size.
   At 2560x1392 the two textures take about 68 MiB of GPU memory, which an
   integrated GPU counts as process private memory. Rendered output is unchanged.
+- `src/platform.rs`: Explorer reveal initializes and balances COM on the calling
+  worker thread (while respecting an existing apartment), selects a single
+  absolute shell item, frees its PIDL, and falls back to opening the parent even
+  when parsing fails. Paths are made absolute and stripped of unnecessary
+  verbatim prefixes before passing them to the shell.
+
+The native Explorer regression is opt-in because it opens real shell windows.
+From the repository root, run:
+
+```powershell
+cargo test --locked -p conduit -p gpui-pre-windows --features conduit/ui-tests --lib test_reveal_path_from_background_thread -- --ignored --nocapture --test-threads=1
+```
 
 ## Updating
 
 Copy the new package from the Cargo registry over this directory, then
-reapply the change above. Remove the patch entry once upstream allocates these
-textures on demand.
+reapply the changes above. Remove the patch entry once upstream includes these
+fixes.
