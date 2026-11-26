@@ -98,6 +98,14 @@ impl UsageTable {
 }
 
 impl TableDelegate for UsageTable {
+    fn render_last_empty_col(
+        &mut self,
+        _: &mut Window,
+        _: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        h_flex().h_full().flex_grow_1()
+    }
+
     fn columns_count(&self, _: &App) -> usize {
         self.columns().len()
     }
