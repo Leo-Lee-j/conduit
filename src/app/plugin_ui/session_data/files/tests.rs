@@ -183,6 +183,40 @@ fn session_files_exclude_git_ignored_paths_from_rows_and_totals() {
 }
 
 #[test]
+fn session_files_match_canonical_paths_under_workspace_aliases() {
+    let _locale = crate::test_support::chinese();
+    let repo = Repository::new();
+    std::fs::create_dir(repo.0.root.join("nested")).unwrap();
+    std::fs::write(repo.0.root.join(".gitignore"), "*.log\n").unwrap();
+    let canonical_root = std::fs::canonicalize(&repo.0.root).unwrap();
+    // Reproduce distinct workspace/tool spellings without relying on a host's
+    // Windows short temp paths. Neither recorded file needs to exist.
+    let alias = repo.0.root.join("nested/..");
+    let changes = Changes::collect(
+        &[
+            edit(
+                "ignored",
+                &canonical_root.join("debug.log").to_string_lossy(),
+                "delete",
+                "@@ -1 +0,0 @@\n-old\n",
+            ),
+            edit(
+                "kept",
+                &canonical_root.join("source.rs").to_string_lossy(),
+                "add",
+                "@@ -0,0 +1 @@\n+new\n",
+            ),
+        ],
+        &alias.to_string_lossy(),
+    );
+    assert_eq!(
+        changes.files.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["source.rs"]
+    );
+    assert_eq!((changes.added, changes.removed), (1, 0));
+}
+
+#[test]
 fn session_files_keep_recorded_changes_outside_git_repositories() {
     let _locale = crate::test_support::chinese();
     let fixture = crate::transcript::tests::Fixture::new();

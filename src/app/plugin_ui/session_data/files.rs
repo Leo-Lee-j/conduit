@@ -31,6 +31,11 @@ struct Changes {
 impl Changes {
     fn collect(messages: &[ChatItem], root: &str) -> Self {
         let mut changes = Self::default();
+        // Windows short paths and directory aliases can differ from absolute
+        // tool paths. Resolve only the workspace: recorded files may be deleted.
+        let canonical_root = std::fs::canonicalize(root)
+            .ok()
+            .map(|path| path.to_string_lossy().into_owned());
         for item in messages {
             if item.kind != ItemKind::Tool || !tool_succeeded(item) || tool_failed(item) {
                 continue;
@@ -38,7 +43,12 @@ impl Changes {
             // Every listed file can open its preview, including files beyond the
             // eight inline previews retained by an ordinary tool card.
             for diff in edit_tool_diffs_with_limit(item, usize::MAX).unwrap_or_default() {
-                let path = workspace_relative_path(&diff.path, Some(root));
+                let mut path = workspace_relative_path(&diff.path, Some(root));
+                if std::path::Path::new(&path).is_absolute()
+                    && let Some(root) = canonical_root.as_deref()
+                {
+                    path = workspace_relative_path(&diff.path, Some(root));
+                }
                 changes.added += diff.added;
                 changes.removed += diff.removed;
                 let diff = Arc::new(diff);
