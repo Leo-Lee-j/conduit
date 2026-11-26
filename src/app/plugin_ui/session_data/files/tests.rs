@@ -57,6 +57,178 @@ fn session_files_merge_turns_paths_and_keep_only_the_latest_diff() {
     assert_eq!(changes.files["gone.txt"].status, EditFileStatus::Deleted);
 }
 
+struct Repository(crate::transcript::tests::Fixture);
+
+impl Repository {
+    fn new() -> Self {
+        let repo = Self(crate::transcript::tests::Fixture::new());
+        repo.git(&["init", "-q"]);
+        // Keep the test independent of the developer's global ignore patterns.
+        std::fs::write(repo.0.root.join("global-ignore"), "*.global\n").unwrap();
+        repo.git(&[
+            "config",
+            "core.excludesFile",
+            repo.0.root.join("global-ignore").to_str().unwrap(),
+        ]);
+        repo
+    }
+
+    fn git(&self, args: &[&str]) {
+        let output = std::process::Command::new(crate::git::resolve_git().expect("Git for tests"))
+            .current_dir(&self.0.root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+impl Drop for Repository {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0.root).unwrap();
+    }
+}
+
+#[test]
+fn session_files_exclude_git_ignored_paths_from_rows_and_totals() {
+    let _locale = crate::test_support::chinese();
+    let repo = Repository::new();
+    std::fs::create_dir(repo.0.root.join("nested")).unwrap();
+    std::fs::write(repo.0.root.join("tracked.log"), "tracked\n").unwrap();
+    repo.git(&["add", "tracked.log"]);
+    std::fs::write(
+        repo.0.root.join(".gitignore"),
+        "target/\n*.log\n!keep.log\n",
+    )
+    .unwrap();
+    std::fs::write(
+        repo.0.root.join("nested/.gitignore"),
+        "*.cache\n!keep.cache\n",
+    )
+    .unwrap();
+    std::fs::write(repo.0.root.join(".git/info/exclude"), "*.local\n").unwrap();
+    let root = repo.0.root.to_string_lossy();
+    let paths = [
+        "src/main.rs".to_owned(),
+        "untracked.rs".to_owned(),
+        "deleted.rs".to_owned(),
+        "tracked.log".to_owned(),
+        "keep.log".to_owned(),
+        "nested/keep.cache".to_owned(),
+        // Absolute and Windows verbatim paths are normalized before filtering.
+        repo.0
+            .root
+            .join("target/generated.rs")
+            .to_string_lossy()
+            .into_owned(),
+        std::fs::canonicalize(&repo.0.root)
+            .unwrap()
+            .join("debug.log")
+            .to_string_lossy()
+            .into_owned(),
+        "nested/deleted.cache".to_owned(),
+        "private.local".to_owned(),
+        "private.global".to_owned(),
+        "target/中文 空格.txt".to_owned(),
+    ];
+    // Most paths no longer exist: filtering must use the recorded paths, not a directory walk.
+    let items: Vec<_> = paths
+        .iter()
+        .enumerate()
+        .map(|(i, path)| {
+            edit(
+                &format!("edit-{i}"),
+                path,
+                "update",
+                "@@ -1 +1 @@\n-before\n+after\n",
+            )
+        })
+        .collect();
+    let changes = Changes::collect(&items, &root);
+    assert_eq!(
+        changes.files.keys().map(String::as_str).collect::<Vec<_>>(),
+        [
+            "deleted.rs",
+            "keep.log",
+            "nested/keep.cache",
+            "src/main.rs",
+            "tracked.log",
+            "untracked.rs"
+        ]
+    );
+    assert_eq!((changes.added, changes.removed), (6, 6));
+
+    // A workspace can point at a subdirectory and still inherit repository ignores.
+    let changes = Changes::collect(
+        &[
+            edit(
+                "ignored",
+                "deleted.cache",
+                "delete",
+                "@@ -1 +0,0 @@\n-old\n",
+            ),
+            edit("kept", "keep.cache", "add", "@@ -0,0 +1 @@\n+new\n"),
+        ],
+        &repo.0.root.join("nested").to_string_lossy(),
+    );
+    assert_eq!(
+        changes.files.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["keep.cache"]
+    );
+    assert_eq!((changes.added, changes.removed), (1, 0));
+}
+
+#[test]
+fn session_files_keep_recorded_changes_outside_git_repositories() {
+    let _locale = crate::test_support::chinese();
+    let fixture = crate::transcript::tests::Fixture::new();
+    std::fs::write(fixture.root.join(".gitignore"), "*.log\n").unwrap();
+    let changes = Changes::collect(
+        &[edit("write", "debug.log", "add", "@@ -0,0 +1 @@\n+entry\n")],
+        &fixture.root.to_string_lossy(),
+    );
+    assert_eq!(changes.files.len(), 1);
+    assert_eq!((changes.added, changes.removed), (1, 0));
+}
+
+#[test]
+fn session_files_filter_large_batches_and_handle_empty_git_results() {
+    let _locale = crate::test_support::chinese();
+    let repo = Repository::new();
+    std::fs::write(repo.0.root.join(".gitignore"), "*.ignored\n").unwrap();
+    let root = repo.0.root.to_string_lossy();
+    let ordinary = edit("kept", "ordinary.rs", "add", "@@ -0,0 +1 @@\n+source\n");
+    let changes = Changes::collect(std::slice::from_ref(&ordinary), &root);
+    assert_eq!(
+        (changes.files.len(), changes.added, changes.removed),
+        (1, 1, 0)
+    );
+
+    let mut items: Vec<_> = (0..600)
+        .map(|i| {
+            edit(
+                &format!("ignored-{i}"),
+                &format!("中文 空格 {i} {}.ignored", "x".repeat(160)),
+                "add",
+                "@@ -0,0 +1 @@\n+generated\n",
+            )
+        })
+        .collect();
+    let changes = Changes::collect(&items, &root);
+    assert!(changes.files.is_empty());
+    assert_eq!((changes.added, changes.removed), (0, 0));
+    items.push(ordinary);
+    let changes = Changes::collect(&items, &root);
+    assert_eq!(
+        (changes.files.len(), changes.added, changes.removed),
+        (1, 1, 0)
+    );
+}
+
 #[test]
 fn failed_pending_and_denied_edits_do_not_replace_completed_changes() {
     let _locale = crate::test_support::chinese();

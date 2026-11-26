@@ -57,6 +57,26 @@ impl Changes {
                 file.latest = diff;
             }
         }
+        // Query the recorded paths in a batch: walking the current tree would
+        // lose deleted files and history from earlier turns. This entire method
+        // runs on the background executor, including the Git query.
+        let paths: Vec<_> = changes
+            .files
+            .keys()
+            .filter(|path| {
+                let path = std::path::Path::new(path.as_str());
+                !path.is_absolute()
+                    && !path
+                        .components()
+                        .any(|part| matches!(part, std::path::Component::ParentDir))
+            })
+            .map(String::as_str)
+            .collect();
+        if let Ok(ignored) = crate::git::ignored_paths(std::path::Path::new(root), &paths) {
+            changes.files.retain(|path, _| !ignored.contains(path));
+            changes.added = changes.files.values().map(|file| file.added).sum();
+            changes.removed = changes.files.values().map(|file| file.removed).sum();
+        }
         changes
     }
 }

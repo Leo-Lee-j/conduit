@@ -11,6 +11,7 @@ mod branches;
 mod compare;
 pub mod conflicts;
 mod discard;
+mod ignored;
 mod log;
 mod selected;
 pub use branches::{
@@ -19,6 +20,7 @@ pub use branches::{
 pub use compare::{
     Comparison, ComparisonKind, ComparisonRequest, load_comparison, load_comparison_diff,
 };
+pub use ignored::ignored_paths;
 pub use log::{
     CommitDetails, CommitDiffRequest, History, HistoryQuery, LogCommit, load_commit_details,
     load_commit_diff, load_history,
@@ -2101,6 +2103,7 @@ fn run_git_bounded(
             timeout,
             stop_when_full,
             background: false,
+            input: None,
         },
     )
 }
@@ -2110,6 +2113,7 @@ struct CommandLimits {
     timeout: Duration,
     stop_when_full: bool,
     background: bool,
+    input: Option<Vec<u8>>,
 }
 
 fn run_git_with_environment(
@@ -2125,6 +2129,7 @@ fn run_git_with_environment(
         timeout,
         stop_when_full,
         background,
+        input,
     } = limits;
     if cancel.load(Ordering::Acquire) {
         bail!(conduit::i18n::text("git.git_read_cancelled"));
@@ -2156,7 +2161,16 @@ fn run_git_with_environment(
                 &[("arg0", format!("{}", git.display()))],
             )
         })?;
-    drop(pipes.stdin);
+    // Feed potentially large path lists concurrently while draining stdout, so
+    // neither pipe can block the other. The job timeout also bounds the writer.
+    let writer = if let Some(input) = input {
+        Some(thread::spawn(move || {
+            std::io::Write::write_all(&mut pipes.stdin, &input)
+        }))
+    } else {
+        drop(pipes.stdin);
+        None
+    };
     let result = (|| {
         let started = Instant::now();
         let mut stdout = vec![];
@@ -2197,6 +2211,8 @@ fn run_git_with_environment(
                         && args
                             .windows(2)
                             .any(|pair| pair[0] == "diff" && pair[1] == "--no-index"))
+                    // check-ignore returns 1 when none of the input paths are ignored.
+                    && !(code == 1 && args.first().is_some_and(|arg| arg == "check-ignore"))
                 {
                     let stderr = String::from_utf8_lossy(&stderr);
                     let stdout = String::from_utf8_lossy(&stdout);
@@ -2223,6 +2239,14 @@ fn run_git_with_environment(
     child.terminate()?;
     while child.active_processes()? > 0 || child.exit_code()?.is_none() {
         thread::sleep(Duration::from_millis(10));
+    }
+    if let Some(writer) = writer {
+        let written = writer
+            .join()
+            .unwrap_or_else(|_| Err(std::io::Error::other("Git input writer failed")));
+        if result.is_ok() {
+            written?;
+        }
     }
     result
 }
