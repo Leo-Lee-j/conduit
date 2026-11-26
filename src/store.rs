@@ -1309,6 +1309,56 @@ mod tests {
     }
 
     #[test]
+    fn cli_catalog_snapshot_survives_readable_configs_without_model_definitions() {
+        use crate::models;
+        let _locale = crate::test_support::chinese();
+        let directory = Store::path().with_extension("model-refresh");
+        let mut store = Store::default();
+        for (engine, config, initial, restored_configs) in [
+            (
+                Provider::Claude,
+                ".claude/settings.json",
+                r#"{"env":{"ANTHROPIC_MODEL":"snapshot-model"}}"#,
+                [r#"{}"#, r#"{"env":{}}"#, r#"{"permissions":{}}"#],
+            ),
+            (
+                Provider::Codex,
+                ".codex/config.toml",
+                "model = \"snapshot-model\"\n",
+                [
+                    "",
+                    "# Restored configuration\n",
+                    "model_reasoning_effort = \"high\"\n",
+                ],
+            ),
+        ] {
+            let config = directory.join(config);
+            fs::create_dir_all(config.parent().unwrap()).unwrap();
+            fs::write(&config, initial).unwrap();
+            let expected = store.cache_model_catalog(engine, models::load_from(engine, &directory));
+            assert_eq!(expected.models.len(), 1);
+            let state_path = directory.join("state.json");
+            store.save_to(&state_path).unwrap();
+            store = Store::load_from(&state_path).unwrap();
+            for config_text in restored_configs {
+                fs::write(&config, config_text).unwrap();
+                let empty = models::load_from(engine, &directory);
+                assert!(empty.error.is_none());
+                assert!(empty.models.is_empty());
+                assert!(empty.incomplete, "{engine:?}: {config_text}");
+                let effective = store.cache_model_catalog(engine, empty);
+                assert!(effective.incomplete);
+                assert!(effective.note.is_some());
+                assert_eq!(effective.models, expected.models);
+                assert_eq!(effective.current, expected.current);
+                store.save_to(&state_path).unwrap();
+                store = Store::load_from(&state_path).unwrap();
+                assert_eq!(store.load_model_catalog(engine).models, expected.models);
+            }
+        }
+    }
+
+    #[test]
     fn ccs_sync_preserves_saved_model_catalog_after_restart_and_refresh() {
         let _locale = crate::test_support::chinese();
         let mut catalog = crate::ccs::CcsCatalog {

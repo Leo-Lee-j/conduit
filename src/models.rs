@@ -367,6 +367,9 @@ fn claude(home: &Path) -> ModelCatalog {
         }
     }
     if catalog.models.is_empty() && catalog.note.is_none() {
+        // cc-switch can restore a readable config without model declarations.
+        // That is not an authoritative empty catalog; keep the durable snapshot.
+        catalog.incomplete = true;
         catalog.note = Some(
             conduit::i18n::text_static("models.no_model_declared_in_configuration_using_the")
                 .into(),
@@ -557,6 +560,9 @@ fn codex(home: &Path) -> ModelCatalog {
         );
     }
     if catalog.models.is_empty() && catalog.note.is_none() {
+        // A restored config may omit the generated catalog entirely. Only an
+        // actual catalog (including an explicit empty one) can clear the cache.
+        catalog.incomplete = catalog.catalog_path.is_none();
         catalog.note = Some(
             conduit::i18n::text_static("models.no_model_definitions_found_using_the_cli").into(),
         );
