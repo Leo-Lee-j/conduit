@@ -302,6 +302,47 @@ fn failed_staging_rolls_back_worktree_and_keeps_unmerged_index() {
 }
 
 #[test]
+fn resolution_converts_without_index_lock_and_preserves_concurrent_staging() {
+    let _locale = crate::test_support::chinese();
+    for concurrent_stage in [false, true] {
+        let repo = Repo::new();
+        repo.conflict();
+        let cancel = AtomicBool::new(false);
+        let file = load(&repo.path, "file[1].txt", &cancel).unwrap();
+        let before = fs::read(repo.path.join("file[1].txt")).unwrap();
+        repo.write(".gitattributes", "*.txt filter=inspect\n");
+        let filter = if concurrent_stage {
+            "test ! -e .git/index.lock || exit 1; if test ! -e .git/conversion-ran; then touch .git/conversion-ran; printf external > unrelated.txt; git add -- unrelated.txt || exit 1; fi; cat"
+        } else {
+            "test ! -e .git/index.lock || exit 1; touch .git/conversion-ran; cat"
+        };
+        repo.run(&["config", "filter.inspect.smudge", filter]);
+        repo.run(&["config", "filter.inspect.clean", "cat"]);
+        repo.run(&["config", "filter.inspect.required", "true"]);
+        let result = resolve(
+            &repo.git,
+            &repo.path,
+            Resolution {
+                expected: file.snapshot,
+                content: ResolutionContent::Merged("reviewed\n".into()),
+            },
+            &cancel,
+        );
+        assert!(repo.path.join(".git/conversion-ran").exists(), "{result:?}");
+        if concurrent_stage {
+            assert!(result.is_err(), "{result:?}");
+            assert_eq!(fs::read(repo.path.join("file[1].txt")).unwrap(), before);
+            assert!(!repo.run(&["ls-files", "-u"]).is_empty());
+            assert_eq!(repo.run(&["show", ":unrelated.txt"]), "external");
+        } else {
+            result.unwrap();
+            assert_eq!(repo.run(&["show", ":file[1].txt"]), "reviewed\n");
+        }
+        assert!(!repo.path.join(".git/index.lock").exists());
+    }
+}
+
+#[test]
 fn merged_text_preserves_worktree_encoding() {
     for (encoding, eol) in [
         ("ISO-8859-1", "lf"),

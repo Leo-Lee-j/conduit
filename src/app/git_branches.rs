@@ -880,6 +880,7 @@ impl ConduitApp {
         request: git::BranchRequest,
         cx: &mut Context<Self>,
     ) -> bool {
+        let updating = matches!(&request.action, git::BranchAction::Update { .. });
         if let Some(reason) = self.branch_request_blocked(&path, &request) {
             self.git_feedback(path, reason, true, cx);
             return false;
@@ -911,12 +912,12 @@ impl ConduitApp {
         });
         self.git.task_worktree = None;
         self.git.task_cleanup = None;
-        self.git_feedback(
-            path,
-            conduit::i18n::text_static("git_branches.running_git_branch_operation"),
-            false,
-            cx,
-        );
+        let message = conduit::i18n::text_static("git_branches.running_git_branch_operation");
+        if updating {
+            self.git_operation_started_feedback(path, message, cx);
+        } else {
+            self.git_feedback(path, message, false, cx);
+        }
         true
     }
 

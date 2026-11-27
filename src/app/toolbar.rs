@@ -161,6 +161,9 @@ impl ConduitApp {
             .border_color(rgb(palette().border))
             .child(statuses)
             .when(has_hints, |bar| bar.child(hints))
+            .when(self.git.operation.is_some(), |bar| {
+                bar.child(self.render_git_operation_progress(cx))
+            })
             .child(controls);
         toolbar.into_any_element()
     }

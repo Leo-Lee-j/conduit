@@ -17,10 +17,15 @@ fn git_results_wait_for_toast_capacity_and_clear_progress(cx: &mut TestAppContex
 
     let _locale = crate::test_support::chinese();
     let (app, cx) = fixture(cx, true);
+    let lock_error = conduit::i18n::format(
+        "git.lock_file_exists",
+        &[("path", "D:/repository/.git/index.lock".into())],
+    );
     for (message, error, disconnect) in [
         ("Merged feature into main", None, false),
         ("Updated branch main", None, false),
         ("Merge incomplete", Some("Merge conflict"), false),
+        ("Update incomplete", Some(lock_error.as_str()), false),
         ("Worker disconnected", None, true),
     ] {
         let (sender, path, blockers) = cx.update(|window, cx| {
@@ -96,6 +101,9 @@ fn git_results_wait_for_toast_capacity_and_clear_progress(cx: &mut TestAppContex
                 );
                 if !disconnect {
                     assert!(record.message.contains(message));
+                    if let Some(error) = error {
+                        assert!(record.message.contains(error));
+                    }
                 }
                 app.poll_notifications(window, cx);
                 assert_eq!(app.notifications.pending, vec![id]);
@@ -111,6 +119,132 @@ fn git_results_wait_for_toast_capacity_and_clear_progress(cx: &mut TestAppContex
                 assert!(app.notifications.visible.contains_key(&id));
                 assert_eq!(app.selected_workspace, Some(1));
                 assert_eq!(app.selected_session, Some(2));
+                assert_eq!(app.input.read(cx).value(), "keep draft");
+            })
+        });
+        draw(cx);
+        assert!(cx.debug_bounds("git-operation-progress").is_none());
+    }
+}
+
+#[gpui_kit::test]
+fn git_progress_stop_keeps_interlock_until_completion(cx: &mut TestAppContext) {
+    use crate::app::GitOperation;
+    use crate::git::{OperationProbe, OperationResult};
+
+    let _locale = crate::test_support::chinese();
+    let (app, cx) = fixture(cx, true);
+    for (width, automatic_stage, succeeded_before_stop) in [
+        (850., false, false),
+        (1200., true, false),
+        (850., false, true),
+    ] {
+        let sender = cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.notifications.center.mark_all_read(unix_now());
+                let path = app.store.workspaces[0].path.clone();
+                let (sender, events) = std::sync::mpsc::channel();
+                let mut probe = OperationProbe::test_pending(path.clone());
+                probe.events = events;
+                app.git.operation = Some(GitOperation {
+                    probe,
+                    worktree: path,
+                    draft: String::new(),
+                    commit_push: None,
+                    automatic_stage,
+                    incoming_fetch: false,
+                });
+                app.selected_workspace = Some(1);
+                app.selected_session = Some(2);
+                app.input
+                    .update(cx, |input, cx| input.set_value("keep draft", window, cx));
+                cx.notify();
+                sender
+            })
+        });
+        cx.simulate_resize(size(px(width), px(700.)));
+        draw(cx);
+        let toolbar = cx.debug_bounds("conversation-toolbar").unwrap();
+        let progress = cx.debug_bounds("git-operation-progress").unwrap();
+        let label = cx.debug_bounds("git-operation-label").unwrap();
+        let bar = cx.debug_bounds("git-operation-bar").unwrap();
+        let stop = cx.debug_bounds("git-operation-stop").unwrap();
+        assert!(progress.left() >= toolbar.left() && progress.right() <= toolbar.right());
+        assert!(bar.size.width > px(0.));
+        assert!(stop.left() >= progress.left() && stop.right() <= progress.right());
+        let vertical_offset = if bar.center().y > stop.center().y {
+            bar.center().y - stop.center().y
+        } else {
+            stop.center().y - bar.center().y
+        };
+        assert!(
+            vertical_offset < px(2.),
+            "stop button should center on progress bar"
+        );
+        let label_offset = if bar.center().y > label.center().y {
+            bar.center().y - label.center().y
+        } else {
+            label.center().y - bar.center().y
+        };
+        assert!(
+            label_offset < px(2.),
+            "operation label should share the progress row"
+        );
+        cx.simulate_mouse_down(stop.center(), MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_up(stop.center(), MouseButton::Left, Modifiers::default());
+        draw(cx);
+        cx.update(|_, cx| {
+            let app = app.read(cx);
+            assert!(
+                app.git
+                    .operation
+                    .as_ref()
+                    .unwrap()
+                    .probe
+                    .cancellation_requested()
+            );
+            assert!(!app.can_stage_files());
+            assert_eq!(app.input.read(cx).value(), "keep draft");
+            assert_eq!(app.selected_workspace, Some(1));
+        });
+        assert!(cx.debug_bounds("git-operation-progress").is_some());
+        // A stop racing with a completed operation cannot discard success.
+        sender
+            .send(Ok(OperationResult {
+                retry_completed: false,
+                retry_tag: None,
+                committed: succeeded_before_stop,
+                message: if succeeded_before_stop {
+                    "Committed"
+                } else {
+                    "Stopped"
+                }
+                .into(),
+                error: (!succeeded_before_stop)
+                    .then(|| conduit::i18n::text("git.operation_interrupted")),
+                worktree_created: None,
+            }))
+            .unwrap();
+        cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.poll_git_actions(window, cx);
+                assert!(app.git.operation.is_none());
+                assert!(!app.git.auto_stage_after_refresh);
+                let record = app
+                    .notifications
+                    .center
+                    .records()
+                    .iter()
+                    .find(|r| r.source == Source::Git && r.read_at.is_none())
+                    .unwrap();
+                assert_eq!(
+                    record.level,
+                    if succeeded_before_stop {
+                        Level::Success
+                    } else {
+                        Level::Error
+                    }
+                );
                 assert_eq!(app.input.read(cx).value(), "keep draft");
             })
         });

@@ -655,6 +655,19 @@ fn update_fetches_and_fast_forwards_noncurrent_branch_without_checkout() {
     ]);
     repo.run(&["-C", clone.to_str().unwrap(), "push", "-q"]);
     let main = repo.run(&["rev-parse", "main"]);
+    let other = repo.run(&["rev-parse", "other"]);
+    let ref_lock = repo.path.join(".git/refs/heads/other.lock");
+    std::fs::write(&ref_lock, "external ref writer").unwrap();
+    let result = branch_run(&repo, "other", BranchAction::Update { rebase: true });
+    let error = result.error.unwrap();
+    assert!(error.contains("Git 锁文件已存在"), "{error}");
+    assert!(error.contains("other.lock"), "{error}");
+    assert_eq!(repo.run(&["rev-parse", "other"]), other);
+    assert_eq!(
+        std::fs::read_to_string(&ref_lock).unwrap(),
+        "external ref writer"
+    );
+    std::fs::remove_file(ref_lock).unwrap();
     let result = assert_branch_ok(branch_run(
         &repo,
         "other",
@@ -667,6 +680,22 @@ fn update_fetches_and_fast_forwards_noncurrent_branch_without_checkout() {
         repo.run(&["rev-parse", "other"]),
         repo.run(&["rev-parse", "origin/main"])
     );
+    let index = repo.path.join(".git/index");
+    let index_before = std::fs::read(&index).unwrap();
+    let index_lock = index.with_file_name("index.lock");
+    std::fs::write(&index_lock, "external index writer").unwrap();
+    let result = branch_run(&repo, "main", BranchAction::Update { rebase: false });
+    let error = result.error.unwrap();
+    assert!(error.contains("Git 锁文件已存在"), "{error}");
+    assert!(error.contains("index.lock"), "{error}");
+    assert_eq!(repo.run(&["rev-parse", "main"]), main);
+    assert_eq!(std::fs::read(&index).unwrap(), index_before);
+    assert_eq!(
+        std::fs::read_to_string(&index_lock).unwrap(),
+        "external index writer"
+    );
+    assert!(!repo.path.join("upstream.txt").exists());
+    std::fs::remove_file(index_lock).unwrap();
     assert_branch_ok(branch_run(
         &repo,
         "main",

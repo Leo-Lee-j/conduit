@@ -251,21 +251,11 @@ pub(super) fn resolve(
     )?;
     let index = PathBuf::from(index.trim());
     let lock = index.with_file_name("index.lock");
-    let lock_file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&lock)
-        .context(conduit::i18n::text_static(
-            "git.selected.the_staging_area_is_in_use_by",
-        ))?;
-    drop(lock_file);
-    let mut guard = IndexLock {
-        path: lock,
-        owned: true,
-    };
     let scratch = Scratch::new_in(index.parent().unwrap(), "resolve")?;
+    let original_index = scratch.0.join("original-index");
     let alternate = scratch.0.join("index");
-    fs::copy(&index, &alternate)?;
+    fs::copy(&index, &original_index)?;
+    fs::copy(&original_index, &alternate)?;
     if snapshot(git, workspace, &expected.path, cancel)? != *expected {
         bail!(conduit::i18n::text("git_conflicts.stale"));
     }
@@ -295,24 +285,38 @@ pub(super) fn resolve(
         ResolutionContent::Theirs => expected.stages[2].as_ref().map(|stage| stage.mode.as_str()),
         ResolutionContent::Merged(_) => Some(merged_mode(&expected.stages)?),
     };
+    // Conversion can run external filters. Finish it before locking the real
+    // index, while the worktree and real staging area are still untouched.
+    let merged = if let ResolutionContent::Merged(text) = &resolution.content {
+        if text.len() > TEXT_LIMIT || text.contains('\0') {
+            bail!(conduit::i18n::text("git_conflicts.too_large"));
+        }
+        if has_conflict_markers(text, content::marker_size(git, expected, cancel)?) {
+            bail!(conduit::i18n::text("git_conflicts.markers"));
+        }
+        Some(content::to_worktree(
+            git, expected, &scratch.0, text, cancel,
+        )?)
+    } else {
+        None
+    };
+    let mut guard = locks::acquire(&lock, cancel)?;
+    if !locks::same_index(&index, &original_index)?
+        || snapshot(git, workspace, &expected.path, cancel)? != *expected
+    {
+        bail!(conduit::i18n::text("git_conflicts.stale"));
+    }
     let mut written = None;
     let result = (|| -> Result<()> {
         let mut attempted_write = false;
         let write_result = (|| -> Result<()> {
             match resolution.content {
-                ResolutionContent::Merged(text) => {
-                    if text.len() > TEXT_LIMIT || text.contains('\0') {
-                        bail!(conduit::i18n::text("git_conflicts.too_large"));
-                    }
-                    if has_conflict_markers(&text, content::marker_size(git, expected, cancel)?) {
-                        bail!(conduit::i18n::text("git_conflicts.markers"));
-                    }
-                    let bytes = content::to_worktree(git, expected, &scratch.0, &text, cancel)?;
+                ResolutionContent::Merged(_) => {
                     if fingerprint(&full)? != expected.worktree {
                         bail!(conduit::i18n::text("git_conflicts.stale"));
                     }
                     attempted_write = true;
-                    fs::write(&full, bytes)?;
+                    fs::write(&full, merged.as_ref().unwrap())?;
                 }
                 ref side => {
                     let ours = matches!(side, ResolutionContent::Ours);
@@ -417,17 +421,6 @@ pub fn has_conflict_markers(text: &str, marker_size: usize) -> bool {
     })
 }
 
-struct IndexLock {
-    path: PathBuf,
-    owned: bool,
-}
-impl Drop for IndexLock {
-    fn drop(&mut self) {
-        if self.owned {
-            let _ = fs::remove_file(&self.path);
-        }
-    }
-}
 struct Scratch(PathBuf);
 impl Scratch {
     fn new_in(parent: &Path, name: &str) -> Result<Self> {

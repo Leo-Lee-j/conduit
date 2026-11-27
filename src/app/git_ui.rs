@@ -8,6 +8,88 @@ use gpui_kit::component::{checkbox::Checkbox, skeleton::Skeleton};
 const INCOMING_FETCH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 impl ConduitApp {
+    pub(super) fn stop_git_operation(&mut self, cx: &mut Context<Self>) {
+        if let Some(operation) = &self.git.operation {
+            operation.probe.cancel();
+            // Keep the operation and its interlocks until the worker reports
+            // completion, including rollback and release of our index lock.
+            self.git.auto_stage_after_refresh = false;
+            cx.notify();
+        }
+    }
+
+    pub(super) fn render_git_operation_progress(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(operation) = &self.git.operation else {
+            return div().into_any_element();
+        };
+        let stopping = operation.probe.cancellation_requested();
+        let label = if stopping {
+            conduit::i18n::text_static("git.progress.stopping")
+        } else {
+            operation.probe.progress_label()
+        };
+        let detail = format!("{label} · {}", operation.probe.path.display());
+        let tooltip = detail.clone();
+        h_flex()
+            .id("git-operation-progress")
+            .debug_selector(|| "git-operation-progress".into())
+            .w(px(220.))
+            .min_w(px(110.))
+            .max_w(px(240.))
+            .flex_shrink(1.)
+            .items_center()
+            .gap_1()
+            .tooltip(move |window, cx| {
+                gpui_kit::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
+            })
+            .child(
+                div()
+                    .id("git-operation-label")
+                    .debug_selector(|| "git-operation-label".into())
+                    .min_w_0()
+                    .max_w(px(120.))
+                    .flex_shrink(1.)
+                    .text_size(ui_text_size(11.))
+                    .text_color(rgb(palette().muted))
+                    .truncate()
+                    .child(label),
+            )
+            .child(
+                h_flex()
+                    .items_center()
+                    .flex_1()
+                    .gap_1()
+                    .child(
+                        div()
+                            .id("git-operation-bar-container")
+                            .debug_selector(|| "git-operation-bar".into())
+                            .flex_1()
+                            .child(
+                                gpui_kit::component::progress::Progress::new("git-operation-bar")
+                                    .loading(true)
+                                    .xsmall()
+                                    .w_full()
+                                    .color(rgb(palette().activity_running))
+                                    .accessibility_label(detail),
+                            ),
+                    )
+                    .child(
+                        Button::new("git-operation-stop")
+                            .debug_selector(|| "git-operation-stop".into())
+                            .small()
+                            .compact()
+                            .ghost()
+                            .icon(IconName::Square)
+                            .focus_ring(true)
+                            .accessibility_label(conduit::i18n::text_static("git.progress.stop"))
+                            .tooltip(conduit::i18n::text_static("git.progress.stop_hint"))
+                            .disabled(stopping)
+                            .on_click(cx.listener(|app, _, _, cx| app.stop_git_operation(cx))),
+                    ),
+            )
+            .into_any_element()
+    }
+
     pub(super) fn selected_workspace_path(&self) -> Option<PathBuf> {
         self.selected_workspace
             .and_then(|index| self.store.workspaces.get(index))
@@ -66,6 +148,15 @@ impl ConduitApp {
             },
             cx,
         );
+    }
+
+    pub(super) fn git_operation_started_feedback(
+        &mut self,
+        path: PathBuf,
+        text: impl Into<String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.git_notice(path, text, NoticeLevel::Info, NoticePresentation::Toast, cx);
     }
 
     pub(super) fn git_result_feedback(

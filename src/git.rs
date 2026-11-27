@@ -12,6 +12,7 @@ mod compare;
 pub mod conflicts;
 mod discard;
 mod ignored;
+mod locks;
 mod log;
 mod selected;
 pub use branches::{
@@ -377,6 +378,7 @@ pub struct Probe<T> {
     pub path: PathBuf,
     pub events: Receiver<Result<T, String>>,
     cancelled: Arc<AtomicBool>,
+    progress_key: &'static str,
 }
 
 pub type GitProbe = Probe<Snapshot>;
@@ -392,6 +394,7 @@ impl<T: Send + 'static> Probe<T> {
             path,
             events,
             cancelled: Arc::new(AtomicBool::new(false)),
+            progress_key: "git.progress.working",
         }
     }
     fn start_with(path: PathBuf, load: fn(&Path, &AtomicBool) -> Result<T>) -> Self {
@@ -413,10 +416,14 @@ impl<T: Send + 'static> Probe<T> {
             path,
             events,
             cancelled,
+            progress_key: "git.progress.working",
         }
     }
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
+    }
+    pub fn cancellation_requested(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
     }
 }
 
@@ -443,13 +450,35 @@ impl RemoteTagsProbe {
 
 impl OperationProbe {
     pub fn start(path: PathBuf, operation: Operation) -> Self {
-        Self::spawn(path, move |workspace, cancel| {
+        let progress_key = match &operation {
+            Operation::Stage { .. } | Operation::StageTracked { .. } => "git.progress.stage",
+            Operation::Unstage { .. } => "git.progress.unstage",
+            Operation::Discard { .. } => "git.progress.discard",
+            Operation::ResolveConflict(_) => "git.progress.resolve",
+            Operation::Commit { push: true, .. } => "git.progress.commit_push",
+            Operation::Commit { .. } => "git.progress.commit",
+            Operation::RetryTag(_) => "git.progress.push",
+            Operation::Branch(request) => match request.action {
+                BranchAction::Update { .. } | BranchAction::CheckoutUpdate { .. } => {
+                    "git.progress.update"
+                }
+                BranchAction::Push { .. } => "git.progress.push",
+                _ => "git.progress.branch",
+            },
+        };
+        let mut probe = Self::spawn(path, move |workspace, cancel| {
             Ok(operate(workspace, operation, cancel))
-        })
+        });
+        probe.progress_key = progress_key;
+        probe
+    }
+
+    pub fn progress_label(&self) -> &'static str {
+        conduit::i18n::text_static(self.progress_key)
     }
 
     pub(crate) fn fetch_incoming(path: PathBuf, target: IncomingFetchTarget) -> Self {
-        Self::spawn(path, move |workspace, cancel| {
+        let mut probe = Self::spawn(path, move |workspace, cancel| {
             branches::fetch_incoming(workspace, &target, cancel)?;
             Ok(OperationResult {
                 retry_completed: false,
@@ -459,7 +488,9 @@ impl OperationProbe {
                 error: None,
                 worktree_created: None,
             })
-        })
+        });
+        probe.progress_key = "git.progress.fetch";
+        probe
     }
 }
 
@@ -1286,12 +1317,27 @@ fn update_index(
             IndexAction::Unstage => args.extend(["restore", "--staged"]),
         }
         args.extend([from.as_str(), "--pathspec-file-nul"]);
-        if commit_target(git, root, cancel)? != *target {
-            bail!(conduit::i18n::text(
-                "git.branch_head_or_staging_area_changed_refresh"
-            ));
+        let started = Instant::now();
+        loop {
+            if commit_target(git, root, cancel)? != *target {
+                bail!(conduit::i18n::text(
+                    "git.branch_head_or_staging_area_changed_refresh"
+                ));
+            }
+            match run_git_with_timeout(git, root, &args, cancel, Duration::from_secs(120)) {
+                Ok(_) => break,
+                // add/restore --staged fail before changing the index when its
+                // lock cannot be acquired. Revalidate before each retry. Never
+                // replay a commit, push, merge or rebase after partial success.
+                Err(error)
+                    if locks::is_contention(&error)
+                        && started.elapsed() < Duration::from_millis(300) =>
+                {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Err(error) => return Err(error),
+            }
         }
-        run_git_with_timeout(git, root, &args, cancel, Duration::from_secs(120))?;
         Ok(files.len())
     })();
     let _ = std::fs::remove_file(spec);
@@ -2178,14 +2224,6 @@ fn run_git_with_environment(
         let mut stderr = vec![];
         let mut truncated = false;
         loop {
-            if cancel.load(Ordering::Acquire) {
-                bail!(conduit::i18n::text("git.git_read_cancelled"));
-            }
-            if started.elapsed() > timeout {
-                bail!(conduit::i18n::text(
-                    "git.git_command_timed_out_process_tree_stopped"
-                ));
-            }
             let mut progressed = false;
             progressed |=
                 read_available(&mut pipes.stdout, &mut stdout, &mut truncated, limit)? > 0;
@@ -2217,7 +2255,7 @@ fn run_git_with_environment(
                 {
                     let stderr = String::from_utf8_lossy(&stderr);
                     let stdout = String::from_utf8_lossy(&stdout);
-                    bail!(conduit::i18n::format(
+                    let error = anyhow!(conduit::i18n::format(
                         "git.git_command_failed_exit_code",
                         &[
                             ("code", format!("{}", code)),
@@ -2225,12 +2263,23 @@ fn run_git_with_environment(
                             ("arg1", stdout.trim().to_string())
                         ]
                     ));
+                    return Err(locks::explain_command_error(error, &stderr, workspace));
                 }
                 return Ok(CommandOutput {
                     text: String::from_utf8_lossy(&stdout).into_owned(),
                     bytes: stdout,
                     truncated,
                 });
+            }
+            // Consume a completed command before honoring a late stop request.
+            // In particular, do not report a successful commit as never created.
+            if cancel.load(Ordering::Acquire) {
+                bail!(conduit::i18n::text("git.operation_interrupted"));
+            }
+            if started.elapsed() > timeout {
+                bail!(conduit::i18n::text(
+                    "git.git_command_timed_out_process_tree_stopped"
+                ));
             }
             if !progressed {
                 thread::sleep(Duration::from_millis(10));
@@ -2255,6 +2304,7 @@ fn run_git_with_environment(
 #[cfg(test)]
 mod tests {
     include!("git/branch_tests.rs");
+    include!("git/lock_tests.rs");
     include!("git/push_tests.rs");
     use super::*;
 
