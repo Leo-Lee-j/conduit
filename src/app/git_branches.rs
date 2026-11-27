@@ -183,6 +183,29 @@ enum MenuAction {
     Compare(git::ComparisonKind),
 }
 
+impl MenuAction {
+    fn branch_action(&self) -> Option<git::BranchAction> {
+        match self {
+            Self::Run(action) | Self::Form(FormKind::Confirm(action)) => Some(action.clone()),
+            Self::Form(FormKind::Create) => Some(git::BranchAction::Create {
+                name: String::new(),
+                checkout: false,
+            }),
+            Self::Form(FormKind::Rename) => Some(git::BranchAction::Rename(String::new())),
+            Self::Form(FormKind::Push) => Some(git::BranchAction::Push {
+                remote: String::new(),
+                destination: String::new(),
+                set_upstream: false,
+            }),
+            Self::Form(FormKind::Worktree) => Some(git::BranchAction::Worktree {
+                path: PathBuf::new(),
+                new_branch: Some(String::new()),
+            }),
+            Self::Compare(_) => None,
+        }
+    }
+}
+
 pub(super) fn branch_name_tag(name: String, max_width: f32) -> AnyElement {
     branch_tag(name, max_width, false)
 }
@@ -330,12 +353,25 @@ pub(super) fn branch_menu(
     else {
         return menu;
     };
-    let write_blocked = state.branch_operation_blocked(&workspace).or_else(|| {
+    let write_blocked = state.git_write_blocked().or_else(|| {
         repository.integration.is_some().then(|| {
             conduit::i18n::text_static("git_branches.continue_or_abort_the_git_operation_in")
         })
     });
     let current = repository.context.current_ref.as_ref() == Some(&selected.full_ref);
+    let action_blocked = |action| {
+        state.branch_request_blocked(
+            &workspace,
+            &git::BranchRequest {
+                expected: repository.context.clone(),
+                selected: Some(selected.clone()),
+                action,
+            },
+        )
+    };
+    let track_blocked = action_blocked(git::BranchAction::Track(None));
+    let rename_blocked = action_blocked(git::BranchAction::Rename(String::new()));
+    let delete_blocked = action_blocked(git::BranchAction::Delete);
     let occupied_elsewhere = selected
         .occupied
         .as_ref()
@@ -449,7 +485,10 @@ pub(super) fn branch_menu(
         let disabled_reason = if read_only {
             reason
         } else {
-            write_blocked.map(str::to_owned).or(reason)
+            write_blocked
+                .or_else(|| action.branch_action().and_then(action_blocked))
+                .map(str::to_owned)
+                .or(reason)
         };
         menu = menu.item(
             branch_action_item(
@@ -565,6 +604,7 @@ pub(super) fn branch_menu(
             menu
         });
         let upstream_reason = write_blocked
+            .or(track_blocked)
             .map(str::to_owned)
             .or_else(|| occupied_elsewhere_reason.clone());
         menu = menu
@@ -597,7 +637,14 @@ pub(super) fn branch_menu(
                 branch_action_item(
                     label.into(),
                     vec![],
-                    write_blocked.map(str::to_owned).or(reason),
+                    write_blocked
+                        .or(if matches!(kind, FormKind::Rename) {
+                            rename_blocked
+                        } else {
+                            delete_blocked
+                        })
+                        .map(str::to_owned)
+                        .or(reason),
                 )
                 .on_click(move |_, window, cx| {
                     view.update(cx, |_, cx| {
@@ -789,6 +836,27 @@ impl ConduitApp {
     }
 
     pub(super) fn branch_operation_blocked(&self, path: &Path) -> Option<&'static str> {
+        self.git_write_blocked().or_else(|| {
+            self.worktree_has_runs(path)
+                .then(|| conduit::i18n::text_static("git_branches.a_cli_task_is_running_in_this"))
+        })
+    }
+
+    fn branch_request_blocked(
+        &self,
+        path: &Path,
+        request: &git::BranchRequest,
+    ) -> Option<&'static str> {
+        self.git_write_blocked().or_else(|| {
+            self.session_control
+                .runs
+                .values()
+                .any(|run| request.conflicts_with_run(path, &run.worktree, run.branch.as_deref()))
+                .then(|| conduit::i18n::text_static("git_branches.a_cli_task_is_running_in_this"))
+        })
+    }
+
+    fn git_write_blocked(&self) -> Option<&'static str> {
         if self.closing || !self.writable {
             Some(conduit::i18n::text_static(
                 "git_branches.the_application_is_currently_read_only",
@@ -801,10 +869,6 @@ impl ConduitApp {
             Some(conduit::i18n::text_static(
                 "git_branches.finish_or_cancel_commit_message_generation_first",
             ))
-        } else if self.worktree_has_runs(path) {
-            Some(conduit::i18n::text_static(
-                "git_branches.a_cli_task_is_running_in_this",
-            ))
         } else {
             None
         }
@@ -816,7 +880,7 @@ impl ConduitApp {
         request: git::BranchRequest,
         cx: &mut Context<Self>,
     ) -> bool {
-        if let Some(reason) = self.branch_operation_blocked(&path) {
+        if let Some(reason) = self.branch_request_blocked(&path, &request) {
             self.git_feedback(path, reason, true, cx);
             return false;
         }

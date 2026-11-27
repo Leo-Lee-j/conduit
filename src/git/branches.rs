@@ -124,6 +124,68 @@ pub struct BranchRequest {
     pub action: BranchAction,
 }
 
+impl BranchRequest {
+    /// Coordinate writes with the affected branch and worktree, rather than
+    /// every running conversation in a repository with shared refs.
+    pub fn conflicts_with_run(
+        &self,
+        workspace: &Path,
+        worktree: &Path,
+        branch: Option<&str>,
+    ) -> bool {
+        if repository_scope(workspace) != repository_scope(worktree) {
+            return false;
+        }
+        let canonical = |path: &Path| {
+            let root = worktree_root(path);
+            fs::canonicalize(&root).unwrap_or(root)
+        };
+        let same_worktree = canonical(workspace) == canonical(worktree);
+        let selected = self.selected.as_ref().map(|b| b.full_ref.as_str());
+        let current = self.expected.current_ref.as_deref();
+        let writes_worktree = match &self.action {
+            BranchAction::Checkout
+            | BranchAction::CheckoutRebase
+            | BranchAction::CheckoutUpdate { .. }
+            | BranchAction::Merge
+            | BranchAction::Rebase
+            | BranchAction::Continue(_)
+            | BranchAction::Abort(_)
+            | BranchAction::RemoveWorktree { .. } => true,
+            BranchAction::Create { checkout, .. } => *checkout,
+            BranchAction::Update { .. } => selected == current,
+            _ => false,
+        };
+        if writes_worktree && same_worktree {
+            return true;
+        }
+        let Some(branch) = branch else {
+            // Detached or unreadable HEAD cannot establish branch independence.
+            return true;
+        };
+        let named = |name: &str| branch.strip_prefix("refs/heads/") == Some(name);
+        match &self.action {
+            BranchAction::Fetch => true,
+            BranchAction::Create { name, .. } => named(name),
+            BranchAction::Rename(name) => selected == Some(branch) || named(name),
+            BranchAction::Worktree { new_branch, .. } => new_branch
+                .as_deref()
+                .map_or(selected == Some(branch), named),
+            BranchAction::Push {
+                remote,
+                destination,
+                ..
+            } => selected == Some(branch) || (remote == "." && named(destination)),
+            BranchAction::Merge
+            | BranchAction::Rebase
+            | BranchAction::Continue(_)
+            | BranchAction::Abort(_)
+            | BranchAction::RemoveWorktree { .. } => current == Some(branch),
+            _ => selected == Some(branch),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum BranchAction {
     Checkout,
@@ -180,6 +242,20 @@ pub fn repository_scope(path: &Path) -> PathBuf {
         .map(|dir| git_dir.join(dir.trim()))
         .unwrap_or(git_dir);
     fs::canonicalize(&common).unwrap_or(common)
+}
+
+/// Capture the branch when a turn starts without spawning Git on the UI thread.
+pub fn worktree_branch(path: &Path) -> Option<String> {
+    let root = worktree_root(path);
+    let marker = root.join(".git");
+    let git_dir = if marker.is_file() {
+        let text = fs::read_to_string(&marker).ok()?;
+        root.join(text.trim().strip_prefix("gitdir: ")?)
+    } else {
+        marker
+    };
+    let head = fs::read_to_string(git_dir.join("HEAD")).ok()?;
+    head.trim().strip_prefix("ref: ").map(str::to_owned)
 }
 
 type Metadata = (

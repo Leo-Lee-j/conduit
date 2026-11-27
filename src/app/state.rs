@@ -213,6 +213,8 @@ pub(super) struct ActiveRun {
     pub(super) cleanup_error: Option<String>,
     /// Git worktree shared by this turn's files and index.
     pub(super) worktree: PathBuf,
+    /// Branch associated with this turn, retained if external Git changes HEAD.
+    pub(super) branch: Option<String>,
     pub(super) approvals: ApprovalQueue,
     pub(super) expanded_approvals: HashSet<String>,
     pub(super) question_drafts: HashMap<String, Vec<super::user_input::QuestionDraft>>,
@@ -299,6 +301,7 @@ impl ActiveRun {
             command_executable: None,
             pending_save: None,
             cleanup_error: None,
+            branch: git::worktree_branch(&worktree),
             worktree,
             approvals: ApprovalQueue::default(),
             expanded_approvals: HashSet::new(),

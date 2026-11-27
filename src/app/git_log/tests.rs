@@ -112,6 +112,104 @@ fn wait(cx: &mut VisualTestContext, app: &Entity<ConduitApp>) {
 }
 
 #[gpui_kit::test]
+fn branch_update_runs_alongside_a_conversation_on_another_branch(cx: &mut TestAppContext) {
+    let _locale = crate::test_support::chinese();
+    cx.update(gpui_kit::init);
+    let repo = Repo::new("branch concurrency");
+    repo.git(&["branch", "other"]);
+    repo.git(&["branch", "--set-upstream-to=main", "other"]);
+    repo.git(&["commit", "--allow-empty", "-m", "advance main"]);
+    let repository = git::load_repository(&repo.0, &AtomicBool::new(false)).unwrap();
+    let request = |name: &str| git::BranchRequest {
+        expected: repository.context.clone(),
+        selected: repository
+            .branch_info
+            .iter()
+            .find(|b| b.name == name)
+            .cloned(),
+        action: git::BranchAction::Update { rebase: false },
+    };
+    let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let output = slot.clone();
+    let (runtime, _sender) = crate::chat_runtime::ChatRuntime::test_channel();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let app = cx.new(|cx| {
+            let first = super::super::tests::session();
+            let mut second = first.clone();
+            second.id = 2;
+            let store = Store {
+                workspaces: vec![Workspace {
+                    path: repo.0.clone(),
+                    sessions: vec![first, second],
+                }],
+                ..Default::default()
+            };
+            let mut app = ConduitApp::with_store(window, cx, Ok(store), false, false);
+            app.startup = None;
+            app.writable = true;
+            app.selected_workspace = Some(0);
+            // The running conversation still protects main when another chat is selected.
+            app.selected_session = Some(2);
+            app.git.workspace = Some(repo.0.clone());
+            app.git.branch_probe = None;
+            app.git.repository = Some(repository.clone());
+            app.session_control.runs.insert(
+                1,
+                super::super::ActiveRun::new(
+                    runtime,
+                    repo.0.clone(),
+                    "turn-0".into(),
+                    Default::default(),
+                    None,
+                    Default::default(),
+                ),
+            );
+            app
+        });
+        *output.borrow_mut() = Some(app.clone());
+        Root::new(app, window, cx)
+    });
+    let app = slot.borrow().as_ref().unwrap().clone();
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            assert_eq!(
+                app.session_control.runs[&1].branch.as_deref(),
+                Some("refs/heads/main")
+            );
+            assert!(!app.start_branch_operation(repo.0.clone(), request("main"), cx));
+            let checkout = git::BranchRequest {
+                action: git::BranchAction::Checkout,
+                ..request("other")
+            };
+            assert!(!app.start_branch_operation(repo.0.clone(), checkout, cx));
+            assert!(app.start_branch_operation(repo.0.clone(), request("other"), cx));
+        })
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let done = cx.update(|window, cx| {
+            app.update(cx, |app, cx| {
+                app.poll_git_actions(window, cx);
+                app.git.operation.is_none()
+            })
+        });
+        if done {
+            break;
+        }
+        assert!(Instant::now() < deadline, "branch update did not finish");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        repo.git(&["rev-parse", "other"]),
+        repo.git(&["rev-parse", "main"])
+    );
+    assert_eq!(repo.git(&["branch", "--show-current"]), "main");
+    cx.update(|_, cx| {
+        assert!(app.read(cx).session_control.runs.contains_key(&1));
+    });
+}
+
+#[gpui_kit::test]
 fn incoming_badge_follows_current_branch_and_retains_count_after_remote_failure(
     cx: &mut TestAppContext,
 ) {

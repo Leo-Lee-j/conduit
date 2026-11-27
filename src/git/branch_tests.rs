@@ -29,6 +29,116 @@ fn seeded_branch_repo() -> TestRepository {
     repo
 }
 
+#[test]
+fn branch_operations_only_block_runs_on_affected_branches_or_worktrees() {
+    let _locale = crate::test_support::chinese();
+    let repo = seeded_branch_repo();
+    repo.run(&["branch", "other"]);
+    for action in [
+        BranchAction::Update { rebase: false },
+        BranchAction::Rename("renamed".into()),
+        BranchAction::Delete,
+        BranchAction::Track(None),
+        BranchAction::Push {
+            remote: "origin".into(),
+            destination: "other".into(),
+            set_upstream: true,
+        },
+        BranchAction::Create {
+            name: "new".into(),
+            checkout: false,
+        },
+        BranchAction::Worktree {
+            path: repo.path.join("linked"),
+            new_branch: Some("new".into()),
+        },
+    ] {
+        let request = branch_request(&repo, "other", action);
+        assert!(
+            !request.conflicts_with_run(&repo.path, &repo.path, Some("refs/heads/main")),
+            "{:?}",
+            request.action
+        );
+        assert!(
+            request.conflicts_with_run(&repo.path, &repo.path, None),
+            "{:?}",
+            request.action
+        );
+    }
+    for action in [
+        BranchAction::Checkout,
+        BranchAction::CheckoutUpdate { rebase: false },
+        BranchAction::CheckoutRebase,
+        BranchAction::Merge,
+        BranchAction::Rebase,
+        BranchAction::Create {
+            name: "new".into(),
+            checkout: true,
+        },
+    ] {
+        let request = branch_request(&repo, "other", action);
+        assert!(
+            request.conflicts_with_run(&repo.path, &repo.path, Some("refs/heads/main")),
+            "{:?}",
+            request.action
+        );
+    }
+    for action in [
+        BranchAction::Update { rebase: false },
+        BranchAction::Rename("renamed".into()),
+        BranchAction::Track(None),
+    ] {
+        assert!(branch_request(&repo, "main", action).conflicts_with_run(
+            &repo.path,
+            &repo.path,
+            Some("refs/heads/main")
+        ));
+    }
+    let request = branch_request(&repo, "other", BranchAction::Rename("main".into()));
+    assert!(request.conflicts_with_run(&repo.path, &repo.path, Some("refs/heads/main")));
+    let request = branch_request(
+        &repo,
+        "other",
+        BranchAction::Push {
+            remote: ".".into(),
+            destination: "main".into(),
+            set_upstream: false,
+        },
+    );
+    assert!(request.conflicts_with_run(&repo.path, &repo.path, Some("refs/heads/main")));
+    let unrelated = seeded_branch_repo();
+    assert!(!request.conflicts_with_run(&repo.path, &unrelated.path, Some("refs/heads/main")));
+}
+
+#[test]
+fn branch_run_scope_resolves_linked_worktrees_and_workspace_aliases() {
+    let _locale = crate::test_support::chinese();
+    let repo = seeded_branch_repo();
+    let linked = repo.path.join("linked");
+    repo.run(&["worktree", "add", "-b", "other", linked.to_str().unwrap()]);
+    assert_eq!(
+        worktree_branch(&repo.path).as_deref(),
+        Some("refs/heads/main")
+    );
+    assert_eq!(
+        worktree_branch(&linked).as_deref(),
+        Some("refs/heads/other")
+    );
+    let request = branch_request(&repo, "main", BranchAction::Update { rebase: false });
+    assert!(!request.conflicts_with_run(&repo.path, &linked, Some("refs/heads/other")));
+    let request = branch_request(&repo, "other", BranchAction::Update { rebase: false });
+    assert!(request.conflicts_with_run(&repo.path, &linked, Some("refs/heads/other")));
+    std::fs::create_dir(repo.path.join("alias")).unwrap();
+    let request = branch_request(&repo, "other", BranchAction::Checkout);
+    assert!(request.conflicts_with_run(
+        &repo.path.join("alias/.."),
+        &repo.path,
+        Some("refs/heads/main")
+    ));
+    repo.run(&["switch", "--detach"]);
+    assert_eq!(worktree_branch(&repo.path), None);
+}
+
 fn assert_branch_ok(result: OperationResult) -> OperationResult {
     assert!(result.error.is_none(), "{result:?}");
     result

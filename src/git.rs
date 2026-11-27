@@ -16,6 +16,7 @@ mod log;
 mod selected;
 pub use branches::{
     BranchAction, BranchContext, BranchInfo, BranchRequest, IntegrationState, repository_scope,
+    worktree_branch,
 };
 pub use compare::{
     Comparison, ComparisonKind, ComparisonRequest, load_comparison, load_comparison_diff,
